@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Store immutable canonical Markdown versions and support branch-from-version without deleting discarded history.
+**Goal:** Store immutable canonical Markdown versions, apply the save/autosave/pre-agent checkpoint policy, and support branch-from-version without deleting discarded history.
 
 **Architecture:** Use `document_versions` as a per-branch DAG. Each branch has a head version; branch creation copies selected snapshot into a new branch state.
 
@@ -14,12 +14,57 @@
 
 - Create: `apps/api/src/services/version-service.ts` — create/list versions and branch from version.
 - Test: `apps/api/src/services/version-service.test.ts`.
+- Create: `apps/api/src/services/save-policy.ts` — manual save, autosave throttle, and pre-agent checkpoint helpers.
 - Modify: `apps/api/src/services/editor-state.ts` — create version after write/edit.
 - Modify: `apps/api/src/routes/doc-ai-routes.ts` — include version in responses.
 
 ## Scope Check
 
 This plan only implements backend version/branch behavior. UI history display is a separate task in the web app.
+
+## Save and Snapshot Policy
+
+Version history is authoritative product state. Local agent snapshots are temporary review instruments and are not database records.
+
+```text
+Yjs live state + current_markdown/current_hash = working tree
+document_versions = commits
+.marklab/snapshots/.../proposal.md = local agent proposal file
+```
+
+Human typing persists through Yjs continuously and refreshes `current_markdown/current_hash` on debounce. It does not create a version per keystroke.
+
+Create versions for:
+
+```text
+manual save:
+  immediate, if current_hash differs from head version hash
+
+autosave:
+  at most once every 10 minutes per dirty branch
+  trigger after roughly 30 seconds idle or on blur/page hide
+
+pre-agent checkpoint:
+  immediate, bypassing autosave throttle
+  only when current_hash differs from the head version hash before an agent write/edit
+
+agent write/edit/multi-edit:
+  immediate after the minimal transaction live writer succeeds
+```
+
+Pre-agent checkpoint sequence:
+
+```text
+v10 = branch head version
+current_markdown/current_hash = dirty human state not represented by v10
+agent write/edit starts and passes its guard
+
+create v11 = checkpoint of current human state
+apply agent operation through minimal transaction live writer
+create v12 = agent version, parent = v11
+```
+
+This prevents unversioned human edits from being silently bundled into an agent-authored version.
 
 ### Task 1: Version service pure behavior tests
 
@@ -213,7 +258,7 @@ export async function branchFromVersion(pool: DbPool, docId: string, sourceVersi
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.
@@ -223,4 +268,122 @@ Expected: PASS.
 ```bash
 git add apps/api/src/services/version-service.ts
 git commit -m "feat: add branch from version service"
+```
+
+### Task 4: Save policy helpers
+
+**Files:**
+- Create: `apps/api/src/services/save-policy.ts`
+- Test: `apps/api/src/services/save-policy.test.ts`
+- Modify: `apps/api/src/services/editor-state.ts`
+
+- [ ] **Step 1: Write save policy tests**
+
+Create `apps/api/src/services/save-policy.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { shouldCreateAutosaveVersion, shouldCreateVersionForCurrentHash } from './save-policy';
+
+describe('shouldCreateVersionForCurrentHash', () => {
+  it('creates a version when current hash differs from head hash', () => {
+    expect(shouldCreateVersionForCurrentHash('sha256:working', 'sha256:head')).toBe(true);
+  });
+
+  it('skips version creation when current hash matches head hash', () => {
+    expect(shouldCreateVersionForCurrentHash('sha256:same', 'sha256:same')).toBe(false);
+  });
+});
+
+describe('shouldCreateAutosaveVersion', () => {
+  it('allows autosave when dirty and past the throttle window', () => {
+    expect(
+      shouldCreateAutosaveVersion({
+        currentHash: 'sha256:working',
+        headHash: 'sha256:head',
+        lastAutosaveAt: new Date('2026-04-29T12:00:00Z'),
+        now: new Date('2026-04-29T12:10:01Z'),
+      }),
+    ).toBe(true);
+  });
+
+  it('blocks autosave when the branch is clean', () => {
+    expect(
+      shouldCreateAutosaveVersion({
+        currentHash: 'sha256:same',
+        headHash: 'sha256:same',
+        lastAutosaveAt: null,
+        now: new Date('2026-04-29T12:10:01Z'),
+      }),
+    ).toBe(false);
+  });
+
+  it('blocks autosave inside the throttle window', () => {
+    expect(
+      shouldCreateAutosaveVersion({
+        currentHash: 'sha256:working',
+        headHash: 'sha256:head',
+        lastAutosaveAt: new Date('2026-04-29T12:05:00Z'),
+        now: new Date('2026-04-29T12:10:00Z'),
+      }),
+    ).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Implement save policy helpers**
+
+Create `apps/api/src/services/save-policy.ts`:
+
+```ts
+export const AUTOSAVE_VERSION_INTERVAL_MS = 10 * 60 * 1000;
+
+export function shouldCreateVersionForCurrentHash(currentHash: string, headHash: string): boolean {
+  return currentHash !== headHash;
+}
+
+export interface ShouldCreateAutosaveInput {
+  currentHash: string;
+  headHash: string;
+  lastAutosaveAt: Date | null;
+  now: Date;
+}
+
+export function shouldCreateAutosaveVersion(input: ShouldCreateAutosaveInput): boolean {
+  if (!shouldCreateVersionForCurrentHash(input.currentHash, input.headHash)) return false;
+  if (!input.lastAutosaveAt) return true;
+  return input.now.getTime() - input.lastAutosaveAt.getTime() >= AUTOSAVE_VERSION_INTERVAL_MS;
+}
+```
+
+- [ ] **Step 3: Wire pre-agent checkpoint into editor-state**
+
+Modify `apps/api/src/services/editor-state.ts` so `applyMarkdownToBranchState` checks the current branch head version hash before creating the agent version:
+
+```text
+if current branch state's current_hash differs from the head version hash:
+  create a checkpoint version with actorType = 'system' and operation = 'autosave'
+  use that checkpoint as the parentVersionId for the agent version
+else:
+  use the current head version as the parentVersionId
+```
+
+The checkpoint is created only after the incoming write/edit has passed its own guard. For `write_doc`, this means the request's `baseVersionId` and `baseHash` still match the branch state observed before the checkpoint. The checkpoint must not turn a valid guarded write into a false stale rejection.
+
+- [ ] **Step 4: Run tests**
+
+Run:
+
+```bash
+pnpm test apps/api/src/services/save-policy.test.ts
+pnpm --filter @marklab/api typecheck
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/api/src/services/save-policy.ts apps/api/src/services/save-policy.test.ts apps/api/src/services/editor-state.ts
+git commit -m "feat: add version save policy helpers"
 ```

@@ -1,9 +1,20 @@
-import { findEditTarget } from '@mdcollab/shared/src/edit-ops';
+import { findEditTarget } from '@marklab/shared/src/edit-ops';
 
 export class EditConflictError extends Error {
   constructor(message: 'old_string_not_found' | 'ambiguous_match', public readonly matchCount?: number) {
     super(message);
     this.name = 'EditConflictError';
+  }
+}
+
+export class MultiEditConflictError extends EditConflictError {
+  constructor(
+    message: 'old_string_not_found' | 'ambiguous_match',
+    public readonly editIndex: number,
+    matchCount?: number,
+  ) {
+    super(message, matchCount);
+    this.name = 'MultiEditConflictError';
   }
 }
 
@@ -32,4 +43,27 @@ export function applyEditToMarkdown(
   const index = target.indexes[0];
   if (index === undefined) throw new EditConflictError('old_string_not_found');
   return markdown.slice(0, index) + newString + markdown.slice(index + oldString.length);
+}
+
+export interface MultiEditOperation {
+  oldString: string;
+  newString: string;
+  replaceAll: boolean;
+}
+
+export function applyMultiEditToMarkdown(markdown: string, edits: MultiEditOperation[]): string {
+  return edits.reduce((currentMarkdown, edit, editIndex) => {
+    try {
+      return applyEditToMarkdown(currentMarkdown, edit.oldString, edit.newString, edit.replaceAll);
+    } catch (error) {
+      if (error instanceof EditConflictError) {
+        throw new MultiEditConflictError(
+          error.message as 'old_string_not_found' | 'ambiguous_match',
+          editIndex,
+          error.matchCount,
+        );
+      }
+      throw error;
+    }
+  }, markdown);
 }

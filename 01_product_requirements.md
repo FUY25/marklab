@@ -8,7 +8,7 @@ A researcher, founder, strategist, or engineer writing a shared Markdown documen
 
 ### AI coding/research agent
 
-Claude Code, Codex, or another MCP-capable agent that needs to read and write the shared document without using the visual UI.
+Claude Code, Codex, or another agent that needs to read and write the shared document without using the visual UI. The MVP integration path is MarkLab CLI + a MarkLab agent skill; MCP is a later adapter, not the first workflow.
 
 ## Core user journeys
 
@@ -53,30 +53,37 @@ Acceptance criteria:
 
 - Concurrent edits converge.
 - No user must manually refresh.
-- Presence does not need perfect cursor visualization in MVP, but connected collaborators should be visible.
+- Presence does not need cursor or selection fidelity in MVP, but connected collaborators should be visible.
 
 ### Journey D: AI reads and edits
 
 1. User creates an agent token for a doc/branch.
 2. Agent calls `read_doc` and receives canonical Markdown, version, and hash.
-3. Agent decides on a change after its own diff/review loop.
-4. Agent calls `edit_doc` with `old_string` and `new_string`.
-5. Server applies the edit if `old_string` uniquely exists in the current canonical Markdown.
-6. Server updates the live editor state and creates a new version.
+3. Agent may call `snapshot create` to materialize a local `proposal.md` plus `metadata.json` for native Codex/Claude Code diff review.
+4. Agent edits `proposal.md` using a native Edit-style exact replacement, or native MultiEdit for several exact replacements.
+5. If the user accepts the local native diff, agent calls `edit_doc` or `multi_edit_doc` with the same `old_string`/`new_string` operation it used locally.
+6. Server applies the edit operation against the current canonical Markdown.
+7. Server updates the live editor state through the minimal transaction live writer and creates a new version.
+8. CLI reports the server outcome with `versionId` and `hash` on success.
 
 Acceptance criteria:
 
 - If `old_string` is absent, API returns `409 old_string_not_found`.
 - If `old_string` appears more than once and `replace_all=false`, API returns `409 ambiguous_match`.
+- `edit_doc` matching is always against the exact current canonical Markdown string.
+- `multi_edit_doc` applies ordered replacements atomically and creates one version. If any replacement fails, none of the edits are persisted.
 - Successful edit creates a version with `actor_type='agent'`.
+- No in-app AI diff UI is required for approval or review.
 
 ### Journey E: AI writes full document
 
-1. Agent calls `read_doc` and receives `base_hash`.
-2. Agent produces a full revised Markdown document after external approval/review.
-3. Agent calls `write_doc` with `base_version_id`, `base_hash`, and revised Markdown.
-4. Server accepts only if current version and hash still match.
-5. Server updates live editor state and creates a version.
+1. Agent calls `read_doc` and receives `base_version_id`, `base_hash`, and Markdown.
+2. Agent may call `snapshot create` to materialize a local `proposal.md` for native Codex/Claude Code diff review.
+3. Agent rewrites `proposal.md` using a native Write/full-file action.
+4. If the user accepts the local native diff, agent calls `write_doc` with `base_version_id`, `base_hash`, and the revised Markdown from `proposal.md`.
+5. Server accepts only if current version and hash still match.
+6. Server updates live editor state through the minimal transaction live writer and creates a version.
+7. CLI reports the server outcome with `versionId` and `hash` on success.
 
 Acceptance criteria:
 
@@ -84,6 +91,8 @@ Acceptance criteria:
 - Stale full-write version returns `409 stale_base_version` and does not modify the doc.
 - Successful full-write creates a version.
 - Online users see the update.
+- The live writer applies changed ranges through ProseMirror transactions/Yjs updates rather than replacing the entire live document.
+- No AI streaming UX, selection-aware AI, or in-app diff UI is required for MVP.
 
 > **Context note:** The first API sketch only checked `base_hash` even though the API request carried `baseVersionId`. The corrected journey uses both fields for full-document overwrite safety.
 
@@ -119,16 +128,30 @@ Acceptance criteria:
 
 ## Agent tools
 
-Required:
+Required backend/API tools:
 
 ```text
 read_doc
 write_doc
 edit_doc
+multi_edit_doc
 list_versions
 branch_from_version
 export_doc
+import_doc
+manual_save
 ```
+
+Required CLI-only workflow tools:
+
+```text
+snapshot_create
+snapshot_status
+config
+health
+```
+
+`snapshot_create` is local-only. It exists so Codex/Claude Code can use native file-edit diff review against `proposal.md`; it is not a database record and not a product export.
 
 Not required in MVP:
 
@@ -136,9 +159,47 @@ Not required in MVP:
 insert_doc
 approve_edit
 reject_edit
+stream_ai_response
+selection_ai_command
 watch_local_file
 sync_github
 ```
+
+## Agent-side diff snapshots
+
+The app does not build an in-app diff approval UI for MVP. Codex, Claude Code, or another CLI/agent should use a local proposal snapshot so native file-edit UI can review proposed changes.
+
+`marklab snapshot create` writes:
+
+```text
+.marklab/snapshots/{slug}__SNAPSHOT__doc-{docIdShort}__branch-{branchIdOrSlug}__v{versionNumber}__ver-{versionId}__{yyyyMMdd-HHmmssZ}__sha-{hash8}/
+  proposal.md
+  metadata.json
+```
+
+No `baseline.md`, `before.md`, or `after.md` is created by default. `proposal.md` is initialized with the canonical Markdown returned by `read_doc`; the native agent file-edit UI treats that initial file content as the diff baseline. The Markdown body remains document content only.
+
+The sidecar JSON includes `docId`, `branchId`, `baseVersionId`, `baseVersionNumber`, `baseHash`, `createdAt`, `proposalPath`, and `snapshotRole: "proposal"`.
+
+If the agent locally edits `proposal.md` using a native Edit operation, the online submit should call `edit_doc` with the same `oldString`/`newString`. If it uses native MultiEdit, call `multi_edit_doc` with the same ordered operations. If it uses native Write, call `write_doc` using `proposal.md`.
+
+The CLI does not model user-level accept/reject. If the user rejects the local diff, no write/edit CLI command is called.
+
+## Version and save policy
+
+Human typing:
+
+- Yjs state persists continuously.
+- `current_markdown/current_hash` refreshes on a 1-2 second debounce.
+- Mirror refresh also flushes on blur, page hide, manual save, export, and agent read/write boundaries.
+- No immutable version is created per keystroke.
+
+Version triggers:
+
+- Manual save creates a version immediately when `current_hash` differs from the branch head version hash.
+- Autosave creates a version at most once every 10 minutes per dirty active branch, preferably after roughly 30 seconds idle or on blur/page hide.
+- Agent write/edit creates a version immediately after the minimal transaction live writer succeeds.
+- If an agent write/edit starts while human edits are present in the branch mirror but not yet represented by the head version, the server creates a pre-agent checkpoint version first, then creates the agent version as its child. This prevents older human edits from being silently bundled into an agent-authored version.
 
 ## Export
 

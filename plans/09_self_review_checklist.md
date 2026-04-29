@@ -145,3 +145,23 @@ grep -R "Buffer.from(\\[\\])" -n plans
 ```
 
 Expected: no matches.
+
+- [ ] **Step 4: Verify agent snapshot workflow uses proposal-only snapshots**
+
+Run:
+
+```bash
+grep -R "before\\.md\\|after\\.md\\|baseline\\.md\\|submit-snapshot" -n 00_scope_and_decisions.md 01_product_requirements.md 04_data_model_and_api.md 05_ai_write_versioning_branching.md plans
+```
+
+Expected: matches only appear in statements forbidding those files or commands. The executable workflow should use `proposal.md` plus `metadata.json`.
+
+- [ ] **Step 5: Verify Plan 7 is CLI + skill first**
+
+Run:
+
+```bash
+test -f plans/07_cli_agent_skill_plan.md && ! test -f plans/07_mcp_agent_plan.md
+```
+
+Expected: command exits with status 0. MCP may appear only as a later adapter, not as the MVP-critical Plan 7.

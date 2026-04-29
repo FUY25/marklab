@@ -73,8 +73,8 @@ test('collab undo removes only the local edit and keeps remote content', async (
   const leftEditor = page.getByTestId('milkdown-editor-left').locator('.ProseMirror');
   const rightEditor = page.getByTestId('milkdown-editor-right').locator('.ProseMirror');
 
-  await expect(leftEditor).toContainText('Markdown AI Collab');
-  await expect(rightEditor).toContainText('Markdown AI Collab');
+  await expect(leftEditor).toContainText('MarkLab');
+  await expect(rightEditor).toContainText('MarkLab');
 
   await leftEditor.click();
   await page.keyboard.press('End');

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Allow users to create cloud docs from local Markdown and export cloud docs as metadata-rich snapshot files.
+**Goal:** Allow users to create cloud docs from local Markdown and export cloud docs as metadata-rich product export files.
 
-**Architecture:** Import canonicalizes Markdown, initializes branch state, and creates v1. Export reads canonical mirror and builds a filename that warns the file is an export snapshot.
+**Architecture:** Import canonicalizes Markdown, initializes branch state, and creates v1. Export reads canonical mirror and builds a filename that warns the file is a product export, not a source-of-truth local sync file.
 
 **Tech Stack:** Express, Postgres, Prettier markdown formatter, shared export filename builder.
 
@@ -19,7 +19,7 @@
 
 ## Scope Check
 
-This plan does not implement local sync. It only implements upload/import and snapshot export.
+This plan does not implement local sync and does not implement agent proposal snapshots. It only implements upload/import and product export. Agent proposal snapshots are created by the MarkLab CLI in `plans/07_cli_agent_skill_plan.md`.
 
 ### Task 1: Document create service
 
@@ -31,8 +31,8 @@ This plan does not implement local sync. It only implements upload/import and sn
 Create `apps/api/src/services/doc-create.ts`:
 
 ```ts
-import { canonicalizeMarkdown } from '@mdcollab/markdown/src/canonicalize';
-import { sha256Hex } from '@mdcollab/shared/src/hash';
+import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import { createEmptyYjsState } from '../collab/persistence';
 import type { DbPool } from '../db/client';
 
@@ -95,7 +95,7 @@ export async function createDoc(input: CreateDocInput) {
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.
@@ -120,7 +120,7 @@ Create `apps/api/src/routes/import-export-routes.ts`:
 ```ts
 import { Router } from 'express';
 import { z } from 'zod';
-import { buildExportFilename } from '@mdcollab/shared/src/export-filename';
+import { buildExportFilename } from '@marklab/shared/src/export-filename';
 import type { DbPool } from '../db/client';
 import { createDoc } from '../services/doc-create';
 import { readBranchState } from '../services/doc-read';
@@ -196,7 +196,7 @@ Place it after JSON middleware and before error middleware.
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.

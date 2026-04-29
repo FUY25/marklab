@@ -12,8 +12,8 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@mdcollab/shared/*": ["packages/shared/*"],
-      "@mdcollab/markdown/*": ["packages/markdown/*"]
+      "@marklab/shared/*": ["packages/shared/*"],
+      "@marklab/markdown/*": ["packages/markdown/*"]
     }
   }
 }

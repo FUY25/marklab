@@ -77,7 +77,7 @@ export function parseConfig(env: Record<string, string | undefined>) {
 Create `.env.example`:
 
 ```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/mdcollab
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/marklab
 PORT=3001
 ```
 
@@ -121,7 +121,7 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY . .
-RUN pnpm --filter @mdcollab/api typecheck
+RUN pnpm --filter @marklab/api typecheck
 
 FROM base AS runtime
 ENV NODE_ENV=production
@@ -130,7 +130,7 @@ COPY --from=build /app/apps/api /app/apps/api
 COPY --from=build /app/packages /app/packages
 COPY package.json pnpm-workspace.yaml ./
 EXPOSE 3001
-CMD ["pnpm", "--filter", "@mdcollab/api", "start"]
+CMD ["pnpm", "--filter", "@marklab/api", "start"]
 ```
 
 - [ ] **Step 2: Build image**
@@ -138,7 +138,7 @@ CMD ["pnpm", "--filter", "@mdcollab/api", "start"]
 Run:
 
 ```bash
-docker build -f Dockerfile.api -t mdcollab-api:local .
+docker build -f Dockerfile.api -t marklab-api:local .
 ```
 
 Expected: image builds successfully.
@@ -166,7 +166,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: mdcollab
+      POSTGRES_DB: marklab
     ports:
       - "5432:5432"
     volumes:
@@ -177,7 +177,7 @@ services:
       context: .
       dockerfile: Dockerfile.api
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/mdcollab
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/marklab
       PORT: 3001
     ports:
       - "3001:3001"

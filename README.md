@@ -1,4 +1,4 @@
-# Markdown AI Collaboration MVP Spec — Milkdown-first Revision
+# MarkLab MVP Spec — Milkdown-first Revision
 
 This package freezes the current MVP direction after the editor decision changed to **Milkdown-first**.
 
@@ -10,11 +10,12 @@ A cloud Markdown document where humans collaborate in a polished WYSIWYG editor 
 
 - **Editor:** Milkdown-first. Human UI is a WYSIWYG Markdown editor powered by Milkdown/ProseMirror/Yjs.
 - **AI interface:** AI reads and writes canonical Markdown, not ProseMirror JSON.
-- **Write tools:** Match Claude Code’s mental model: `read`, `write`, and `edit`. No separate `insert` tool in MVP; insertion is expressed as `edit(old_string, new_string)`.
+- **Write tools:** Match Claude Code’s mental model: `read`, `write`, `edit`, and atomic multi-edit. No separate `insert` tool in MVP; insertion is expressed as `edit(old_string, new_string)`.
 - **Source/Split:** Not required as editable modes in MVP. A read-only Markdown preview/debug panel may exist. Do not build two simultaneously editable editors over different document models.
 - **Local sync:** Not in MVP. Local files are import/export artifacts only.
 - **Export metadata:** Put metadata in the filename, not in the Markdown body by default.
-- **Diff accept/reject:** Done by Codex/Claude Code before calling our write/edit tool. Our app records accepted writes as versions; it does not provide an AI approval workflow in MVP.
+- **Diff accept/reject:** Done by Codex/Claude Code native local file review before calling our write/edit tool. `snapshot create` writes one local `proposal.md` plus `metadata.json`; it does not create before/after/baseline files or manage accept/reject.
+- **Agent integration:** CLI + MarkLab skill first. MCP is optional later and should wrap the stable workflow rather than define it.
 - **Version history:** Back end stores a version DAG/branch model. Front end starts with a simple branch/history UI.
 - **Deployment:** Needs a persistent WebSocket-capable backend. Cloudflare is optional infrastructure, not the core product host.
 
@@ -53,8 +54,10 @@ Key correction themes:
 4. Canonical Markdown import/export.
 5. Version DAG service and branch primitives.
 6. AI read/write/edit API using the live-state writer and version service.
-7. MCP/agent integration.
+7. MarkLab CLI + agent skill integration.
 8. Deployment hardening.
+
+MCP can be added after the CLI/skill workflow is proven. It should be a thin adapter over the same API/CLI semantics.
 
 This order keeps each subsystem testable on its own. Do not start with GitHub sync, local watch sync, or complex permissions.
 

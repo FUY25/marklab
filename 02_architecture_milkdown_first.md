@@ -24,8 +24,16 @@ Postgres
   share links / agent tokens
         ^
         |
-REST/MCP backend
-  read/write/edit/export/version APIs
+REST backend
+  read/write/edit/multi-edit/export/version APIs
+        ^
+        |
+MarkLab CLI + agent skill
+  proposal snapshots and native Codex/Claude Code review
+        ^
+        |
+Optional MCP adapter
+  later wrapper over the same API/CLI workflow
 ```
 
 ## Design principle
@@ -80,19 +88,43 @@ Correct path:
 ```text
 AI write/edit API
   -> validate against current_markdown/hash
-  -> update collaboration document state
-  -> serialize to canonical Markdown
-  -> update mirror
+  -> compute target canonical Markdown
+  -> parse target Markdown to editor document
+  -> compare with current Yjs-bound ProseMirror document
+  -> apply only changed ranges through transactions/Yjs updates
+  -> serialize live document back to canonical Markdown
+  -> update mirror/hash
   -> create version
   -> broadcast to clients
 ```
 
 > **Context note:** The original AI API implementation sketch updated `current_markdown` directly as a temporary seam. That path is removed from the executable plan because it can desync online editors. The collaboration document state must change first, and the mirror/version must be derived from that updated live state.
 
+## Minimal transaction live writer
+
+The AI write path must use a live editor writer, not a mirror-only writer. It also must not use whole-document replacement as the MVP behavior.
+
+Required flow:
+
+```text
+target canonical Markdown
+  -> parse to Milkdown/ProseMirror document with the branch schema
+  -> read the current live Yjs-bound ProseMirror document
+  -> compare target doc to current doc
+  -> dispatch ProseMirror transactions for only the changed ranges
+  -> let Yjs publish/persist those updates
+  -> serialize the resulting live doc back to canonical Markdown
+  -> update current_markdown/current_hash/head version from serialized live doc
+```
+
+This keeps online editors on the same state path as human collaboration. The diffing granularity only needs to be reliable enough for changed block/range transactions in MVP; it does not need cursor preservation or selection-aware AI behavior.
+
 Implementation options:
 
-1. Use Hocuspocus `openDirectConnection` when the document state can be modified server-side.
-2. If Milkdown/ProseMirror transformations are easier client-side, use a headless transformer service with `jsdom` to convert Markdown to editor state. The server still owns the transaction and persistence.
+1. Use Hocuspocus `openDirectConnection` when the document state can be modified server-side and transactions can be applied against the live Yjs-bound ProseMirror document.
+2. If Milkdown/ProseMirror transformations are easier client-side, use a headless transformer service with `jsdom` to parse target Markdown, compare documents, dispatch transactions, and serialize the resulting live state. The server still owns validation, persistence, and version creation.
+
+`Crepe.Feature.AI` is not part of the execution path. Its streaming and diff UI can be studied later as reference material only.
 
 ## Branch-aware rooms
 
@@ -112,6 +144,7 @@ POST   /api/docs/import
 GET    /api/docs/:docId/branches/:branchId/read
 POST   /api/docs/:docId/branches/:branchId/write
 POST   /api/docs/:docId/branches/:branchId/edit
+POST   /api/docs/:docId/branches/:branchId/multi-edit
 GET    /api/docs/:docId/branches/:branchId/export.md
 GET    /api/docs/:docId/versions
 POST   /api/docs/:docId/versions/:versionId/branch

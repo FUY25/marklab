@@ -5,7 +5,7 @@ import { createEmptyYjsState, loadYjsState, storeYjsState } from './persistence'
 
 export function createCollabServer(pool: DbPool) {
   return new Hocuspocus({
-    name: 'markdown-ai-collab',
+    name: 'marklab',
     async onLoadDocument({ documentName }: { documentName: string }) {
       return (await loadYjsState(pool, documentName)) ?? createEmptyYjsState();
     },

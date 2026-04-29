@@ -132,7 +132,18 @@ export interface EditDocRequest {
   newString: string;
   replaceAll?: boolean;
 }
+
+export interface MultiEditDocRequest {
+  baseVersionId: string;
+  edits: Array<{
+    oldString: string;
+    newString: string;
+    replaceAll?: boolean;
+  }>;
+}
 ```
+
+Local agent proposal snapshots are not database records in MVP. They are files produced by the CLI workflow from `read_doc` responses. Their required metadata is `docId`, `branchId`, `baseVersionId`, `baseVersionNumber`, `baseHash`, `createdAt`, `proposalPath`, and `snapshotRole: "proposal"`.
 
 ## API contracts
 
@@ -255,6 +266,8 @@ HTTP status: `409`.
 
 > **Context note:** Earlier route sketches parsed `baseVersionId` but only checked `baseHash`. The corrected contract treats the version id as part of the full-write guard so agents receive precise conflict information.
 
+An accepted `write_doc` is full-document at the API boundary only. Internally it must run through the minimal transaction live writer: parse the target canonical Markdown, compare it to the current Yjs-bound ProseMirror document, apply only changed ranges through transactions/Yjs updates, serialize the live document back to canonical Markdown, and then update `current_markdown`, `current_hash`, and the branch head version.
+
 ### Local edit
 
 ```http
@@ -298,6 +311,96 @@ Conflict responses:
 ```
 
 HTTP status: `409`.
+
+`edit_doc` does not weaken conflict detection by relying on positions, cursor state, or stale client selections. It computes target Markdown by applying exact `oldString`/`newString` matching against the current canonical Markdown and then sends that target through the same minimal transaction live writer as `write_doc`.
+
+### Atomic multi edit
+
+```http
+POST /api/docs/:docId/branches/:branchId/multi-edit
+```
+
+Request:
+
+```json
+{
+  "baseVersionId": "ver_043",
+  "edits": [
+    {
+      "oldString": "Old paragraph A.",
+      "newString": "New paragraph A.",
+      "replaceAll": false
+    },
+    {
+      "oldString": "Old paragraph B.",
+      "newString": "New paragraph B.",
+      "replaceAll": false
+    }
+  ]
+}
+```
+
+Accepted response:
+
+```json
+{
+  "versionId": "ver_044",
+  "versionNumber": 44,
+  "hash": "sha256:..."
+}
+```
+
+Conflict responses use the same error codes as `edit_doc`, with an `editIndex` identifying the failed operation:
+
+```json
+{
+  "error": "old_string_not_found",
+  "editIndex": 1
+}
+```
+
+```json
+{
+  "error": "ambiguous_match",
+  "editIndex": 0,
+  "matchCount": 3
+}
+```
+
+HTTP status: `409`.
+
+`multi_edit_doc` mirrors Claude Code's MultiEdit mental model. It applies exact replacements in order against a local working Markdown string, aborts before live-state mutation if any replacement fails, then sends the final target Markdown through the same minimal transaction live writer. A successful operation creates one immutable version with operation `edit`.
+
+## Agent-side diff artifacts
+
+No in-app diff UI is part of MVP. Agents should create local proposal snapshots so Codex/Claude Code can use native file-edit review. Product exports remain user artifacts and should not be confused with agent proposal snapshots.
+
+Expected local snapshot layout:
+
+```text
+.marklab/snapshots/{slug}__SNAPSHOT__doc-{docIdShort}__branch-{branchIdOrSlug}__v{versionNumber}__ver-{versionId}__{yyyyMMdd-HHmmssZ}__sha-{hash8}/
+  proposal.md
+  metadata.json
+```
+
+`metadata.json` includes:
+
+```json
+{
+  "docId": "doc_abc",
+  "branchId": "br_main",
+  "baseVersionId": "ver_043",
+  "baseVersionNumber": 43,
+  "baseHash": "sha256:7b91a2cf...",
+  "createdAt": "2026-04-29T15:30:12Z",
+  "proposalPath": "proposal.md",
+  "snapshotRole": "proposal"
+}
+```
+
+No `baseline.md`, `before.md`, or `after.md` is created by default. `proposal.md` starts as the canonical Markdown returned by `read_doc`; the agent environment owns the native local diff and accept/reject UI.
+
+Snapshot files are review artifacts only. They are not authoritative state and must not bypass `write_doc` stale-base checks, `edit_doc` exact string matching, or `multi_edit_doc` ordered exact matching. If the user rejects the native local diff, no MarkLab write/edit command runs.
 
 ### Export
 

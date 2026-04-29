@@ -21,7 +21,7 @@ The following corrections should be applied while executing the plans.
 
 4. `plans/03_realtime_backend_persistence_plan.md` no longer claims raw Hocuspocus persistence keeps the canonical Markdown mirror fresh. Human-edit mirror refresh is explicitly assigned to the Milkdown serialization path.
 
-5. `plans/04_ai_write_api_plan.md` no longer creates a mirror-only `applyMarkdownToBranchState` seam. The corrected contract requires a live-state writer and derives mirror/hash/version after live state is updated.
+5. `plans/04_ai_write_api_plan.md` no longer creates a mirror-only `applyMarkdownToBranchState` seam or allows whole-document live replacement as the MVP write path. The corrected contract requires a minimal transaction live writer that parses target canonical Markdown, compares it to the current Yjs-bound ProseMirror document, applies only changed ranges through transactions/Yjs updates, and derives mirror/hash/version after live state is updated.
 
 6. `plans/04_ai_write_api_plan.md` now validates both `baseVersionId` and `baseHash` for full writes and returns `versionId`, `versionNumber`, and `hash` for accepted writes/edits.
 
@@ -33,7 +33,7 @@ The following corrections should be applied while executing the plans.
 
 10. The initial schema plan now creates `agent_tokens` and `share_links`; routes for managing them are still separate feature work before MVP completion.
 
-11. The web editor should migrate from the bare Milkdown wrapper to `@milkdown/crepe` for the human editing experience. Enable block editing, slash menu, floating toolbar, TopBar, tables, CodeMirror code blocks, and LaTeX. Keep all editor lifecycle and collab wiring inside one wrapper component.
+11. The web editor should migrate from the bare Milkdown wrapper to `@milkdown/crepe` for the human editing experience. Enable block editing, slash menu, floating toolbar, tables, CodeMirror code blocks, and LaTeX. Keep `Crepe.Feature.TopBar` disabled because the desired editing chrome is contextual, not a fixed top toolbar. Keep all editor lifecycle and collab wiring inside one wrapper component.
 
 12. Do not add `@milkdown/plugin-highlight` to the editable Crepe editor. It is for code-block token decoration, while Crepe's CodeMirror feature already covers editable code blocks. Persistent prose highlighting is a separate future custom-mark feature.
 
@@ -41,7 +41,11 @@ The following corrections should be applied while executing the plans.
 
 14. Disable image insertion until upload/storage is designed. Do not persist blob URLs or base64 image payloads into branch Markdown/Yjs state.
 
-15. `Crepe.Feature.AI` is intentionally excluded from the current execution. Revisit it after the human editor and live writer are stable, using its streaming and diff-review plugins as UI references rather than as a direct model/write path.
+15. `Crepe.Feature.AI` is intentionally excluded from the current execution. Revisit it after the human editor and live writer are stable, using its streaming and diff-review plugins as UI references rather than as a direct model/write path. Do not build AI streaming UX, selection-aware AI, or in-app AI diff UI for MVP.
+
+16. AI review/diffing should happen through a local proposal snapshot, not through app UI. `marklab snapshot create` should write only `proposal.md` and `metadata.json`; it should not create `baseline.md`, `before.md`, or `after.md` by default. Codex/Claude Code owns the native local file-edit review loop.
+
+17. Plan 7 is now CLI + agent skill first, not MCP first. The online submit must mirror the local native action: Edit -> `edit_doc`, MultiEdit -> `multi_edit_doc`, Write -> `write_doc`. MCP can be added later as a thin adapter over the stable API/CLI workflow, but MCP is not the policy layer.
 
 ## Safe First Slice
 

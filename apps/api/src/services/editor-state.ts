@@ -1,11 +1,16 @@
-import { canonicalizeMarkdown } from '@mdcollab/markdown/src/canonicalize';
-import { sha256Hex } from '@mdcollab/shared/src/hash';
+import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
-import type { LiveMarkdownWriter } from './live-writer';
-import { createVersionWithClient, type VersionActorType, type VersionOperation } from './version-service';
+import type { LiveMarkdownOperation, LiveMarkdownTransaction, LiveMarkdownWriter } from './live-writer';
+import { createVersionWithClient, type VersionActorType } from './version-service';
 
-export type { LiveMarkdownWriter } from './live-writer';
+export type {
+  AppliedLiveMarkdownTransaction,
+  LiveMarkdownOperation,
+  LiveMarkdownTransaction,
+  LiveMarkdownWriter,
+} from './live-writer';
 
 export interface ApplyMarkdownToBranchInput {
   pool: DbPool;
@@ -14,7 +19,7 @@ export interface ApplyMarkdownToBranchInput {
   branchId: string;
   parentVersionId: string;
   markdown: string;
-  operation: Extract<VersionOperation, 'write' | 'edit'>;
+  operation: LiveMarkdownOperation;
   actorType: VersionActorType;
   actorId?: string | undefined;
 }
@@ -26,12 +31,21 @@ export interface ApplyMarkdownToBranchResult {
   versionNumber: number;
 }
 
+function versionOperationForLiveOperation(operation: LiveMarkdownOperation) {
+  return operation.kind === 'write' ? 'write' : 'edit';
+}
+
 export async function applyMarkdownToBranchState(
   input: ApplyMarkdownToBranchInput,
 ): Promise<ApplyMarkdownToBranchResult> {
   const requestedMarkdown = await canonicalizeMarkdown(input.markdown);
-  const liveSerializedMarkdown = await input.liveWriter.replaceBranchMarkdown(input.branchId, requestedMarkdown);
-  const canonicalMarkdown = await canonicalizeMarkdown(liveSerializedMarkdown);
+  const transaction: LiveMarkdownTransaction = {
+    branchId: input.branchId,
+    targetCanonicalMarkdown: requestedMarkdown,
+    operation: input.operation,
+  };
+  const liveTransaction = await input.liveWriter.applyMarkdownTransaction(transaction);
+  const canonicalMarkdown = await canonicalizeMarkdown(liveTransaction.serializedMarkdown);
   const hash = sha256Hex(canonicalMarkdown);
 
   const version = await withTransaction(input.pool, async (client) => {
@@ -55,7 +69,7 @@ export async function applyMarkdownToBranchState(
       hash,
       actorType: input.actorType,
       actorId: input.actorId,
-      operation: input.operation,
+      operation: versionOperationForLiveOperation(input.operation),
     });
   });
 

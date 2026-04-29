@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose Claude Code-like tools for agents to read canonical Markdown, safely write full Markdown, and edit local strings.
+**Goal:** Expose Claude Code-like tools for agents to read canonical Markdown, safely submit guarded full-document Markdown, edit local strings, and apply atomic ordered multi-edits.
 
-**Architecture:** REST routes operate on canonical Markdown mirror, validate conflicts, update collaborative state, and create immutable versions.
+**Architecture:** REST routes operate on the canonical Markdown mirror for validation, update the live Yjs-bound ProseMirror document through a minimal transaction writer, then derive mirror/hash/version from the serialized live document.
 
 **Tech Stack:** Express, Zod, Postgres, shared edit utilities, canonical Markdown formatter.
 
@@ -14,21 +14,49 @@
 
 - Create: `apps/api/src/services/doc-read.ts` — read canonical branch state.
 - Create: `apps/api/src/services/doc-write.ts` — safe write/edit service.
-- Create: `apps/api/src/services/editor-state.ts` — update Milkdown/Yjs branch state from Markdown.
+- Create: `apps/api/src/services/live-writer.ts` — minimal transaction live writer contract.
+- Create: `apps/api/src/services/editor-state.ts` — update Milkdown/Yjs branch state from Markdown through minimal transactions.
 - Create: `apps/api/src/routes/doc-ai-routes.ts` — REST routes.
 - Modify: `apps/api/src/http/app.ts` — mount routes.
 - Test: `apps/api/src/services/doc-write.test.ts`.
+- Test: `apps/api/src/services/editor-state.test.ts`.
 - Test: `apps/api/src/routes/doc-ai-routes.test.ts`.
 
 ## Scope Check
 
-This plan does not build MCP or UI. It only builds HTTP APIs and service logic.
+This plan does not build MCP or UI. It only builds HTTP APIs and service logic. It explicitly does not build AI streaming UX, in-app selection-aware AI, or in-app diff UI.
 
-> **Execution gate:** Do not execute the write/edit route task until the Milkdown spike has produced a concrete live-state writer that can replace branch Yjs/ProseMirror state from Markdown and return serialized Markdown from that live state. The version service from `plans/05_version_branch_plan.md` must also exist before this route is implemented.
+> **Execution gate:** The HTTP route shape may exist before the concrete writer is wired, but accepted write/edit execution must fail closed with `503 live_writer_not_configured` until a concrete minimal transaction live writer exists. The writer must parse target canonical Markdown into an editor document, compare it to the current live Yjs-bound ProseMirror document, apply only changed ranges through ProseMirror transactions/Yjs updates, and return serialized Markdown from the resulting live state. The version service from `plans/05_version_branch_plan.md` must also exist before successful write/edit execution is enabled.
 
 > **Context note:** The original plan included a mirror-only first pass for `applyMarkdownToBranchState`. That directly conflicts with the architecture rule that AI writes must update live collaboration state before updating the canonical mirror. The corrected plan makes the live-state writer an explicit dependency instead of shipping a route that can desync online editors.
 >
-> **2026-04-29 Crepe update:** Do not use `Crepe.Feature.AI` as the write path in this plan. Crepe's AI streaming/diff workflow can be studied later as a UI pattern, but accepted AI writes must still call the backend route, pass stale-base checks, update live Yjs/Milkdown state through `LiveMarkdownWriter`, serialize canonical Markdown back from that live state, and create an immutable version.
+> **2026-04-29 Crepe update:** Do not use `Crepe.Feature.AI` as the write path in this plan. Crepe's AI streaming/diff workflow can be studied later as a UI reference, but accepted AI writes must still call the backend route, pass stale-base checks, update live Yjs/Milkdown state through `LiveMarkdownWriter`, serialize canonical Markdown back from that live state, and create an immutable version.
+
+## Agent-Side Diff Artifacts
+
+The MVP review loop belongs to Codex/Claude Code, not to an in-app diff UI. The MarkLab CLI should create one local proposal snapshot for native file-edit review.
+
+Expected snapshot layout:
+
+```text
+.marklab/snapshots/{slug}__SNAPSHOT__doc-{docIdShort}__branch-{branchIdOrSlug}__v{versionNumber}__ver-{versionId}__{yyyyMMdd-HHmmssZ}__sha-{hash8}/
+  proposal.md
+  metadata.json
+```
+
+No `baseline.md`, `before.md`, or `after.md` is created by default. `metadata.json` must include `docId`, `branchId`, `baseVersionId`, `baseVersionNumber`, `baseHash`, `createdAt`, `proposalPath`, and `snapshotRole: "proposal"`.
+
+These files are review artifacts only and must not bypass `write_doc` base-version/base-hash checks, `edit_doc` exact `oldString` matching, or `multi_edit_doc` ordered exact matching.
+
+The online submit mirrors the local native action:
+
+```text
+native Edit      -> marklab edit_doc with the same oldString/newString
+native MultiEdit -> marklab multi_edit_doc with the same ordered edits
+native Write     -> marklab write_doc from proposal.md
+```
+
+The CLI must not own user-level accept/reject. If the user rejects the native local diff, no MarkLab write/edit command is called.
 
 ### Task 1: Document read service
 
@@ -97,7 +125,7 @@ export async function readBranchState(pool: DbPool, docId: string, branchId: str
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.
@@ -109,82 +137,86 @@ git add apps/api/src/services/doc-read.ts
 git commit -m "feat: add canonical markdown read service"
 ```
 
-### Task 2: Editor state update contract
+### Task 2: Minimal transaction editor state update contract
 
 **Files:**
+- Create: `apps/api/src/services/live-writer.ts`
 - Create: `apps/api/src/services/editor-state.ts`
 
-- [ ] **Step 1: Create editor state update contract**
+- [ ] **Step 1: Create live writer contract**
 
-Create `apps/api/src/services/editor-state.ts`:
+Create `apps/api/src/services/live-writer.ts`:
 
 ```ts
-import type { DbPool } from '../db/client';
-import { canonicalizeMarkdown } from '@mdcollab/markdown/src/canonicalize';
-import { sha256Hex } from '@mdcollab/shared/src/hash';
-import { createVersion } from './version-service';
+export type LiveMarkdownOperation =
+  | {
+      kind: 'write';
+      baseVersionId: string;
+      baseHash: string;
+    }
+  | {
+      kind: 'edit';
+      baseVersionId: string;
+      oldString: string;
+      newString: string;
+      replaceAll: boolean;
+    }
+  | {
+      kind: 'multi_edit';
+      baseVersionId: string;
+      edits: Array<{
+        oldString: string;
+        newString: string;
+        replaceAll: boolean;
+      }>;
+    };
+
+export interface LiveMarkdownTransaction {
+  branchId: string;
+  targetCanonicalMarkdown: string;
+  operation: LiveMarkdownOperation;
+}
+
+export interface AppliedLiveMarkdownTransaction {
+  serializedMarkdown: string;
+  changedRangeCount: number;
+  appliedTransactionCount: number;
+}
 
 export interface LiveMarkdownWriter {
-  replaceBranchMarkdown(branchId: string, canonicalMarkdown: string): Promise<string>;
+  applyMarkdownTransaction(transaction: LiveMarkdownTransaction): Promise<AppliedLiveMarkdownTransaction>;
 }
 
-export interface ApplyMarkdownToBranchInput {
-  pool: DbPool;
-  liveWriter: LiveMarkdownWriter;
-  docId: string;
-  branchId: string;
-  parentVersionId: string;
-  markdown: string;
-  operation: 'write' | 'edit';
-  actorType: 'agent' | 'user' | 'system';
-  actorId?: string;
-}
-
-export interface ApplyMarkdownToBranchResult {
-  canonicalMarkdown: string;
-  hash: string;
-  versionId: string;
-  versionNumber: number;
-}
-
-export async function applyMarkdownToBranchState(input: ApplyMarkdownToBranchInput): Promise<ApplyMarkdownToBranchResult> {
-  const requestedMarkdown = await canonicalizeMarkdown(input.markdown);
-  const liveSerializedMarkdown = await input.liveWriter.replaceBranchMarkdown(input.branchId, requestedMarkdown);
-  const canonicalMarkdown = await canonicalizeMarkdown(liveSerializedMarkdown);
-  const hash = sha256Hex(canonicalMarkdown);
-
-  await input.pool.query(
-    `update document_branch_states
-       set current_markdown = $2,
-           current_hash = $3,
-           updated_at = now()
-     where branch_id = $1`,
-    [input.branchId, canonicalMarkdown, hash],
-  );
-
-  const version = await createVersion({
-    pool: input.pool,
-    docId: input.docId,
-    branchId: input.branchId,
-    parentVersionId: input.parentVersionId,
-    markdown: canonicalMarkdown,
-    hash,
-    actorType: input.actorType,
-    actorId: input.actorId,
-    operation: input.operation,
-  });
-
-  return { canonicalMarkdown, hash, ...version };
+export function createUnavailableLiveMarkdownWriter(): LiveMarkdownWriter {
+  return {
+    async applyMarkdownTransaction() {
+      throw new Error('live_writer_not_configured');
+    },
+  };
 }
 ```
 
+`LiveMarkdownWriter.applyMarkdownTransaction` is a live editor writer, not a mirror writer and not a wholesale replacement writer. Its implementation must:
+
+1. Parse `targetCanonicalMarkdown` into a Milkdown/ProseMirror document with the branch schema.
+2. Read the current live Yjs-bound ProseMirror document for `branchId`.
+3. Compare the target document with the current document.
+4. Dispatch ProseMirror transactions/Yjs updates for only changed ranges.
+5. Serialize the resulting live document back to Markdown and return it as `serializedMarkdown` with `changedRangeCount` and `appliedTransactionCount` metadata.
+
+- [ ] **Step 2: Create editor state application service**
+
+Create `apps/api/src/services/editor-state.ts` so `applyMarkdownToBranchState` canonicalizes the requested target, calls `liveWriter.applyMarkdownTransaction`, canonicalizes the writer's `serializedMarkdown`, hashes that live serialization, then updates `document_branch_states` and creates the immutable version in one checked-out database transaction.
+
+The version `operation` stored in `document_versions` is `write` for `kind: 'write'` and `edit` for both `kind: 'edit'` and `kind: 'multi_edit'`. The richer operation metadata is for the live writer and audit hooks, not for the current enum column.
+
 > **Context note:** The original function wrote `current_markdown` directly and returned only `{ hash }`. The corrected contract first updates live branch state through `LiveMarkdownWriter`, then canonicalizes the Markdown serialized back from that live state, updates the mirror, and creates the immutable version returned to the API caller.
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add apps/api/src/services/editor-state.ts
-git commit -m "feat: add editor state update seam"
+git add apps/api/src/services/live-writer.ts apps/api/src/services/editor-state.ts
+git commit -m "feat: add minimal transaction editor state seam"
 ```
 
 ### Task 3: Write/edit service tests
@@ -198,7 +230,7 @@ Create `apps/api/src/services/doc-write.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { applyEditToMarkdown, assertCanWrite } from './doc-write';
+import { applyEditToMarkdown, applyMultiEditToMarkdown, assertCanWrite } from './doc-write';
 
 describe('assertCanWrite', () => {
   it('accepts matching base version and hash', () => {
@@ -223,6 +255,26 @@ describe('applyEditToMarkdown', () => {
     expect(() => applyEditToMarkdown('old old', 'old', 'new', false)).toThrow('ambiguous_match');
   });
 });
+
+describe('applyMultiEditToMarkdown', () => {
+  it('applies ordered replacements atomically', () => {
+    expect(
+      applyMultiEditToMarkdown('A old\nB old\n', [
+        { oldString: 'A old', newString: 'A new', replaceAll: false },
+        { oldString: 'B old', newString: 'B new', replaceAll: false },
+      ]),
+    ).toBe('A new\nB new\n');
+  });
+
+  it('throws before returning a partial result when an edit fails', () => {
+    expect(() =>
+      applyMultiEditToMarkdown('A old\n', [
+        { oldString: 'A old', newString: 'A new', replaceAll: false },
+        { oldString: 'missing', newString: 'new', replaceAll: false },
+      ]),
+    ).toThrow('old_string_not_found');
+  });
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -245,7 +297,25 @@ Expected: FAIL with module not found.
 Create `apps/api/src/services/doc-write.ts`:
 
 ```ts
-import { applyStringEdit } from '@mdcollab/shared/src/edit-ops';
+import { findEditTarget } from '@marklab/shared/src/edit-ops';
+
+export class EditConflictError extends Error {
+  constructor(message: 'old_string_not_found' | 'ambiguous_match', public readonly matchCount?: number) {
+    super(message);
+    this.name = 'EditConflictError';
+  }
+}
+
+export class MultiEditConflictError extends EditConflictError {
+  constructor(
+    message: 'old_string_not_found' | 'ambiguous_match',
+    public readonly editIndex: number,
+    matchCount?: number,
+  ) {
+    super(message, matchCount);
+    this.name = 'MultiEditConflictError';
+  }
+}
 
 export function assertCanWrite(currentVersionId: string, currentHash: string, baseVersionId: string, baseHash: string): void {
   if (currentVersionId !== baseVersionId) throw new Error('stale_base_version');
@@ -253,11 +323,52 @@ export function assertCanWrite(currentVersionId: string, currentHash: string, ba
 }
 
 export function applyEditToMarkdown(markdown: string, oldString: string, newString: string, replaceAll: boolean): string {
-  return applyStringEdit(markdown, oldString, newString, replaceAll);
+  const target = findEditTarget(markdown, oldString, replaceAll);
+  if (target.kind === 'not_found') throw new EditConflictError('old_string_not_found');
+  if (target.kind === 'ambiguous') throw new EditConflictError('ambiguous_match', target.count);
+
+  if (replaceAll) return markdown.split(oldString).join(newString);
+
+  const index = target.indexes[0];
+  if (index === undefined) throw new EditConflictError('old_string_not_found');
+  return markdown.slice(0, index) + newString + markdown.slice(index + oldString.length);
+}
+
+export interface MultiEditOperation {
+  oldString: string;
+  newString: string;
+  replaceAll: boolean;
+}
+
+export class MultiEditConflictError extends Error {
+  constructor(message: string, readonly editIndex: number) {
+    super(message);
+  }
+}
+
+export function applyMultiEditToMarkdown(markdown: string, edits: MultiEditOperation[]): string {
+  return edits.reduce((currentMarkdown, edit, editIndex) => {
+    try {
+      return applyEditToMarkdown(currentMarkdown, edit.oldString, edit.newString, edit.replaceAll);
+    } catch (error) {
+      if (error instanceof EditConflictError) {
+        throw new MultiEditConflictError(
+          error.message as 'old_string_not_found' | 'ambiguous_match',
+          editIndex,
+          error.matchCount,
+        );
+      }
+      throw error;
+    }
+  }, markdown);
 }
 ```
 
 > **Context note:** The original route parsed `baseVersionId` but ignored it. The corrected full-write guard validates both base version and base hash, so stale full-document writes cannot silently cross version boundaries.
+
+`edit_doc` intentionally does not use cursor position or selection state. It applies exact `oldString`/`newString` replacement to the current canonical Markdown and then sends the resulting target Markdown through the same minimal transaction live writer as `write_doc`.
+
+`multi_edit_doc` uses the same primitive for ordered replacements and must call the live writer once, after all replacements have succeeded. It creates one version with operation `edit`.
 
 - [ ] **Step 2: Run test to verify it passes**
 
@@ -291,7 +402,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
 import { readBranchState } from '../services/doc-read';
-import { applyEditToMarkdown, assertCanWrite } from '../services/doc-write';
+import { applyEditToMarkdown, applyMultiEditToMarkdown, assertCanWrite, MultiEditConflictError } from '../services/doc-write';
 import { applyMarkdownToBranchState, type LiveMarkdownWriter } from '../services/editor-state';
 
 const writeSchema = z.object({
@@ -305,6 +416,17 @@ const editSchema = z.object({
   oldString: z.string().min(1),
   newString: z.string(),
   replaceAll: z.boolean().optional().default(false),
+});
+
+const multiEditSchema = z.object({
+  baseVersionId: z.string().min(1),
+  edits: z.array(
+    z.object({
+      oldString: z.string().min(1),
+      newString: z.string(),
+      replaceAll: z.boolean().optional().default(false),
+    }),
+  ).min(1),
 });
 
 export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) {
@@ -330,7 +452,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
         branchId: req.params.branchId,
         parentVersionId: current.versionId,
         markdown: body.markdown,
-        operation: 'write',
+        operation: { kind: 'write', baseVersionId: body.baseVersionId, baseHash: body.baseHash },
         actorType: 'agent',
       });
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
@@ -360,7 +482,13 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
         branchId: req.params.branchId,
         parentVersionId: current.versionId,
         markdown: nextMarkdown,
-        operation: 'edit',
+        operation: {
+          kind: 'edit',
+          baseVersionId: body.baseVersionId,
+          oldString: body.oldString,
+          newString: body.newString,
+          replaceAll: body.replaceAll,
+        },
         actorType: 'agent',
       });
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
@@ -377,11 +505,52 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
     }
   });
 
+  router.post('/docs/:docId/branches/:branchId/multi-edit', async (req, res, next) => {
+    try {
+      const body = multiEditSchema.parse(req.body);
+      const current = await readBranchState(pool, req.params.docId, req.params.branchId);
+      const nextMarkdown = applyMultiEditToMarkdown(current.markdown, body.edits);
+      const applied = await applyMarkdownToBranchState({
+        pool,
+        liveWriter,
+        docId: req.params.docId,
+        branchId: req.params.branchId,
+        parentVersionId: current.versionId,
+        markdown: nextMarkdown,
+        operation: {
+          kind: 'multi_edit',
+          baseVersionId: body.baseVersionId,
+          edits: body.edits,
+        },
+        actorType: 'agent',
+      });
+      res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
+    } catch (error) {
+      if (error instanceof MultiEditConflictError && error.message === 'old_string_not_found') {
+        res.status(409).json({ error: 'old_string_not_found', editIndex: error.editIndex });
+        return;
+      }
+      if (error instanceof MultiEditConflictError && error.message === 'ambiguous_match') {
+        res.status(409).json({ error: 'ambiguous_match', editIndex: error.editIndex, matchCount: error.matchCount });
+        return;
+      }
+      if (error instanceof Error && error.message === 'old_string_not_found') {
+        res.status(409).json({ error: 'old_string_not_found' });
+        return;
+      }
+      if (error instanceof Error && error.message === 'ambiguous_match') {
+        res.status(409).json({ error: 'ambiguous_match' });
+        return;
+      }
+      next(error);
+    }
+  });
+
   return router;
 }
 ```
 
-> **Context note:** The original routes returned only `{ hash }`, even though the API contract requires `versionId`, `versionNumber`, and `hash`. The corrected route returns version metadata after the live-state write and immutable version creation. Local edits still do not require hash equality; they target the current canonical Markdown by `oldString`.
+> **Context note:** The original routes returned only `{ hash }`, even though the API contract requires `versionId`, `versionNumber`, and `hash`. The corrected route returns version metadata after the live-state write and immutable version creation. Local edits still do not require hash equality; they target the current canonical Markdown by `oldString`. Multi-edit mirrors Claude Code's MultiEdit semantics and is atomic at the API boundary.
 
 - [ ] **Step 2: Mount routes**
 
@@ -407,6 +576,8 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter) {
 }
 ```
 
+The app-level error handler must map `live_writer_not_configured` to `503` so accepted write/edit requests cannot silently fall back to mirror-only persistence while the concrete minimal transaction writer is not wired.
+
 - [ ] **Step 3: Update entrypoint call**
 
 Modify `apps/api/src/index.ts` so the app receives `pool` and the concrete `liveWriter` created by the Milkdown/Hocuspocus writer implementation:
@@ -422,7 +593,7 @@ const app = createHttpApp(pool, liveWriter);
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.

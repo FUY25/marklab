@@ -42,7 +42,7 @@ Create `apps/api/package.json`:
 
 ```json
 {
-  "name": "@mdcollab/api",
+  "name": "@marklab/api",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -54,8 +54,8 @@ Create `apps/api/package.json`:
   },
   "dependencies": {
     "@hocuspocus/server": "^4.0.0",
-    "@mdcollab/shared": "workspace:*",
-    "@mdcollab/markdown": "workspace:*",
+    "@marklab/shared": "workspace:*",
+    "@marklab/markdown": "workspace:*",
     "express": "^5.0.0",
     "pg": "^8.13.0",
     "ws": "^8.18.0",
@@ -91,7 +91,7 @@ Create `apps/api/tsconfig.json`:
 }
 ```
 
-> **Context note:** The original plan ran `pnpm --filter @mdcollab/api typecheck` but did not create an API `tsconfig.json`. This config makes the package script deterministic.
+> **Context note:** The original plan ran `pnpm --filter @marklab/api typecheck` but did not create an API `tsconfig.json`. This config makes the package script deterministic.
 
 - [ ] **Step 3: Install dependencies**
 
@@ -233,7 +233,7 @@ export type DbPool = ReturnType<typeof createPool>;
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS.
@@ -379,7 +379,7 @@ import { loadYjsState, storeYjsState } from './persistence';
 
 export function createCollabServer(pool: DbPool) {
   return Server.configure({
-    name: 'markdown-ai-collab',
+    name: 'marklab',
     async onLoadDocument(data) {
       const state = await loadYjsState(pool, data.documentName);
       if (!state) return new Y.Doc();
@@ -450,7 +450,7 @@ httpServer.listen(port, () => {
 Run:
 
 ```bash
-pnpm --filter @mdcollab/api typecheck
+pnpm --filter @marklab/api typecheck
 ```
 
 Expected: PASS against the installed Hocuspocus major. If the `handleConnection` API differs, update the code to the installed type signature and rerun typecheck; do not leave a cast-based workaround.

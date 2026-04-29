@@ -3,7 +3,7 @@ import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { MilkdownEditor } from './components/MilkdownEditor';
 
-const initialMarkdown = '# Markdown AI Collab\n\nEdit this collaborative Markdown document.\n';
+const initialMarkdown = '# MarkLab\n\nEdit this collaborative Markdown document.\n';
 const remoteBridgeOrigin = 'remote-test-bridge';
 
 function createAwareness(doc: Y.Doc, name: string, color: string) {
@@ -49,7 +49,7 @@ function SingleEditorWorkspace() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <h1>Markdown AI Collaboration</h1>
+        <h1>MarkLab</h1>
       </header>
       <MilkdownEditor initialMarkdown={initialMarkdown} ydoc={ydoc} awareness={awareness} />
     </main>
@@ -64,7 +64,7 @@ function TwoEditorCollabHarness() {
   return (
     <main className="app-shell app-shell-wide">
       <header className="app-header">
-        <h1>Markdown AI Collaboration</h1>
+        <h1>MarkLab</h1>
       </header>
       <section className="collab-grid" aria-label="Collaborative editor test harness">
         <div className="collab-pane">

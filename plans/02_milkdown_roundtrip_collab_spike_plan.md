@@ -33,12 +33,13 @@ This plan is a spike but still produces working software: a visual collaborative
 
 - Use `@milkdown/crepe` for human editing instead of a bare `Editor.make().use(commonmark).use(gfm)` wrapper.
 - Keep editor lifecycle in one React wrapper: creation, feature config, Yjs binding, awareness, listener wiring, readonly state, and cleanup must not spread into page components.
-- Enable Crepe human editing features: `BlockEdit`, `Toolbar`, `TopBar`, `LinkTooltip`, `ListItem`, `Cursor`, `Placeholder`, `Table`, `CodeMirror`, and `Latex`.
-- Do not enable `Crepe.Feature.AI` in this plan. AI UX will be evaluated after the human editor and live-writer path are stable.
+- Enable Crepe human editing features: `BlockEdit`, floating `Toolbar`, `LinkTooltip`, `ListItem`, `Cursor`, `Placeholder`, `Table`, `CodeMirror`, and `Latex`.
+- Keep `Crepe.Feature.TopBar` disabled. The desired editing chrome is block handles, slash menu, and floating toolbar, not a fixed top toolbar.
+- Do not enable Crepe AI in this plan. The installed `@milkdown/crepe@7.20.0` feature enum does not expose `AI`; if a later Crepe version adds it, keep it disabled until the human editor and live-writer path are stable.
 - Disable `ImageBlock` until the product has a durable upload/storage URL policy. Do not allow blob URLs or base64 image payloads into persisted Markdown/Yjs state.
 - Do not add `@milkdown/plugin-highlight` for the editable Crepe editor. `Crepe.Feature.CodeMirror` covers editable code-block highlighting. Persistent text highlighting is a future custom mark feature, not `plugin-highlight`.
 - Treat Yjs/collab undo as authoritative. Do not expose ProseMirror history semantics in collaborative editing. Disable Milkdown history shortcuts so `@milkdown/plugin-collab` / `y-prosemirror` handles `Mod-z`, `Mod-y`, and `Shift-Mod-z`.
-- Add Playwright coverage for block menu, floating toolbar, TopBar, code/table/math insertion, image entry absence, and collab undo behavior.
+- Add Playwright coverage for hidden TopBar, block menu, floating toolbar, code/table/math insertion, image entry absence, and collab undo behavior.
 
 ## Crepe Human Editing Migration
 
@@ -54,7 +55,7 @@ This plan is a spike but still produces working software: a visual collaborative
 Run:
 
 ```bash
-npx --yes pnpm@10.0.0 --filter @mdcollab/web add @milkdown/crepe@^7.20.0
+npx --yes pnpm@10.0.0 --filter @marklab/web add @milkdown/crepe@^7.20.0
 ```
 
 Expected: `apps/web/package.json` and `pnpm-lock.yaml` include `@milkdown/crepe`.
@@ -86,9 +87,8 @@ Required feature settings:
 
 ```ts
 features: {
-  [Crepe.Feature.TopBar]: true,
+  [Crepe.Feature.TopBar]: false,
   [Crepe.Feature.ImageBlock]: false,
-  [Crepe.Feature.AI]: false,
 }
 ```
 
@@ -143,7 +143,7 @@ When `?collab=two` is present, render two editor wrappers connected by bridged Y
 
 - [ ] **Step 1: Assert Crepe UI loads**
 
-Verify `.milkdown`, `.ProseMirror`, `.milkdown-top-bar`, and `.milkdown-toolbar`/block edit surfaces are available.
+Verify `.milkdown`, `.ProseMirror`, and `.milkdown-toolbar`/block edit surfaces are available, and verify `.milkdown-top-bar` is absent.
 
 - [ ] **Step 2: Assert text formatting works**
 
@@ -169,8 +169,8 @@ Run:
 npx --yes pnpm@10.0.0 install --frozen-lockfile
 npx --yes pnpm@10.0.0 typecheck
 npx --yes pnpm@10.0.0 test
-npx --yes pnpm@10.0.0 --filter @mdcollab/web test:e2e
-npx --yes pnpm@10.0.0 --filter @mdcollab/web build
+npx --yes pnpm@10.0.0 --filter @marklab/web test:e2e
+npx --yes pnpm@10.0.0 --filter @marklab/web build
 ```
 
 Then use Playwright CLI for an interactive smoke pass:
@@ -197,7 +197,7 @@ Create `packages/markdown/package.json`:
 
 ```json
 {
-  "name": "@mdcollab/markdown",
+  "name": "@marklab/markdown",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -314,7 +314,7 @@ Create `apps/web/package.json`:
 
 ```json
 {
-  "name": "@mdcollab/web",
+  "name": "@marklab/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -344,7 +344,7 @@ Create `apps/web/package.json`:
 }
 ```
 
-> **Context note:** The original dependency list relied on transitive collaboration peer packages and called `pnpm --filter @mdcollab/web typecheck` without defining a `typecheck` script. pnpm does not guarantee transitive peer availability, so the corrected plan declares `y-prosemirror`, `y-protocols`, and `yjs` directly and adds the script the later step runs. Hocuspocus is set to the current major (`4.x`) observed on 2026-04-29; typecheck must lock any API adjustments.
+> **Context note:** The original dependency list relied on transitive collaboration peer packages and called `pnpm --filter @marklab/web typecheck` without defining a `typecheck` script. pnpm does not guarantee transitive peer availability, so the corrected plan declares `y-prosemirror`, `y-protocols`, and `yjs` directly and adds the script the later step runs. Hocuspocus is set to the current major (`4.x`) observed on 2026-04-29; typecheck must lock any API adjustments.
 
 - [ ] **Step 2: Create web TypeScript config**
 
@@ -433,7 +433,7 @@ export function MilkdownEditor({ initialMarkdown, ydoc, awareness }: MilkdownEdi
 Run:
 
 ```bash
-pnpm --filter @mdcollab/web typecheck
+pnpm --filter @marklab/web typecheck
 ```
 
 Expected: PASS against the installed Milkdown and Hocuspocus versions. Do not use `any` casts around editor/collab setup; if package API names differ, update imports from the cloned Milkdown source and rerun typecheck until it passes.
@@ -496,7 +496,7 @@ export function createEditorCollab(input: CreateEditorCollabInput) {
 Run:
 
 ```bash
-pnpm --filter @mdcollab/web typecheck
+pnpm --filter @marklab/web typecheck
 ```
 
 Expected: PASS.

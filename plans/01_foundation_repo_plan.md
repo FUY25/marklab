@@ -45,7 +45,7 @@ Create `package.json`:
 
 ```json
 {
-  "name": "markdown-ai-collab",
+  "name": "marklab",
   "private": true,
   "type": "module",
   "scripts": {
@@ -158,7 +158,7 @@ Create `packages/shared/package.json`:
 
 ```json
 {
-  "name": "@mdcollab/shared",
+  "name": "@marklab/shared",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
