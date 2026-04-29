@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Rubik:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family:
+    Inter,
+    Arial,
+    Helvetica,
+    sans-serif;
+  color: #1f2023;
+  background: #ffffff;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(1260px, calc(100vw - 96px));
+  margin: 0 auto;
+  padding: 0 0 64px;
+}
+
+.app-shell-wide {
+  width: min(1480px, calc(100vw - 48px));
+  padding-top: 28px;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.milkdown-editor {
+  min-height: 520px;
+  background: #ffffff;
+}
+
+.milkdown-editor > .milkdown {
+  min-height: inherit;
+  --crepe-color-background: #ffffff;
+  --crepe-color-surface: #ffffff;
+  --crepe-font-default: Inter, Arial, Helvetica, sans-serif;
+  --crepe-font-title: Rubik, Arial, Helvetica, sans-serif;
+  --crepe-font-code: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+}
+
+.milkdown-editor .ProseMirror {
+  min-height: 430px;
+  padding: 96px 0 64px;
+  outline: none;
+}
+
+.app-shell:not(.app-shell-wide) .app-header {
+  display: none;
+}
+
+.collab-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.collab-pane {
+  min-width: 0;
+}
+
+.collab-pane h2 {
+  margin: 0 0 8px;
+  color: #525252;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.collab-pane .milkdown-editor {
+  min-height: 460px;
+  border: 1px solid #e5e7eb;
+}
+
+.collab-pane .milkdown-editor .ProseMirror {
+  min-height: 360px;
+  padding: 28px 40px 44px;
+}
+
+.markdown-debug {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: pre;
+}
+
+@media (max-width: 860px) {
+  .app-shell,
+  .app-shell-wide {
+    width: min(100vw - 28px, 720px);
+  }
+
+  .collab-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .milkdown-editor .ProseMirror {
+    padding: 48px 0 40px;
+  }
+
+  .collab-pane .milkdown-editor .ProseMirror {
+    padding: 24px 22px 36px;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@mdcollab/markdown",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "prettier": "^3.3.0"
+  }
+}

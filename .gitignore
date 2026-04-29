@@ -1,0 +1,23 @@
+.DS_Store
+__MACOSX/
+
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+
+# Build and test output
+dist/
+coverage/
+test-results/
+playwright-report/
+.playwright-cli/
+.vite/
+.vite-temp/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Reference-only source clone; not part of this product repo.
+resource/milkdown/
