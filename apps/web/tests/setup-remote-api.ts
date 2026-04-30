@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import pg from 'pg';
 
 const localHostnames = new Set(['localhost', '127.0.0.1', '::1']);
+const remoteApiResetLockNamespace = 1296847170;
+const remoteApiResetLockKey = 1380275796;
 
 function normalizeHostname(hostname: string): string {
   return hostname.replace(/^\[/u, '').replace(/\]$/u, '');
@@ -104,12 +106,32 @@ export async function setupRemoteApi() {
   const client = new pg.Client({ connectionString: requireTestDatabaseUrl() });
   await client.connect();
 
+  let locked = false;
+  let resetError: unknown;
   try {
+    await client.query('select pg_advisory_lock($1::integer, $2::integer)', [
+      remoteApiResetLockNamespace,
+      remoteApiResetLockKey,
+    ]);
+    locked = true;
     await client.query('drop schema if exists public cascade');
     await client.query('create schema public');
     const schema = await readFile(new URL('../../api/src/db/schema.sql', import.meta.url), 'utf8');
     await client.query(schema);
+  } catch (error) {
+    resetError = error;
+    throw error;
   } finally {
+    if (locked) {
+      try {
+        await client.query('select pg_advisory_unlock($1::integer, $2::integer)', [
+          remoteApiResetLockNamespace,
+          remoteApiResetLockKey,
+        ]);
+      } catch (error) {
+        if (!resetError) throw error;
+      }
+    }
     await client.end();
   }
 }

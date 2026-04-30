@@ -24,6 +24,7 @@ if (allowExistingApi) {
 
 export default defineConfig({
   testDir: './tests',
+  ...(shouldStartApi ? { workers: 1 } : {}),
   use: {
     baseURL,
   },
