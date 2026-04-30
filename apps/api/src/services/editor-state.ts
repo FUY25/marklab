@@ -74,33 +74,33 @@ async function readBranchVersionStateForUpdate(
   };
 }
 
-async function createPreAgentCheckpointIfNeeded(input: ApplyMarkdownToBranchInput): Promise<string> {
-  return withTransaction(input.pool, async (client) => {
-    const branchState = await readBranchVersionStateForUpdate(client, input.branchId);
-    if (!shouldCreateVersionForCurrentHash(branchState.currentHash, branchState.headHash)) {
-      return branchState.headVersionId;
-    }
+async function createPreAgentCheckpointIfNeeded(
+  client: DbTransactionClient,
+  input: ApplyMarkdownToBranchInput,
+): Promise<string> {
+  const branchState = await readBranchVersionStateForUpdate(client, input.branchId);
+  if (!shouldCreateVersionForCurrentHash(branchState.currentHash, branchState.headHash)) {
+    return branchState.headVersionId;
+  }
 
-    const checkpoint = await createVersionWithClient({
-      client,
-      docId: input.docId,
-      branchId: input.branchId,
-      parentVersionId: branchState.headVersionId,
-      markdown: branchState.currentMarkdown,
-      hash: branchState.currentHash,
-      actorType: 'system',
-      operation: 'autosave',
-    });
-
-    return checkpoint.versionId;
+  const checkpoint = await createVersionWithClient({
+    client,
+    docId: input.docId,
+    branchId: input.branchId,
+    parentVersionId: branchState.headVersionId,
+    markdown: branchState.currentMarkdown,
+    hash: branchState.currentHash,
+    actorType: 'system',
+    operation: 'autosave',
   });
+
+  return checkpoint.versionId;
 }
 
 export async function applyMarkdownToBranchState(
   input: ApplyMarkdownToBranchInput,
 ): Promise<ApplyMarkdownToBranchResult> {
   const requestedMarkdown = await canonicalizeMarkdown(input.markdown);
-  const parentVersionId = await createPreAgentCheckpointIfNeeded(input);
   const transaction: LiveMarkdownTransaction = {
     branchId: input.branchId,
     targetCanonicalMarkdown: requestedMarkdown,
@@ -112,6 +112,7 @@ export async function applyMarkdownToBranchState(
   if (liveTransaction.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
 
   const version = await withTransaction(input.pool, async (client) => {
+    const parentVersionId = await createPreAgentCheckpointIfNeeded(client, input);
     const updateResult = await client.query(
       `update document_branch_states
           set current_markdown = $2,

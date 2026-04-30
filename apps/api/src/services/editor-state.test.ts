@@ -199,4 +199,31 @@ describe('applyMarkdownToBranchState', () => {
     expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
     expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
   });
+
+  it('does not checkpoint dirty branch state when the live writer fails', async () => {
+    const { pool, queries } = createFakePool({
+      currentMarkdown: '# Human draft\n',
+      currentHash: 'sha256:dirty',
+      headVersionId: 'ver_001',
+      headHash: 'sha256:head',
+    });
+    const liveWriter = createUnavailableLiveMarkdownWriter();
+
+    await expect(
+      applyMarkdownToBranchState({
+        pool,
+        liveWriter,
+        docId: 'doc_001',
+        branchId: 'br_main',
+        parentVersionId: 'ver_001',
+        markdown: '# Requested target',
+        operation: { kind: 'write', baseVersionId: 'ver_001', baseHash: 'sha256:dirty' },
+        actorType: 'agent',
+      }),
+    ).rejects.toThrow('live_writer_not_configured');
+
+    expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('update document_branches'))).toBe(false);
+  });
 });
