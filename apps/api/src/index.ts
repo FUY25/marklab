@@ -4,12 +4,12 @@ import type { WebSocketLike } from '@hocuspocus/server';
 import { createCollabServer } from './collab/server';
 import { createPool } from './db/client';
 import { createHttpApp } from './http/app';
-import { createUnavailableLiveMarkdownWriter } from './services/live-writer';
+import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
 
 const port = Number(process.env.PORT ?? 3001);
 const pool = createPool();
 const collabServer = createCollabServer(pool);
-const liveWriter = createUnavailableLiveMarkdownWriter();
+const liveWriter = createPostgresLiveMarkdownWriter(pool);
 const app = createHttpApp(pool, liveWriter);
 const httpServer = http.createServer(app);
 
