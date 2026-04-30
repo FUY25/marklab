@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
+import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter, type LiveMarkdownTransaction, type LiveMarkdownWriter } from './live-writer';
 import { applyMarkdownToBranchState } from './editor-state';
@@ -68,7 +69,7 @@ function createFakePool(options: FakePoolOptions = {}) {
 
 function createCapturingLiveWriter(
   serializedMarkdown: string,
-  yjsState = new Uint8Array([1, 2, 3]),
+  yjsState = createValidYjsState(),
 ): LiveMarkdownWriter & {
   transactions: LiveMarkdownTransaction[];
 } {
@@ -82,11 +83,19 @@ function createCapturingLiveWriter(
   };
 }
 
+function createValidYjsState(): Uint8Array {
+  const doc = new Y.Doc();
+  doc.getText('prosemirror').insert(0, 'live state');
+  const update = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return update;
+}
+
 describe('applyMarkdownToBranchState', () => {
   it('persists the live writer serialized markdown and passes operation metadata', async () => {
     const { pool, queries } = createFakePool();
     const liveSerializedMarkdown = '## Serialized from live editor';
-    const liveYjsState = new Uint8Array([7, 8, 9]);
+    const liveYjsState = createValidYjsState();
     const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown, liveYjsState);
 
     const result = await applyMarkdownToBranchState({
@@ -195,6 +204,27 @@ describe('applyMarkdownToBranchState', () => {
         actorType: 'agent',
       }),
     ).rejects.toThrow('live_writer_not_configured');
+
+    expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+  });
+
+  it('does not persist mirror or version state when the live writer returns invalid yjs bytes', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createCapturingLiveWriter('# Live result\n', new Uint8Array([1, 2, 3]));
+
+    await expect(
+      applyMarkdownToBranchState({
+        pool,
+        liveWriter,
+        docId: 'doc_001',
+        branchId: 'br_main',
+        parentVersionId: 'ver_001',
+        markdown: '# Requested target',
+        operation: { kind: 'write', baseVersionId: 'ver_001', baseHash: 'sha256:current' },
+        actorType: 'agent',
+      }),
+    ).rejects.toThrow('invalid_live_yjs_state');
 
     expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
     expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);

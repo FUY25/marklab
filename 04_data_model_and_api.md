@@ -136,6 +136,8 @@ export interface EditDocRequest {
 
 `ReadDocResponse.hash` is the current canonical mirror hash returned to agents as `baseHash`. `ReadDocResponse.versionId` is the branch head version used as `baseVersionId`. Before returning, `read_doc` flushes live Milkdown/Yjs state through the canonical serializer path; if the flushed mirror hash differs from the branch head version hash, it creates or selects a matching system autosave version so the returned `versionId` and `hash` describe the same Markdown body.
 
+> **Current implementation note:** The live-state flush and matching autosave version are Plan 6.2 behavior. In the current pre-6.2 code, `read_doc` reads the stored canonical mirror; the fail-closed Milkdown transformer and concrete read flush must not be treated as implemented yet.
+
 `write_doc` uses `baseVersionId` and `baseHash` as hard stale-write guards against the current branch head and current canonical mirror. `edit_doc` is a Claude-like exact string replacement against the current canonical Markdown; `observedVersionId` is optional audit context and is not a stale guard by default.
 
 ## API contracts
@@ -333,6 +335,8 @@ Response:
 - Content-Disposition filename uses export metadata format.
 
 Before export, the branch is flushed through the same Milkdown serializer path used by `read_doc`. The response filename must use a version/hash that match the exported body; if the post-flush mirror and branch head version still disagree, return `409 export_version_mismatch` instead of producing a misleading versioned filename.
+
+> **Current implementation note:** Until Plan 6.2 replaces the fail-closed transformer, export can fail with `milkdown_transformer_not_configured`. The existing pre-6.2 route still refuses a versioned filename if an already-flushed/current mirror hash differs from the branch head version hash.
 
 ### Branch from version
 

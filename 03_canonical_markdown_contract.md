@@ -180,6 +180,8 @@ On export:
 
 `export_version_mismatch` is a fail-closed response for impossible or externally inconsistent post-flush state. It should not be the normal result of a dirty but serializable human edit.
 
+> **Current implementation note:** The matching-version flush path is a Plan 6.2 deliverable. Before Plan 6.2 is implemented, `flushBranchMarkdownMirror` may fail closed with `milkdown_transformer_not_configured`; tests may only exercise export mismatch behavior by mocking an already-flushed mirror state.
+
 Filename format:
 
 ```text

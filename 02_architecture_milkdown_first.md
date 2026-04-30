@@ -171,6 +171,8 @@ The preferred implementation is a headless Milkdown transformer service that pro
 
 Before `read_doc` and export cross the API boundary, pending live editor state must be flushed through the same serializer path. If the flushed canonical hash differs from the branch head version hash, the flush path creates or selects a matching system version so callers receive a version/hash pair that actually represents the Markdown body.
 
+> **Current implementation note:** This read/export flush-to-version behavior is assigned to Plan 6.2. In the pre-6.2 code, the Milkdown transformer may still fail closed and `read_doc` may return the current stored mirror without a live-state flush.
+
 ## API topology
 
 ```text

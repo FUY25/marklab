@@ -1,5 +1,6 @@
 import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
+import * as Y from 'yjs';
 import type { DbPool, DbTransactionClient } from '../db/client';
 import { withTransaction } from '../db/client';
 import type { LiveMarkdownOperation, LiveMarkdownTransaction, LiveMarkdownWriter } from './live-writer';
@@ -97,6 +98,19 @@ async function createPreAgentCheckpointIfNeeded(
   return checkpoint.versionId;
 }
 
+function assertValidLiveYjsState(yjsState: Uint8Array): void {
+  if (yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+
+  const doc = new Y.Doc();
+  try {
+    Y.applyUpdate(doc, yjsState);
+  } catch {
+    throw new Error('invalid_live_yjs_state');
+  } finally {
+    doc.destroy();
+  }
+}
+
 export async function applyMarkdownToBranchState(
   input: ApplyMarkdownToBranchInput,
 ): Promise<ApplyMarkdownToBranchResult> {
@@ -107,9 +121,9 @@ export async function applyMarkdownToBranchState(
     operation: input.operation,
   };
   const liveTransaction = await input.liveWriter.applyMarkdownTransaction(transaction);
+  assertValidLiveYjsState(liveTransaction.yjsState);
   const canonicalMarkdown = await canonicalizeMarkdown(liveTransaction.serializedMarkdown);
   const hash = sha256Hex(canonicalMarkdown);
-  if (liveTransaction.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
 
   const version = await withTransaction(input.pool, async (client) => {
     const parentVersionId = await createPreAgentCheckpointIfNeeded(client, input);

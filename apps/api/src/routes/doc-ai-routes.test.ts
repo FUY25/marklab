@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import * as Y from 'yjs';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
@@ -80,12 +81,20 @@ function createEchoLiveWriter(): LiveMarkdownWriter & { transactions: LiveMarkdo
       transactions.push(transaction);
       return {
         serializedMarkdown: transaction.targetCanonicalMarkdown,
-        yjsState: new Uint8Array([1, 2, 3]),
+        yjsState: createValidYjsState(),
         changedRangeCount: 1,
         appliedTransactionCount: 1,
       };
     },
   };
+}
+
+function createValidYjsState(): Uint8Array {
+  const doc = new Y.Doc();
+  doc.getText('prosemirror').insert(0, 'live state');
+  const update = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return update;
 }
 
 describe('doc AI routes', () => {

@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
+import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp } from '../http/app';
 import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
@@ -111,13 +112,22 @@ function hasMirrorOrVersionWrite(queries: CapturedQuery[]): boolean {
   );
 }
 
+function createValidYjsState(): Uint8Array {
+  const doc = new Y.Doc();
+  doc.getText('prosemirror').insert(0, 'live state');
+  const update = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return update;
+}
+
 describe('doc AI routes minimal transaction e2e', () => {
   it('persists the live transaction serialization rather than the requested full-write markdown', async () => {
     const { pool, queries } = createFakePool();
     const liveSerializedMarkdown = '## Live serialized\n\n|A|B|\n|-|-|\n|1|2|\n';
+    const liveYjsState = createValidYjsState();
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: liveSerializedMarkdown,
-      yjsState: new Uint8Array([1, 2, 3]),
+      yjsState: liveYjsState,
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -141,7 +151,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(response.body).toEqual({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
 
     const mirrorUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
-    expect(mirrorUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash, Buffer.from([1, 2, 3])]);
+    expect(mirrorUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash, Buffer.from(liveYjsState)]);
 
     const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
     expect(versionInsert?.params).toEqual([
@@ -161,7 +171,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     const { pool, queries } = createFakePool({ currentVersionId: 'ver_002' });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: '# Should not be used\n',
-      yjsState: new Uint8Array([1, 2, 3]),
+      yjsState: createValidYjsState(),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -192,7 +202,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: '# Agent result\n',
-      yjsState: new Uint8Array([1, 2, 3]),
+      yjsState: createValidYjsState(),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -246,11 +256,30 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 
+  it('fails closed without mirror or version writes when the live writer returns invalid yjs bytes', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Live result\n',
+      yjsState: new Uint8Array([1, 2, 3]),
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter);
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(503);
+
+    expect(response.body).toEqual({ error: 'invalid_live_yjs_state' });
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
   it('persists exact edit as one edit version after one live transaction', async () => {
     const { pool, queries } = createFakePool({ currentMarkdown: 'A old\nB old\n', currentVersionId: 'ver_current' });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: 'A new\nB old\n',
-      yjsState: new Uint8Array([1, 2, 3]),
+      yjsState: createValidYjsState(),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
