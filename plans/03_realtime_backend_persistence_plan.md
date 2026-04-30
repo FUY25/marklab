@@ -341,7 +341,7 @@ export async function storeYjsState(pool: DbPool, roomName: string, state: Uint8
 }
 ```
 
-> **Context note:** The original downstream plans inserted an empty byte buffer for new branch state. Empty bytes are not a valid Yjs update. This helper gives import/branch code a valid encoded empty Y.Doc state, and `loadYjsState` treats any legacy zero-length value as missing before `Y.applyUpdate`.
+> **Context note:** Empty bytes are not a valid Yjs update. This helper remains useful for truly blank documents and tests, while import/branch-from-version flows should initialize Yjs state from Markdown through the Milkdown transformer. `loadYjsState` treats any legacy zero-length value as missing before `Y.applyUpdate`.
 
 - [ ] **Step 4: Run test to verify it passes**
 

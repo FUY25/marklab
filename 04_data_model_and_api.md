@@ -127,23 +127,16 @@ export interface WriteDocRequest {
 }
 
 export interface EditDocRequest {
-  baseVersionId: string;
+  observedVersionId?: string;
   oldString: string;
   newString: string;
   replaceAll?: boolean;
 }
-
-export interface MultiEditDocRequest {
-  baseVersionId: string;
-  edits: Array<{
-    oldString: string;
-    newString: string;
-    replaceAll?: boolean;
-  }>;
-}
 ```
 
-Local agent proposal snapshots are not database records in MVP. They are files produced by the CLI workflow from `read_doc` responses. Their required metadata is `docId`, `branchId`, `baseVersionId`, `baseVersionNumber`, `baseHash`, `createdAt`, `proposalPath`, and `snapshotRole: "proposal"`.
+`ReadDocResponse.hash` is the current canonical mirror hash returned to agents as `baseHash`. `ReadDocResponse.versionId` is the branch head version used as `baseVersionId`. If a branch has flushed human edits that have not yet become an immutable version, the mirror hash can differ from the head version snapshot hash; the pre-agent checkpoint policy records that human state before the agent version is created.
+
+`write_doc` uses `baseVersionId` and `baseHash` as hard stale-write guards against the current branch head and current canonical mirror. `edit_doc` is a Claude-like exact string replacement against the current canonical Markdown; `observedVersionId` is optional audit context and is not a stale guard by default.
 
 ## API contracts
 
@@ -167,7 +160,8 @@ Response:
 {
   "docId": "doc_abc",
   "branchId": "br_main",
-  "versionId": "ver_001"
+  "versionId": "ver_001",
+  "hash": "sha256:..."
 }
 ```
 
@@ -278,7 +272,7 @@ Request:
 
 ```json
 {
-  "baseVersionId": "ver_043",
+  "observedVersionId": "ver_043",
   "oldString": "Old paragraph.",
   "newString": "New paragraph.",
   "replaceAll": false
@@ -314,93 +308,18 @@ HTTP status: `409`.
 
 `edit_doc` does not weaken conflict detection by relying on positions, cursor state, or stale client selections. It computes target Markdown by applying exact `oldString`/`newString` matching against the current canonical Markdown and then sends that target through the same minimal transaction live writer as `write_doc`.
 
-### Atomic multi edit
+If the agent needs to change multiple independent regions as one coherent proposal, it should use `write_doc` with the full target Markdown. The backend's minimal transaction live writer still applies only changed ranges to Milkdown/Yjs state, so `write_doc` does not imply a wholesale live-document replacement.
 
-```http
-POST /api/docs/:docId/branches/:branchId/multi-edit
-```
+## Agent review artifacts
 
-Request:
-
-```json
-{
-  "baseVersionId": "ver_043",
-  "edits": [
-    {
-      "oldString": "Old paragraph A.",
-      "newString": "New paragraph A.",
-      "replaceAll": false
-    },
-    {
-      "oldString": "Old paragraph B.",
-      "newString": "New paragraph B.",
-      "replaceAll": false
-    }
-  ]
-}
-```
-
-Accepted response:
-
-```json
-{
-  "versionId": "ver_044",
-  "versionNumber": 44,
-  "hash": "sha256:..."
-}
-```
-
-Conflict responses use the same error codes as `edit_doc`, with an `editIndex` identifying the failed operation:
-
-```json
-{
-  "error": "old_string_not_found",
-  "editIndex": 1
-}
-```
-
-```json
-{
-  "error": "ambiguous_match",
-  "editIndex": 0,
-  "matchCount": 3
-}
-```
-
-HTTP status: `409`.
-
-`multi_edit_doc` mirrors Claude Code's MultiEdit mental model. It applies exact replacements in order against a local working Markdown string, aborts before live-state mutation if any replacement fails, then sends the final target Markdown through the same minimal transaction live writer. A successful operation creates one immutable version with operation `edit`.
-
-## Agent-side diff artifacts
-
-No in-app diff UI is part of MVP. Agents should create local proposal snapshots so Codex/Claude Code can use native file-edit review. Product exports remain user artifacts and should not be confused with agent proposal snapshots.
-
-Expected local snapshot layout:
+No in-app diff UI, server-side preview object, change-set persistence, or default local proposal snapshot workflow is part of MVP. Agents may use their own chat explanations, native tool permission UI, and optional local files to reason about proposed changes, but MarkLab's product protocol is only:
 
 ```text
-.marklab/snapshots/{slug}__SNAPSHOT__doc-{docIdShort}__branch-{branchIdOrSlug}__v{versionNumber}__ver-{versionId}__{yyyyMMdd-HHmmssZ}__sha-{hash8}/
-  proposal.md
-  metadata.json
+read_doc -> edit_doc for one exact local replacement
+read_doc -> write_doc for full target Markdown
 ```
 
-`metadata.json` includes:
-
-```json
-{
-  "docId": "doc_abc",
-  "branchId": "br_main",
-  "baseVersionId": "ver_043",
-  "baseVersionNumber": 43,
-  "baseHash": "sha256:7b91a2cf...",
-  "createdAt": "2026-04-29T15:30:12Z",
-  "proposalPath": "proposal.md",
-  "snapshotRole": "proposal"
-}
-```
-
-No `baseline.md`, `before.md`, or `after.md` is created by default. `proposal.md` starts as the canonical Markdown returned by `read_doc`; the agent environment owns the native local diff and accept/reject UI.
-
-Snapshot files are review artifacts only. They are not authoritative state and must not bypass `write_doc` stale-base checks, `edit_doc` exact string matching, or `multi_edit_doc` ordered exact matching. If the user rejects the native local diff, no MarkLab write/edit command runs.
+The server reports deterministic execution outcomes such as `written`, `stale_base_version`, `stale_base_hash`, `old_string_not_found`, and `ambiguous_match`. User-level accept/reject is owned by Codex/Claude Code or the surrounding agent runtime, not by MarkLab API state.
 
 ### Export
 
@@ -433,5 +352,51 @@ Response:
 {
   "branchId": "br_v12_branch",
   "headVersionId": "ver_new_001"
+}
+```
+
+### Version list
+
+```http
+GET /api/docs/:docId/branches/:branchId/versions
+```
+
+Response:
+
+```json
+{
+  "versions": [
+    {
+      "versionId": "ver_043",
+      "versionNumber": 43,
+      "parentVersionId": "ver_042",
+      "hash": "sha256:...",
+      "actorType": "agent",
+      "operation": "write",
+      "createdAt": "2026-04-29T15:30:12.000Z"
+    }
+  ]
+}
+```
+
+### Version show
+
+```http
+GET /api/docs/:docId/versions/:versionId
+```
+
+Response:
+
+```json
+{
+  "versionId": "ver_043",
+  "branchId": "br_main",
+  "versionNumber": 43,
+  "parentVersionId": "ver_042",
+  "hash": "sha256:...",
+  "actorType": "agent",
+  "operation": "write",
+  "markdown": "# Strategy memo\n\n...",
+  "createdAt": "2026-04-29T15:30:12.000Z"
 }
 ```

@@ -131,7 +131,7 @@ Expected: Any matches are context notes explaining the rejected original approac
 Run:
 
 ```bash
-grep -R "pool\\.query('begin'\\|pool\\.query('commit'\\|pool\\.query('rollback'" -n plans
+rg -n "pool\\.query\\('begin'|pool\\.query\\('commit'|pool\\.query\\('rollback'" plans
 ```
 
 Expected: no matches.
@@ -141,20 +141,30 @@ Expected: no matches.
 Run:
 
 ```bash
-grep -R "Buffer.from(\\[\\])" -n plans
+rg -n "Buffer\\.from\\(\\[\\]\\)" plans
 ```
 
 Expected: no matches.
 
-- [ ] **Step 4: Verify agent snapshot workflow uses proposal-only snapshots**
+- [ ] **Step 4: Verify removed agent workflows stay removed**
 
 Run:
 
 ```bash
-grep -R "before\\.md\\|after\\.md\\|baseline\\.md\\|submit-snapshot" -n 00_scope_and_decisions.md 01_product_requirements.md 04_data_model_and_api.md 05_ai_write_versioning_branching.md plans
+rg -n "multi_edit_doc|multi-edit|snapshot create|proposal\\.md|submit-snapshot|preview_doc_change|apply_doc_change|change_sets" 00_scope_and_decisions.md 01_product_requirements.md 04_data_model_and_api.md 05_ai_write_versioning_branching.md plans
 ```
 
-Expected: matches only appear in statements forbidding those files or commands. The executable workflow should use `proposal.md` plus `metadata.json`.
+Expected: matches only appear in statements forbidding those workflows or explaining why they are deferred. The executable MVP workflow should use `read_doc`, `edit_doc`, and `write_doc`.
+
+- [ ] **Step 4b: Verify Milkdown serializer is canonical authority**
+
+Run:
+
+```bash
+rg -n "Prettier-only|source of truth|Milkdown serializer|initializeBranchEditorState" 00_scope_and_decisions.md 02_architecture_milkdown_first.md 03_canonical_markdown_contract.md plans
+```
+
+Expected: documents state that Milkdown parser/serializer is the semantic authority and Prettier is only final formatting.
 
 - [ ] **Step 5: Verify Plan 7 is CLI + skill first**
 
@@ -165,3 +175,13 @@ test -f plans/07_cli_agent_skill_plan.md && ! test -f plans/07_mcp_agent_plan.md
 ```
 
 Expected: command exits with status 0. MCP may appear only as a later adapter, not as the MVP-critical Plan 7.
+
+- [ ] **Step 6: Verify CLI commands have API route plans**
+
+Run:
+
+```bash
+rg -n "GET /api/docs/:docId/branches/:branchId/versions|GET /api/docs/:docId/versions/:versionId|POST /api/docs/import|GET /api/docs/:docId/branches/:branchId/export.md|POST /api/docs/:docId/branches/:branchId/write|POST /api/docs/:docId/branches/:branchId/edit|router\\.get\\('/docs/:docId/branches/:branchId/versions'|router\\.get\\('/docs/:docId/versions/:versionId'|router\\.post\\('/docs/import'|router\\.get\\('/docs/:docId/branches/:branchId/export\\.md'|router\\.post\\('/docs/:docId/branches/:branchId/write'|router\\.post\\('/docs/:docId/branches/:branchId/edit'" 04_data_model_and_api.md plans
+```
+
+Expected: version, import, export, write, and edit route contracts appear in the API docs and implementation plans before the CLI plan depends on them.

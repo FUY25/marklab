@@ -4,7 +4,7 @@
 
 Impact:
 
-- AI old_string matching can fail if formatting changes unexpectedly.
+- AI `oldString` matching can fail if formatting changes unexpectedly.
 - Export may look different from imported Markdown.
 
 Mitigation:
@@ -42,6 +42,19 @@ Mitigation:
 
 > **Context note:** The first AI route plan allowed a mirror-only update as an implementation seam. That has been removed from the executable API plan because it is the exact failure mode described here.
 
+## Risk 3a: Import or branch creates Markdown mirror without live Yjs content
+
+Impact:
+
+- An imported or branch-from-version document can look correct in `read_doc`/export but have an empty collaborative editor state until a browser opens it.
+- AI writes before first browser open can diff against an empty live doc and overwrite or misapply content.
+
+Mitigation:
+
+- Prefer initializing import and branch state through a headless Milkdown parser/serializer/Yjs transformer.
+- If that transformer is not reliable in the first implementation slice, require the minimal transaction live writer to seed empty Yjs state from `current_markdown` before applying AI writes.
+- Test both imported docs and branch-from-version docs before any browser opens them.
+
 ## Risk 4: Editable source and visual editor simultaneously creates complexity
 
 Impact:
@@ -65,35 +78,34 @@ Mitigation:
 
 - `write_doc` requires exact `baseVersionId` and `baseHash` equality.
 - Reject stale writes.
-- `edit_doc` targets `old_string` and rejects absent/ambiguous matches.
+- `edit_doc` targets `oldString` and rejects absent/ambiguous matches.
 
 ## Risk 6: In-app AI diff UI slows MVP
 
 Impact:
 
 - AI review work expands into streaming UX, selection state, and approval UI before the write path is reliable.
-- The app may duplicate workflows that Codex/Claude Code already handle well with native file-edit diffs.
+- The app may duplicate workflows that Codex/Claude Code already handle well with chat explanations, tool permission, and optional local diffs.
 
 Mitigation:
 
 - Do not build in-app AI diff UI, AI streaming UX, or in-app selection-aware AI for MVP.
-- Use `marklab snapshot create` to materialize one local `proposal.md` plus `metadata.json`.
-- Let Codex/Claude Code own local accept/reject through native file-edit review.
-- Submit the same semantic operation online: native Edit -> `edit_doc`, native MultiEdit -> `multi_edit_doc`, native Write -> `write_doc`.
+- Let Codex/Claude Code own proposal explanation, user review, and tool permission.
+- Use `edit_doc` only for one small exact replacement.
+- Use `write_doc` for broad, meaningful, multi-region, destructive, or high-stakes changes after the agent explains the proposed change in chat.
 
-## Risk 6a: CLI submits a different action than the reviewed local action
+## Risk 6a: Tool surface becomes too clever
 
 Impact:
 
-- The user reviews one local diff but the server receives a different write shape.
-- A targeted edit can accidentally become a broad full-document replacement, or multiple edits can produce partial versions.
+- Server-side preview/change-set state or public multi-edit tools add workflow complexity before the core live writer is proven.
+- A larger API surface gives agents more ways to choose the wrong operation.
 
 Mitigation:
 
-- The MarkLab skill must instruct agents to mirror the local native action when submitting online.
-- `multi_edit_doc` should apply ordered replacements atomically and create one version.
-- Do not infer `edit_doc` from a whole-file diff as the default path.
-- `snapshot_create` is review-only and has no accept/reject or submit semantics.
+- Keep the MVP public tools to `read_doc`, `edit_doc`, and `write_doc`.
+- Do not add `preview_doc_change`, `apply_doc_change`, `change_sets`, default local snapshots, or public `multi_edit_doc` in MVP.
+- Let the model generate preview explanations in chat; let the server focus on deterministic execution, conflict detection, live synchronization, and version history.
 
 ## Risk 7: Version tree UI becomes too complex
 
@@ -122,7 +134,7 @@ Mitigation:
 
 Impact:
 
-- MCP exposes tools but does not guarantee agents follow the local proposal review, stale guard, and semantic action mirroring policy.
+- MCP exposes tools but does not guarantee agents follow the simple edit/write routing policy, stale guard, and review-before-broad-write guidance.
 - Early MCP work can obscure whether the CLI/skill loop actually works for Codex and Claude Code.
 
 Mitigation:

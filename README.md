@@ -10,11 +10,11 @@ A cloud Markdown document where humans collaborate in a polished WYSIWYG editor 
 
 - **Editor:** Milkdown-first. Human UI is a WYSIWYG Markdown editor powered by Milkdown/ProseMirror/Yjs.
 - **AI interface:** AI reads and writes canonical Markdown, not ProseMirror JSON.
-- **Write tools:** Match Claude Code’s mental model: `read`, `write`, `edit`, and atomic multi-edit. No separate `insert` tool in MVP; insertion is expressed as `edit(old_string, new_string)`.
+- **Write tools:** Match Claude Code’s core mental model: `read`, guarded full-document `write`, and exact-string `edit`. No separate `insert` or public `multi_edit` tool in MVP; insertion is expressed as `edit(oldString, newString)` when it is a single exact replacement, while multi-region changes use `write`.
 - **Source/Split:** Not required as editable modes in MVP. A read-only Markdown preview/debug panel may exist. Do not build two simultaneously editable editors over different document models.
 - **Local sync:** Not in MVP. Local files are import/export artifacts only.
 - **Export metadata:** Put metadata in the filename, not in the Markdown body by default.
-- **Diff accept/reject:** Done by Codex/Claude Code native local file review before calling our write/edit tool. `snapshot create` writes one local `proposal.md` plus `metadata.json`; it does not create before/after/baseline files or manage accept/reject.
+- **AI review:** Done by the model and agent runtime before tool invocation. Small low-risk exact edits can call `edit`; meaningful or broad changes should be explained in chat before guarded `write`. MarkLab does not need server-side preview/change-set persistence or default local proposal snapshots in MVP.
 - **Agent integration:** CLI + MarkLab skill first. MCP is optional later and should wrap the stable workflow rather than define it.
 - **Version history:** Back end stores a version DAG/branch model. Front end starts with a simple branch/history UI.
 - **Deployment:** Needs a persistent WebSocket-capable backend. Cloudflare is optional infrastructure, not the core product host.
@@ -40,7 +40,8 @@ The first pass of the plans was reviewed against the local Milkdown clone and cu
 
 Key correction themes:
 
-- Seed collaborative Milkdown documents through Yjs (`applyTemplate`) instead of assuming `defaultValueCtx` initializes shared state.
+- Seed collaborative Milkdown documents through the Milkdown/Yjs document model instead of assuming `defaultValueCtx` or a Markdown mirror initializes shared state.
+- Treat Milkdown parser/serializer output as the semantic authority for import, export, mirror refresh, version snapshots, and AI live writes. Prettier remains a final formatting stabilizer, not the source of truth.
 - Never update `current_markdown/current_hash` without updating live Yjs/ProseMirror state first.
 - Store valid encoded Yjs updates, not empty byte buffers.
 - Use one checked-out Postgres client per transaction.

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the MarkLab CLI and MarkLab agent skill so Codex/Claude Code can read cloud docs, create local proposal snapshots, review native file diffs, and submit the same semantic write/edit action back to MarkLab.
+**Goal:** Build the MarkLab CLI and MarkLab agent skill so Codex/Claude Code can read cloud docs and submit simple online `edit_doc` / `write_doc` operations safely.
 
-**Architecture:** The CLI wraps the existing HTTP API and owns only local filesystem artifacts under `.marklab/snapshots`. The skill is the policy layer: it teaches agents that local snapshots are review instruments, that local native Edit/MultiEdit/Write actions must be mirrored by `edit_doc`/`multi_edit_doc`/`write_doc`, and that MCP is optional later.
+**Architecture:** The CLI is a thin wrapper over the HTTP API. It does not own approval, reject/accept state, default local proposal snapshots, or server-side previews. The skill is the policy layer: it teaches agents when to use exact `edit_doc`, when to use guarded `write_doc`, and when to explain a proposed change in chat before writing. MCP is optional later.
 
-**Tech Stack:** Node.js CLI, TypeScript, Commander, Zod, existing REST API, Markdown canonicalizer, Codex/Claude skill Markdown.
+**Tech Stack:** Node.js CLI, TypeScript, Commander, Zod, existing REST API, Codex/Claude skill Markdown.
 
 ---
 
@@ -16,18 +16,16 @@
 - Create: `apps/cli/tsconfig.json` - CLI TypeScript config.
 - Create: `apps/cli/src/config.ts` - local config and auth token loading.
 - Create: `apps/cli/src/client.ts` - HTTP API wrapper.
-- Create: `apps/cli/src/snapshot.ts` - local proposal snapshot writer.
 - Create: `apps/cli/src/commands.ts` - command registration.
 - Create: `apps/cli/src/index.ts` - CLI entrypoint.
-- Test: `apps/cli/src/snapshot.test.ts`.
 - Test: `apps/cli/src/client.test.ts`.
 - Create: `skills/marklab/SKILL.md` - agent workflow skill.
 
 ## Scope Check
 
-This plan replaces the previous MCP-first Plan 7. MCP is not on the MVP critical path. It can be added later as a thin adapter over the same API/CLI semantics after the CLI + skill workflow is proven.
+This plan replaces the previous MCP-first and local-snapshot-first Plan 7. MCP is not on the MVP critical path. It can be added later as a thin adapter over the same API/CLI semantics after the CLI + skill workflow is proven.
 
-The CLI must not own user-level accept/reject. Codex/Claude Code native local file review owns that loop. If the user rejects a local diff, the agent simply does not call `marklab write_doc`, `marklab edit_doc`, or `marklab multi_edit_doc`.
+The CLI must not implement user-level `accept`, `reject`, `submit-snapshot`, server-side `preview_doc_change`, `apply_doc_change`, change-set persistence, default local proposal snapshots, or public `multi_edit_doc`.
 
 ## CLI Command Surface
 
@@ -38,72 +36,30 @@ marklab config set-api-url <url>
 marklab config set-token <token>
 marklab health
 
-marklab read_doc --doc <docId> --branch <branchId> [--out <path>] [--json]
-marklab snapshot create --doc <docId> --branch <branchId> [--dir <path>]
-marklab snapshot status --snapshot <dir>
-
-marklab write_doc --snapshot <dir> --from <proposal.md>
-marklab edit_doc --snapshot <dir> --old-string <text> --new-string <text> [--replace-all]
-marklab multi_edit_doc --snapshot <dir> --ops <edits.json>
+marklab read-doc --doc <docId> --branch <branchId> [--out <path>] [--json]
+marklab edit-doc --doc <docId> --branch <branchId> --old-string <text> --new-string <text> [--replace-all] [--observed-version <versionId>]
+marklab write-doc --doc <docId> --branch <branchId> --base-version <versionId> --base-hash <hash> [--from <file.md> | --stdin]
 
 marklab versions list --doc <docId> [--branch <branchId>]
 marklab versions show --doc <docId> --version <versionId>
-marklab export_doc --doc <docId> --branch <branchId> --out <dir>
-marklab import_doc --title <title> --from <file.md>
+marklab export-doc --doc <docId> --branch <branchId> --out <dir>
+marklab import-doc --title <title> --from <file.md>
 ```
 
 Later commands:
 
 ```text
-marklab branch_from_version --doc <docId> --version <versionId> --name <name>
-marklab restore_version --doc <docId> --branch <branchId> --version <versionId>
+marklab branch-from-version --doc <docId> --version <versionId> --name <name>
+marklab restore-version --doc <docId> --branch <branchId> --version <versionId>
 ```
 
-## Snapshot Contract
+## Agent Policy
 
-`marklab snapshot create` writes exactly:
+Use `edit_doc` when the change is one small exact replacement and `oldString` should match the current canonical Markdown exactly. `edit_doc` does not require current hash equality.
 
-```text
-.marklab/snapshots/{slug}__SNAPSHOT__doc-{docIdShort}__branch-{branchIdOrSlug}__v{versionNumber}__ver-{versionId}__{yyyyMMdd-HHmmssZ}__sha-{hash8}/
-  proposal.md
-  metadata.json
-```
+Use `write_doc` when the change affects multiple regions, changes structure, rewrites prose, deletes content, or cannot be represented as one exact replacement. `write_doc` requires `baseVersionId` and `baseHash` from a fresh `read_doc`.
 
-It does not write `baseline.md`, `before.md`, or `after.md`.
-
-`proposal.md` starts as the canonical Markdown returned by `read_doc`. Codex/Claude Code native file-edit review treats that initial file content as the local diff baseline.
-
-`metadata.json`:
-
-```json
-{
-  "docId": "doc_abc",
-  "branchId": "br_main",
-  "baseVersionId": "ver_043",
-  "baseVersionNumber": 43,
-  "baseHash": "sha256:7b91a2cf...",
-  "createdAt": "2026-04-29T15:30:12Z",
-  "proposalPath": "proposal.md",
-  "snapshotRole": "proposal"
-}
-```
-
-## Semantic Submit Rule
-
-The action used locally is the action submitted online:
-
-```text
-Native local Edit of proposal.md:
-  submit with marklab edit_doc using the same oldString/newString
-
-Native local MultiEdit of proposal.md:
-  submit with marklab multi_edit_doc using the same ordered edit operations
-
-Native local Write of proposal.md:
-  submit with marklab write_doc using proposal.md as the full target
-```
-
-Do not infer `edit_doc` from a whole-file diff as the default path. If the agent no longer has exact old/new operation data, submit as `write_doc` and rely on the backend minimal transaction live writer.
+Before `write_doc`, the skill must instruct the model to explain the proposed change in chat. For high-stakes or meaningful changes, include a concise diff or before/after excerpt. The MarkLab server does not persist preview objects in MVP.
 
 ## Task 1: CLI package setup
 
@@ -132,8 +88,6 @@ Create `apps/cli/package.json`:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@marklab/markdown": "workspace:*",
-    "@marklab/shared": "workspace:*",
     "commander": "^12.1.0",
     "zod": "^3.24.0"
   },
@@ -206,7 +160,7 @@ describe('buildApiUrl', () => {
 Create `apps/cli/src/config.ts`:
 
 ```ts
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
@@ -251,6 +205,14 @@ export class MarklabClient {
     };
   }
 
+  async health() {
+    const response = await fetch(buildApiUrl(this.apiUrl, '/healthz'), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`health_failed:${response.status}:${await response.text()}`);
+    return response.json();
+  }
+
   async readDoc(docId: string, branchId: string) {
     const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/branches/${branchId}/read`), {
       headers: this.headers(),
@@ -269,7 +231,7 @@ export class MarklabClient {
     return response.json();
   }
 
-  async editDoc(docId: string, branchId: string, input: { baseVersionId: string; oldString: string; newString: string; replaceAll?: boolean }) {
+  async editDoc(docId: string, branchId: string, input: { observedVersionId?: string; oldString: string; newString: string; replaceAll?: boolean }) {
     const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/branches/${branchId}/edit`), {
       method: 'POST',
       headers: this.headers({ 'Content-Type': 'application/json' }),
@@ -279,14 +241,41 @@ export class MarklabClient {
     return response.json();
   }
 
-  async multiEditDoc(docId: string, branchId: string, input: { baseVersionId: string; edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }> }) {
-    const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/branches/${branchId}/multi-edit`), {
+  async listVersions(docId: string, branchId: string) {
+    const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/branches/${branchId}/versions`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`versions_list_failed:${response.status}:${await response.text()}`);
+    return response.json();
+  }
+
+  async showVersion(docId: string, versionId: string) {
+    const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/versions/${versionId}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`version_show_failed:${response.status}:${await response.text()}`);
+    return response.json();
+  }
+
+  async importDoc(input: { title: string; markdown: string }) {
+    const response = await fetch(buildApiUrl(this.apiUrl, '/api/docs/import'), {
       method: 'POST',
       headers: this.headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(input),
     });
-    if (!response.ok) throw new Error(`multi_edit_doc_failed:${response.status}:${await response.text()}`);
+    if (!response.ok) throw new Error(`import_doc_failed:${response.status}:${await response.text()}`);
     return response.json();
+  }
+
+  async exportDoc(docId: string, branchId: string) {
+    const response = await fetch(buildApiUrl(this.apiUrl, `/api/docs/${docId}/branches/${branchId}/export.md`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`export_doc_failed:${response.status}:${await response.text()}`);
+    return {
+      markdown: await response.text(),
+      contentDisposition: response.headers.get('content-disposition'),
+    };
   }
 }
 ```
@@ -309,133 +298,7 @@ git add apps/cli/src/config.ts apps/cli/src/client.ts apps/cli/src/client.test.t
 git commit -m "feat: add marklab cli api client"
 ```
 
-## Task 3: Proposal snapshot writer
-
-**Files:**
-- Create: `apps/cli/src/snapshot.ts`
-- Test: `apps/cli/src/snapshot.test.ts`
-
-- [ ] **Step 1: Write snapshot tests**
-
-Create `apps/cli/src/snapshot.test.ts`:
-
-```ts
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { createProposalSnapshot } from './snapshot';
-
-describe('createProposalSnapshot', () => {
-  it('writes proposal.md and metadata.json only', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marklab-snapshot-'));
-    const result = createProposalSnapshot({
-      rootDir: root,
-      title: 'Strategy Memo',
-      docId: 'doc_abcdef',
-      branchId: 'br_main',
-      branchSlug: 'main',
-      versionId: 'ver_043',
-      versionNumber: 43,
-      hash: 'sha256:7b91a2cf0000',
-      markdown: '# Strategy\n',
-      now: new Date('2026-04-29T15:30:12Z'),
-    });
-
-    expect(readFileSync(join(result.snapshotDir, 'proposal.md'), 'utf8')).toBe('# Strategy\n');
-    expect(existsSync(join(result.snapshotDir, 'metadata.json'))).toBe(true);
-    expect(existsSync(join(result.snapshotDir, 'baseline.md'))).toBe(false);
-    expect(existsSync(join(result.snapshotDir, 'before.md'))).toBe(false);
-    expect(existsSync(join(result.snapshotDir, 'after.md'))).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Implement snapshot writer**
-
-Create `apps/cli/src/snapshot.ts`:
-
-```ts
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { shortHash } from '@marklab/shared/src/hash';
-
-export interface CreateProposalSnapshotInput {
-  rootDir: string;
-  title: string;
-  docId: string;
-  branchId: string;
-  branchSlug: string;
-  versionId: string;
-  versionNumber: number;
-  hash: string;
-  markdown: string;
-  now: Date;
-}
-
-export function slugifyTitle(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'untitled';
-}
-
-export function formatUtcCompact(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-}
-
-export function createProposalSnapshot(input: CreateProposalSnapshotInput) {
-  const snapshotName = [
-    `${slugifyTitle(input.title)}__SNAPSHOT`,
-    `doc-${input.docId.slice(0, 6)}`,
-    `branch-${input.branchSlug || input.branchId}`,
-    `v${String(input.versionNumber).padStart(4, '0')}`,
-    `ver-${input.versionId}`,
-    formatUtcCompact(input.now),
-    `sha-${shortHash(input.hash)}`,
-  ].join('__');
-
-  const snapshotDir = join(input.rootDir, '.marklab', 'snapshots', snapshotName);
-  mkdirSync(snapshotDir, { recursive: true });
-
-  writeFileSync(join(snapshotDir, 'proposal.md'), input.markdown);
-  writeFileSync(
-    join(snapshotDir, 'metadata.json'),
-    `${JSON.stringify(
-      {
-        docId: input.docId,
-        branchId: input.branchId,
-        baseVersionId: input.versionId,
-        baseVersionNumber: input.versionNumber,
-        baseHash: input.hash,
-        createdAt: input.now.toISOString(),
-        proposalPath: 'proposal.md',
-        snapshotRole: 'proposal',
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  return { snapshotDir };
-}
-```
-
-- [ ] **Step 3: Run tests**
-
-Run:
-
-```bash
-pnpm --filter @marklab/cli test
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add apps/cli/src/snapshot.ts apps/cli/src/snapshot.test.ts
-git commit -m "feat: add proposal snapshot writer"
-```
-
-## Task 4: CLI commands
+## Task 3: CLI commands
 
 **Files:**
 - Create: `apps/cli/src/commands.ts`
@@ -443,35 +306,34 @@ git commit -m "feat: add proposal snapshot writer"
 
 - [ ] **Step 1: Implement command registration**
 
-Create `apps/cli/src/commands.ts` with commands for config, health, read, snapshot, write, edit, multi-edit, versions, export, and import. Each write/edit command must read `metadata.json` from `--snapshot`, then call the matching API method with `baseVersionId` and `baseHash` from metadata.
+Create `apps/cli/src/commands.ts` with commands for config, health, read, write, edit, versions, export, and import.
 
 Behavior requirements:
 
 ```text
-read_doc --out:
-  writes canonical markdown directly to the requested path
+read-doc --json:
+  prints the read_doc JSON response
 
-snapshot create:
-  calls read_doc
-  writes proposal.md and metadata.json only
-  prints JSON containing snapshotDir and proposalPath
+read-doc --out:
+  writes canonical markdown directly to the requested path and prints version/hash JSON
 
-write_doc:
-  reads proposal.md
-  calls write_doc with baseVersionId/baseHash from metadata
+edit-doc:
+  sends one exact oldString/newString replacement
+  optionally includes observedVersionId for audit context
   prints JSON with status "written", versionId, versionNumber, hash
 
-edit_doc:
-  calls edit_doc with the exact oldString/newString provided by the agent
+write-doc --from:
+  reads target Markdown from a file
+  sends baseVersionId/baseHash plus full target Markdown
   prints JSON with status "written", versionId, versionNumber, hash
 
-multi_edit_doc:
-  reads ordered edits from JSON
-  calls multi_edit_doc once
+write-doc --stdin:
+  reads target Markdown from stdin
+  sends baseVersionId/baseHash plus full target Markdown
   prints JSON with status "written", versionId, versionNumber, hash
 ```
 
-The CLI must not implement `accept`, `reject`, or `submit-snapshot`.
+The CLI must not implement `accept`, `reject`, `submit-snapshot`, `snapshot create`, `preview-doc-change`, `apply-doc-change`, or `multi-edit-doc`.
 
 - [ ] **Step 2: Implement entrypoint**
 
@@ -501,7 +363,7 @@ git add apps/cli/src/commands.ts apps/cli/src/index.ts
 git commit -m "feat: add marklab cli commands"
 ```
 
-## Task 5: MarkLab agent skill
+## Task 4: MarkLab agent skill
 
 **Files:**
 - Create: `skills/marklab/SKILL.md`
@@ -513,7 +375,7 @@ Create `skills/marklab/SKILL.md`:
 ```markdown
 ---
 name: marklab
-description: Use when editing MarkLab cloud Markdown documents through the MarkLab CLI. Enforces local proposal review before online write/edit.
+description: Use when reading or editing MarkLab cloud Markdown documents through the MarkLab CLI.
 ---
 
 # MarkLab Agent Workflow
@@ -522,44 +384,41 @@ Use this skill whenever you need to read, edit, write, export, import, or inspec
 
 ## Core Rule
 
-Local review happens in `proposal.md`. Online submission must mirror the local native action:
+MarkLab exposes simple online document tools. The model owns proposal explanation and review text; MarkLab owns deterministic execution and version history.
 
-- Native local Edit -> `marklab edit_doc` with the same `oldString` and `newString`.
-- Native local MultiEdit -> `marklab multi_edit_doc` with the same ordered operations.
-- Native local Write -> `marklab write_doc --from proposal.md`.
+Use `marklab edit-doc` only for one small exact replacement:
 
-Do not infer `edit_doc` from a whole-file diff as the default path. If you no longer have exact old/new operation data, use `write_doc`.
+```bash
+marklab edit-doc --doc <docId> --branch <branchId> --old-string "Old text" --new-string "New text"
+```
 
-## Standard Flow
+Use `marklab write-doc` for broad, multi-region, structural, destructive, high-stakes, or uncertain changes:
 
-1. Run `marklab snapshot create --doc <docId> --branch <branchId>`.
-2. Edit the generated `proposal.md` using native file Edit, MultiEdit, or Write.
-3. Let the user review the native Codex/Claude Code diff.
-4. If the user rejects the diff, do not call any MarkLab write/edit command.
-5. If the user accepts an Edit-style change, call `marklab edit_doc` with the same exact old/new strings.
-6. If the user accepts multiple exact edits, call `marklab multi_edit_doc` with the same ordered operations.
-7. If the user accepts a full rewrite, call `marklab write_doc --snapshot <dir> --from <proposal.md>`.
-8. If the server returns stale, create a fresh snapshot and reapply the intended change.
-9. Report the returned `versionId`, `versionNumber`, and `hash`.
+```bash
+marklab read-doc --doc <docId> --branch <branchId> --json
+marklab write-doc --doc <docId> --branch <branchId> --base-version <versionId> --base-hash <hash> --from <file.md>
+```
+
+Before `write-doc`, explain the proposed change in chat. For meaningful or high-stakes changes, include a concise diff or before/after excerpt.
 
 ## Forbidden Patterns
 
-- Do not call online write/edit before local native diff review.
-- Do not create or rely on `baseline.md`, `before.md`, or `after.md` in the snapshot directory.
-- Do not treat product export files as live source of truth.
+- Do not call `write-doc` without a fresh `read-doc` base version and hash.
+- Do not use `edit-doc` for multiple independent changes or structural rewrites.
 - Do not bypass stale version/hash errors.
-- Do not use shell redirection or sed to mutate `proposal.md` when native file-edit tools are available.
+- Do not treat product export files as live source of truth.
+- Do not require default local proposal snapshots, server-side change sets, or app-level accept/reject state.
 ```
 
 - [ ] **Step 2: Verify skill wording**
 
-Search the skill for forbidden old workflow terms:
+Search the skill for removed workflow terms:
 
 ```bash
-rg -n "baseline|before\\.md|after\\.md|accepted|rejected|submit-snapshot" skills/marklab/SKILL.md
+rg -n "multi_edit|multi-edit|snapshot create|proposal\\.md|submit-snapshot|change_set|preview_doc_change|apply_doc_change" skills/marklab/SKILL.md
 ```
 
-Expected: no matches except in the explicit forbidden-pattern explanations.
+Expected: no matches.
 
 - [ ] **Step 3: Commit**
 
@@ -570,7 +429,7 @@ git commit -m "docs: add marklab agent skill"
 
 ## Later: MCP Adapter
 
-MCP is useful after the CLI/skill workflow is stable because MCP-native clients can discover tools without custom shell commands. It should be a thin adapter over the same HTTP API or CLI and must not introduce a parallel approval or write policy.
+MCP is useful after the CLI/skill workflow is stable because MCP-native clients can discover tools without custom shell commands. It should be a thin adapter over the same HTTP API or CLI and must not introduce a parallel approval, preview, or write policy.
 
 When MCP is added, expose:
 
@@ -578,11 +437,10 @@ When MCP is added, expose:
 read_doc
 write_doc
 edit_doc
-multi_edit_doc
 list_versions
 branch_from_version
 export_doc
 import_doc
 ```
 
-MCP tool descriptions should point agents to the MarkLab skill workflow for local proposal review. MCP alone is not the policy layer.
+MCP tool descriptions should point agents to the MarkLab skill workflow. MCP alone is not the policy layer.

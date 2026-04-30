@@ -25,15 +25,15 @@ Postgres
         ^
         |
 REST backend
-  read/write/edit/multi-edit/export/version APIs
+  read/write/edit/export/version APIs
         ^
         |
 MarkLab CLI + agent skill
-  proposal snapshots and native Codex/Claude Code review
+  direct online document tools and agent policy guidance
         ^
         |
 Optional MCP adapter
-  later wrapper over the same API/CLI workflow
+  later wrapper over the same API/CLI semantics
 ```
 
 ## Design principle
@@ -64,6 +64,18 @@ branch_state.current_hash text
 This mirror is updated after user edits and after agent writes.
 
 > **Context note:** The first backend persistence sketch stored only Yjs binary state in Hocuspocus hooks. That is not enough to keep this mirror fresh because Hocuspocus does not have Milkdown's Markdown serializer. Human-edit mirror refresh must come from a Milkdown serialization path, such as a debounced browser listener or a verified headless Milkdown transformer service.
+
+The mirror is derived state. For supported Markdown, the authoritative semantic path is:
+
+```text
+Yjs/ProseMirror live doc
+  -> Milkdown serializer
+  -> canonical Markdown formatter
+  -> current_markdown/current_hash
+  -> versions/export/read_doc
+```
+
+Prettier can stabilize whitespace after Milkdown serialization, but it must not replace Milkdown's parser/serializer as the semantic conversion layer.
 
 ### Immutable versions
 
@@ -119,6 +131,8 @@ target canonical Markdown
 
 This keeps online editors on the same state path as human collaboration. The diffing granularity only needs to be reliable enough for changed block/range transactions in MVP; it does not need cursor preservation or selection-aware AI behavior.
 
+If a branch's live Yjs document is empty but `current_markdown` is non-empty, the writer must first seed the live Yjs/ProseMirror document from `current_markdown` through the same Milkdown parser/Yjs path, then apply the target diff. This guards imports and branch-from-version flows where no browser has opened the branch yet.
+
 Implementation options:
 
 1. Use Hocuspocus `openDirectConnection` when the document state can be modified server-side and transactions can be applied against the live Yjs-bound ProseMirror document.
@@ -136,6 +150,23 @@ room name = doc:{docId}:branch:{branchId}
 
 This avoids merging branches accidentally.
 
+## Import and branch initialization
+
+Import and branch-from-version must initialize both durable representations:
+
+```text
+source Markdown/version snapshot
+  -> Milkdown parser with the active editor schema
+  -> ProseMirror document
+  -> Yjs prosemirror XML fragment
+  -> encoded yjs_state
+  -> Milkdown serializer
+  -> canonical Markdown mirror/hash
+  -> initial version
+```
+
+The preferred implementation is a headless Milkdown transformer service that produces valid Yjs state during import and branch creation. If MVP execution cannot make that transformer reliable immediately, the live writer must include an explicit seed-if-empty fallback before applying AI writes. Relying on the first browser editor opening `applyTemplate(initialMarkdown)` is not sufficient because agents may write before any human opens the branch.
+
 ## API topology
 
 ```text
@@ -144,7 +175,6 @@ POST   /api/docs/import
 GET    /api/docs/:docId/branches/:branchId/read
 POST   /api/docs/:docId/branches/:branchId/write
 POST   /api/docs/:docId/branches/:branchId/edit
-POST   /api/docs/:docId/branches/:branchId/multi-edit
 GET    /api/docs/:docId/branches/:branchId/export.md
 GET    /api/docs/:docId/versions
 POST   /api/docs/:docId/versions/:versionId/branch

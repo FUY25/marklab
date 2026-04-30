@@ -20,7 +20,7 @@
 - Create: `packages/shared/package.json` — shared utility package.
 - Create: `packages/shared/tsconfig.json` — shared package TypeScript config.
 - Create: `packages/shared/src/hash.ts` — SHA-256 hashing.
-- Create: `packages/shared/src/edit-ops.ts` — Claude-like old_string/new_string edit helpers.
+- Create: `packages/shared/src/edit-ops.ts` — Claude-like `oldString`/`newString` edit helpers.
 - Create: `packages/shared/src/export-filename.ts` — metadata-rich export filename builder.
 - Test: `packages/shared/src/hash.test.ts`.
 - Test: `packages/shared/src/edit-ops.test.ts`.

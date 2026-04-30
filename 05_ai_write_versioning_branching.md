@@ -2,7 +2,7 @@
 
 ## AI write philosophy
 
-The app does not judge whether AI output is good. Codex/Claude Code handles diff review and accept/reject outside the app with native local file-edit review over `proposal.md`. The app only guarantees that writes submitted after that review are safe, versioned, and reversible.
+The app does not judge whether AI output is good. The model and agent runtime own proposal explanation, review text, and tool permission. MarkLab only guarantees that submitted writes are deterministic, conflict-aware, live-editor synchronized, versioned, and reversible.
 
 MVP does not include AI streaming UX, selection-aware AI commands, or in-app diff UI. `Crepe.Feature.AI` is reference material only.
 
@@ -14,7 +14,6 @@ Use:
 read_doc
 write_doc
 edit_doc
-multi_edit_doc
 ```
 
 No separate `insert_doc` in MVP.
@@ -28,27 +27,7 @@ Insertion is represented by edit:
 }
 ```
 
-Multiple targeted replacements are represented as one ordered `multi_edit_doc` operation:
-
-```json
-{
-  "baseVersionId": "ver_043",
-  "edits": [
-    {
-      "oldString": "Old paragraph A.",
-      "newString": "New paragraph A.",
-      "replaceAll": false
-    },
-    {
-      "oldString": "Old paragraph B.",
-      "newString": "New paragraph B.",
-      "replaceAll": false
-    }
-  ]
-}
-```
-
-`multi_edit_doc` applies edits sequentially against the evolving canonical Markdown and creates one version. If any edit fails, the operation aborts before the live writer runs, so no partial document update or partial version history is created.
+Multiple coherent changes are represented as a guarded `write_doc` with full target Markdown. This keeps the public tool surface small. The backend still applies the resulting target through the minimal transaction live writer, so a full-document API input can become block/range-level live editor transactions.
 
 ## Full write safety
 
@@ -102,33 +81,18 @@ export function applyStringEdit(markdown: string, oldString: string, newString: 
 }
 ```
 
-`multi_edit_doc` uses the same primitive for each ordered edit. The operation is atomic at the MarkLab API boundary: all exact replacements must be valid before the target Markdown is sent through the live writer.
-
-## Local proposal workflow
-
-The local proposal file is a review surface, not a business operation type.
+## Agent review policy
 
 ```text
-marklab snapshot create
-  -> calls read_doc
-  -> writes proposal.md with the current canonical Markdown
-  -> writes metadata.json with docId, branchId, baseVersionId, baseVersionNumber, baseHash, createdAt
+small, low-risk, single-region exact replacement
+  -> model may call edit_doc after normal tool permission
 
-Codex/Claude Code edits proposal.md natively
-  -> user reviews the native local diff
+meaningful, broad, multi-region, high-stakes, destructive, or user-cautious change
+  -> model explains proposed change in chat first
+  -> model calls write_doc only after the user proceeds through the agent/tool loop
 ```
 
-No `baseline.md`, `before.md`, or `after.md` is created by default. The native agent file-edit UI already knows the file's initial content and can show the diff from that state.
-
-The online submit mirrors the local action:
-
-```text
-native Edit      -> marklab edit_doc with the same oldString/newString
-native MultiEdit -> marklab multi_edit_doc with the same ordered edit ops
-native Write     -> marklab write_doc from proposal.md
-```
-
-The CLI does not return user-level `accepted`, `rejected`, or `noop` states. If the user rejects a local diff, no write/edit command is called. Write/edit commands report server-level states such as `written`, `stale`, `old_string_not_found`, or `ambiguous_match`.
+The product server does not persist preview objects, change sets, local proposal snapshots, or accept/reject state in MVP. It reports server-level states such as `written`, `stale_base_version`, `stale_base_hash`, `old_string_not_found`, or `ambiguous_match`.
 
 ## Applying AI edits to Milkdown state
 
@@ -160,7 +124,6 @@ create blank doc
 import local .md
 AI write_doc
 AI edit_doc
-AI multi_edit_doc
 manual human save
 pre-agent checkpoint of dirty human work
 autosave checkpoint

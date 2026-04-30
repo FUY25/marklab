@@ -15,21 +15,23 @@
 - Create: `apps/api/src/services/version-service.ts` — create/list versions and branch from version.
 - Test: `apps/api/src/services/version-service.test.ts`.
 - Create: `apps/api/src/services/save-policy.ts` — manual save, autosave throttle, and pre-agent checkpoint helpers.
+- Create: `apps/api/src/routes/version-routes.ts` — list/show versions and branch-from-version HTTP endpoints.
+- Use: `apps/api/src/services/milkdown-transformer.ts` — initializes Yjs state and canonical Markdown from version snapshots.
 - Modify: `apps/api/src/services/editor-state.ts` — create version after write/edit.
 - Modify: `apps/api/src/routes/doc-ai-routes.ts` — include version in responses.
+- Modify: `apps/api/src/http/app.ts` — mount version routes.
 
 ## Scope Check
 
 This plan only implements backend version/branch behavior. UI history display is a separate task in the web app.
 
-## Save and Snapshot Policy
+## Save Policy
 
-Version history is authoritative product state. Local agent snapshots are temporary review instruments and are not database records.
+Version history is authoritative product state. Agent review text, tool permission, and optional local scratch files are outside the product data model and are not database records.
 
 ```text
 Yjs live state + current_markdown/current_hash = working tree
 document_versions = commits
-.marklab/snapshots/.../proposal.md = local agent proposal file
 ```
 
 Human typing persists through Yjs continuously and refreshes `current_markdown/current_hash` on debounce. It does not create a version per keystroke.
@@ -48,7 +50,7 @@ pre-agent checkpoint:
   immediate, bypassing autosave throttle
   only when current_hash differs from the head version hash before an agent write/edit
 
-agent write/edit/multi-edit:
+agent write/edit:
   immediate after the minimal transaction live writer succeeds
 ```
 
@@ -111,7 +113,7 @@ Create `apps/api/src/services/version-service.ts`:
 
 ```ts
 import type { DbPool } from '../db/client';
-import { createEmptyYjsState } from '../collab/persistence';
+import { initializeBranchEditorState } from './milkdown-transformer';
 
 export function nextVersionNumber(current: number | null): number {
   return current === null ? 1 : current + 1;
@@ -223,10 +225,12 @@ export async function branchFromVersion(pool: DbPool, docId: string, sourceVersi
     );
     const branchId = (branch.rows[0] as { id: string }).id;
 
+    const initialized = await initializeBranchEditorState(sourceRow.markdown_snapshot);
+
     await client.query(
       `insert into document_branch_states (branch_id, yjs_state, current_markdown, current_hash)
        values ($1, $2, $3, $4)`,
-      [branchId, Buffer.from(createEmptyYjsState()), sourceRow.markdown_snapshot, sourceRow.hash],
+      [branchId, Buffer.from(initialized.yjsState), initialized.markdown, initialized.hash],
     );
 
     const version = await client.query(
@@ -234,7 +238,7 @@ export async function branchFromVersion(pool: DbPool, docId: string, sourceVersi
         (doc_id, branch_id, parent_version_id, version_number, markdown_snapshot, hash, actor_type, operation)
        values ($1,$2,$3,1,$4,$5,'system','branch')
        returning id`,
-      [docId, branchId, sourceVersionId, sourceRow.markdown_snapshot, sourceRow.hash],
+      [docId, branchId, sourceVersionId, initialized.markdown, initialized.hash],
     );
     const versionId = (version.rows[0] as { id: string }).id;
 
@@ -251,7 +255,7 @@ export async function branchFromVersion(pool: DbPool, docId: string, sourceVersi
 }
 ```
 
-> **Context note:** The original branch creation had the same `pg.Pool` transaction bug and also initialized `yjs_state` with an empty byte buffer. The corrected code uses one transaction client and stores a valid encoded empty Yjs update from the persistence helper.
+> **Context note:** The original branch creation had the same `pg.Pool` transaction bug and also initialized `yjs_state` with an empty byte buffer. The corrected code uses one transaction client and initializes branch Yjs state through the Milkdown transformer from the selected version Markdown. If the transformer is temporarily unavailable during MVP execution, the live writer's seed-if-empty fallback must be tested before agents can write to unopened branches.
 
 - [ ] **Step 2: Run typecheck**
 
@@ -386,4 +390,151 @@ Expected: PASS.
 ```bash
 git add apps/api/src/services/save-policy.ts apps/api/src/services/save-policy.test.ts apps/api/src/services/editor-state.ts
 git commit -m "feat: add version save policy helpers"
+```
+
+### Task 5: Version HTTP routes
+
+**Files:**
+- Modify: `apps/api/src/services/version-service.ts`
+- Create: `apps/api/src/routes/version-routes.ts`
+- Modify: `apps/api/src/http/app.ts`
+- Test: `apps/api/src/routes/version-routes.test.ts`
+
+- [ ] **Step 1: Add list/show helpers**
+
+Extend `apps/api/src/services/version-service.ts` with:
+
+```ts
+export async function listVersions(pool: DbPool, docId: string, branchId: string) {
+  const result = await pool.query(
+    `select id, parent_version_id, version_number, hash, actor_type, actor_id, operation, created_at
+       from document_versions
+      where doc_id = $1 and branch_id = $2
+      order by version_number desc`,
+    [docId, branchId],
+  );
+
+  return result.rows.map((row) => ({
+    versionId: row.id as string,
+    parentVersionId: row.parent_version_id as string | null,
+    versionNumber: row.version_number as number,
+    hash: row.hash as string,
+    actorType: row.actor_type as string,
+    actorId: row.actor_id as string | null,
+    operation: row.operation as string,
+    createdAt: (row.created_at as Date).toISOString(),
+  }));
+}
+
+export async function showVersion(pool: DbPool, docId: string, versionId: string) {
+  const result = await pool.query(
+    `select id, branch_id, parent_version_id, version_number, markdown_snapshot, hash, actor_type, actor_id, operation, created_at
+       from document_versions
+      where doc_id = $1 and id = $2`,
+    [docId, versionId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('version_not_found');
+
+  return {
+    versionId: row.id as string,
+    branchId: row.branch_id as string,
+    parentVersionId: row.parent_version_id as string | null,
+    versionNumber: row.version_number as number,
+    markdown: row.markdown_snapshot as string,
+    hash: row.hash as string,
+    actorType: row.actor_type as string,
+    actorId: row.actor_id as string | null,
+    operation: row.operation as string,
+    createdAt: (row.created_at as Date).toISOString(),
+  };
+}
+```
+
+- [ ] **Step 2: Create routes**
+
+Create `apps/api/src/routes/version-routes.ts`:
+
+```ts
+import { Router } from 'express';
+import { z } from 'zod';
+import type { DbPool } from '../db/client';
+import { branchFromVersion, listVersions, showVersion } from '../services/version-service';
+
+const branchSchema = z.object({
+  name: z.string().min(1),
+  slug: z.string().min(1).optional(),
+});
+
+function slugifyBranchName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'branch';
+}
+
+export function createVersionRoutes(pool: DbPool) {
+  const router = Router();
+
+  router.get('/docs/:docId/branches/:branchId/versions', async (req, res, next) => {
+    try {
+      res.json({ versions: await listVersions(pool, req.params.docId, req.params.branchId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/docs/:docId/versions/:versionId', async (req, res, next) => {
+    try {
+      res.json(await showVersion(pool, req.params.docId, req.params.versionId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/docs/:docId/versions/:versionId/branch', async (req, res, next) => {
+    try {
+      const body = branchSchema.parse(req.body);
+      const result = await branchFromVersion(
+        pool,
+        req.params.docId,
+        req.params.versionId,
+        body.name,
+        body.slug ?? slugifyBranchName(body.name),
+      );
+      res.status(201).json({ branchId: result.branchId, headVersionId: result.versionId });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  return router;
+}
+```
+
+- [ ] **Step 3: Mount routes**
+
+Modify `apps/api/src/http/app.ts`:
+
+```ts
+import { createVersionRoutes } from '../routes/version-routes';
+
+app.use('/api', createVersionRoutes(pool));
+```
+
+Mount these routes after JSON middleware and before error middleware. They must use the same `DbPool` as the import/export and AI routes.
+
+- [ ] **Step 4: Run tests**
+
+Run:
+
+```bash
+pnpm test apps/api/src/routes/version-routes.test.ts
+pnpm --filter @marklab/api typecheck
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/api/src/services/version-service.ts apps/api/src/routes/version-routes.ts apps/api/src/routes/version-routes.test.ts apps/api/src/http/app.ts
+git commit -m "feat: add version history routes"
 ```

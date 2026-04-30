@@ -9,7 +9,7 @@
   Notes: README describes Milkdown as a plugin-driven WYSIWYG Markdown editor inspired by Typora and built on ProseMirror and Remark.
 
 - Local Milkdown source clone: `resource/milkdown` at commit `114b4b35` on 2026-04-29  
-  Notes: Verified `@milkdown/kit@7.20.0`, `@milkdown/plugin-collab@7.20.0`, `collabServiceCtx`, `bindDoc`, `setAwareness`, `connect`, `applyTemplate`, `getMarkdown`, and `replaceAll`. This is why the corrected editor plan seeds the Yjs XML fragment with `applyTemplate(initialMarkdown)` instead of relying on `defaultValueCtx` alone.
+  Notes: Verified `@milkdown/kit@7.20.0`, `@milkdown/plugin-collab@7.20.0`, `collabServiceCtx`, `bindDoc`, `setAwareness`, `connect`, `applyTemplate`, `getMarkdown`, `replaceAll`, listener `markdownUpdated`, and Milkdown diff/streaming plugin transaction patterns. This is why the corrected plans treat Milkdown parser/serializer output as the semantic authority and require import/branch/live-writer paths to update Yjs/ProseMirror state, not only `current_markdown`.
 
 - Milkdown Transformer API: https://milkdown.dev/docs/api/transformer  
   Notes: Transformer APIs convert between editor ProseMirror state and Markdown AST.
@@ -46,7 +46,7 @@
   Notes: Public hook schema includes tools such as `Read`, `Write`, and `Edit`; `Write` creates/overwrites files and `Edit` replaces strings in existing files.
 
 - Anthropic text editor tool: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool  
-  Notes: Text editor tool includes string replacement and insert semantics. MVP chooses Claude Code-like `Edit` and represents insert through `old_string/new_string`.
+  Notes: Text editor tool includes string replacement and insert semantics. MVP chooses Claude Code-like `Edit` and represents insert through MarkLab `oldString/newString` fields.
 
 ## HackMD / CodiMD references
 

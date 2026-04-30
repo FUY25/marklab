@@ -103,11 +103,32 @@ Not guaranteed in MVP:
 - Custom Markdown directives.
 - Exact source formatting.
 
-## Formatter contract
+## Parser, serializer, and formatter contract
 
-Export and canonical mirror should use a deterministic formatter.
+Canonical Markdown must be derived through Milkdown's Markdown/ProseMirror transformation pipeline.
 
-Suggested initial formatter:
+Authoritative semantic path:
+
+```text
+Markdown input
+  -> Milkdown parser with the active editor schema
+  -> ProseMirror document
+  -> Milkdown serializer
+  -> Markdown output
+  -> deterministic formatter
+  -> canonical Markdown
+```
+
+For human edits, export, versions, and AI reads, the reverse path starts from the live editor state:
+
+```text
+Yjs/ProseMirror live doc
+  -> Milkdown serializer
+  -> deterministic formatter
+  -> canonical Markdown
+```
+
+Suggested final formatter:
 
 ```text
 Prettier markdown parser
@@ -125,9 +146,11 @@ Formatter options:
 
 Rationale:
 
-- Deterministic output helps AI old_string matching.
+- Deterministic output helps AI `oldString` matching.
 - Deterministic output reduces meaningless version diffs.
 - `proseWrap: preserve` avoids aggressively rewrapping prose.
+
+Prettier is not the semantic authority. It runs after Milkdown serialization to stabilize formatting. If Milkdown cannot parse or serialize a supported Markdown construct, the fix belongs in the Milkdown/plugin/schema configuration or fixture policy, not in ad hoc string rewriting.
 
 ## Import contract
 
@@ -135,19 +158,23 @@ On local `.md` upload:
 
 1. Read raw Markdown.
 2. Run syntax support checks.
-3. Convert to Milkdown editor state.
-4. Serialize back to Markdown.
-5. Format to canonical Markdown.
-6. Create version `v1` with operation `import`.
-7. Store editor Yjs state and canonical mirror.
+3. Parse through Milkdown with the active editor schema.
+4. Create the ProseMirror/Yjs branch state from that parsed document.
+5. Serialize the resulting editor document back to Markdown.
+6. Format to canonical Markdown.
+7. Create version `v1` with operation `import`.
+8. Store the encoded Yjs state and canonical mirror/hash together.
+
+The import flow must not store a non-empty `current_markdown` beside an empty collaborative Yjs document as the final state. If a temporary MVP path cannot initialize Yjs at import time, the live writer must explicitly seed empty Yjs state from `current_markdown` before any AI write/edit.
 
 ## Export contract
 
 On export:
 
-1. Use current canonical Markdown snapshot.
-2. Do not inject metadata into the body by default.
-3. Use metadata-rich filename.
+1. Flush pending human edits through the Milkdown serializer path.
+2. Use the resulting canonical Markdown mirror.
+3. Do not inject metadata into the body by default.
+4. Use metadata-rich filename.
 
 Filename format:
 
@@ -163,10 +190,10 @@ AI always receives canonical Markdown and must send edits against canonical Mark
 
 ```json
 {
-  "doc_id": "doc_abc",
-  "branch_id": "br_main",
-  "version_id": "ver_043",
-  "version_number": 43,
+  "docId": "doc_abc",
+  "branchId": "br_main",
+  "versionId": "ver_043",
+  "versionNumber": 43,
   "hash": "sha256:7b91a2cf...",
   "markdown": "# Strategy memo\n\n..."
 }

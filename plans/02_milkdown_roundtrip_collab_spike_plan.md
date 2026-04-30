@@ -20,7 +20,7 @@
 - Create: `apps/web/src/lib/editor-collab.ts` — Yjs provider creation.
 - Create: `packages/markdown/package.json` — canonical Markdown package.
 - Create: `packages/markdown/tsconfig.json` — markdown package TypeScript config.
-- Create: `packages/markdown/src/canonicalize.ts` — Markdown formatter.
+- Create: `packages/markdown/src/canonicalize.ts` — final Markdown formatter used after Milkdown serialization.
 - Create: `packages/markdown/src/fixtures.ts` — fixture loader helper.
 - Test: `packages/markdown/src/canonicalize.test.ts`.
 - Test: `apps/web/tests/milkdown-collab.spec.ts`.
@@ -39,6 +39,7 @@ This plan is a spike but still produces working software: a visual collaborative
 - Disable `ImageBlock` until the product has a durable upload/storage URL policy. Do not allow blob URLs or base64 image payloads into persisted Markdown/Yjs state.
 - Do not add `@milkdown/plugin-highlight` for the editable Crepe editor. `Crepe.Feature.CodeMirror` covers editable code-block highlighting. Persistent text highlighting is a future custom mark feature, not `plugin-highlight`.
 - Treat Yjs/collab undo as authoritative. Do not expose ProseMirror history semantics in collaborative editing. Disable Milkdown history shortcuts so `@milkdown/plugin-collab` / `y-prosemirror` handles `Mod-z`, `Mod-y`, and `Shift-Mod-z`.
+- Treat Milkdown parser/serializer output as the semantic authority for canonical Markdown. The Prettier formatter package only stabilizes serialized Markdown formatting; it is not a replacement for Milkdown round-trip tests.
 - Add Playwright coverage for hidden TopBar, block menu, floating toolbar, code/table/math insertion, image entry absence, and collab undo behavior.
 
 ## Crepe Human Editing Migration
@@ -183,7 +184,7 @@ export PWCLI="$CODEX_HOME/skills/playwright/scripts/playwright_cli.sh"
 "$PWCLI" snapshot
 ```
 
-### Task 1: Canonical Markdown formatter package
+### Task 1: Canonical Markdown final formatter package
 
 **Files:**
 - Create: `packages/markdown/package.json`
@@ -238,7 +239,9 @@ describe('canonicalizeMarkdown', () => {
 });
 ```
 
-> **Context note:** The original expected table output used compact `| A | B |` spacing. Prettier aligns table columns, so the corrected test checks the actual canonical format while still asserting semantic table preservation.
+> **Context note:** The original expected table output used compact `| A | B |` spacing. Prettier aligns table columns, so the corrected test checks the actual final formatter behavior while still asserting content preservation.
+>
+> This package is not the semantic Markdown authority. It only stabilizes Markdown that has already passed through Milkdown parser/serializer. The Milkdown transformer in `plans/04_import_export_plan.md` owns Markdown-to-editor and editor-to-Markdown semantic round-trip behavior.
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -298,7 +301,7 @@ Expected: PASS.
 
 ```bash
 git add packages/markdown/package.json packages/markdown/tsconfig.json packages/markdown/src/canonicalize.ts packages/markdown/src/canonicalize.test.ts
-git commit -m "feat: add canonical markdown formatter"
+git commit -m "feat: add canonical markdown final formatter"
 ```
 
 ### Task 2: Milkdown editor wrapper
@@ -534,7 +537,7 @@ export async function readFixture(name: (typeof fixtureNames)[number]): Promise<
 }
 ```
 
-- [ ] **Step 2: Write fixture canonicalization test**
+- [ ] **Step 2: Write fixture final-format stability test**
 
 Create `packages/markdown/src/roundtrip-fixtures.test.ts`:
 
@@ -543,9 +546,9 @@ import { describe, expect, it } from 'vitest';
 import { canonicalizeMarkdown } from './canonicalize';
 import { fixtureNames, readFixture } from './fixtures';
 
-describe('Markdown fixtures are canonicalization-stable', () => {
+describe('Markdown fixtures are final-format-stable', () => {
   for (const fixtureName of fixtureNames) {
-    it(`${fixtureName} is stable after repeated canonicalization`, async () => {
+    it(`${fixtureName} is stable after repeated final formatting`, async () => {
       const raw = await readFixture(fixtureName);
       const once = await canonicalizeMarkdown(raw);
       const twice = await canonicalizeMarkdown(once);
@@ -569,5 +572,5 @@ Expected: PASS.
 
 ```bash
 git add packages/markdown/src/fixtures.ts packages/markdown/src/roundtrip-fixtures.test.ts
-git commit -m "test: add markdown fixture canonicalization checks"
+git commit -m "test: add markdown fixture final-format checks"
 ```

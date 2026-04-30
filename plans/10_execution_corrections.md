@@ -13,17 +13,17 @@ The following corrections should be applied while executing the plans.
 
 ## Corrections Applied To Plans
 
-1. `plans/02_milkdown_roundtrip_collab_spike_plan.md` now seeds the Yjs XML fragment with `service.bindDoc(ydoc).applyTemplate(initialMarkdown).setAwareness(awareness).connect()` so an empty collaboration document receives imported Markdown before y-sync takes over.
+1. `plans/02_milkdown_roundtrip_collab_spike_plan.md` seeds the Yjs XML fragment with `service.bindDoc(ydoc).applyTemplate(initialMarkdown).setAwareness(awareness).connect()` for browser-opened empty collaboration documents, but import and branch creation should no longer rely on first browser open. `plans/04_import_export_plan.md` and `plans/05_version_branch_plan.md` now require a Milkdown transformer to initialize Yjs state from Markdown/version snapshots, with a tested live-writer seed-if-empty fallback if needed.
 
 2. `apps/web/package.json` now includes the direct peer/runtime packages required by `@milkdown/plugin-collab`: `y-prosemirror`, `y-protocols`, and `yjs`. The plan imports `Awareness` from `y-protocols/awareness`, so relying on transitive dependencies would fail under pnpm.
 
-3. `plans/03_realtime_backend_persistence_plan.md`, `plans/05_version_branch_plan.md`, and `plans/06_import_export_plan.md` no longer store empty byte buffers as Yjs updates. Empty bytes are not a valid encoded Yjs update; the corrected plans use `createEmptyYjsState()` or treat a zero-length stored state as missing before calling `Y.applyUpdate`.
+3. `plans/03_realtime_backend_persistence_plan.md`, `plans/05_version_branch_plan.md`, and `plans/04_import_export_plan.md` no longer store empty byte buffers as Yjs updates. Empty bytes are not a valid encoded Yjs update. Truly blank documents may use a valid encoded empty Y.Doc update; import and branch-from-version must initialize Yjs state from Markdown through the Milkdown transformer or rely on the tested live-writer seed-if-empty fallback.
 
 4. `plans/03_realtime_backend_persistence_plan.md` no longer claims raw Hocuspocus persistence keeps the canonical Markdown mirror fresh. Human-edit mirror refresh is explicitly assigned to the Milkdown serialization path.
 
-5. `plans/04_ai_write_api_plan.md` no longer creates a mirror-only `applyMarkdownToBranchState` seam or allows whole-document live replacement as the MVP write path. The corrected contract requires a minimal transaction live writer that parses target canonical Markdown, compares it to the current Yjs-bound ProseMirror document, applies only changed ranges through transactions/Yjs updates, and derives mirror/hash/version after live state is updated.
+5. `plans/06_ai_write_api_plan.md` no longer creates a mirror-only `applyMarkdownToBranchState` seam or allows whole-document live replacement as the MVP write path. The corrected contract requires a minimal transaction live writer that parses target canonical Markdown, compares it to the current Yjs-bound ProseMirror document, applies only changed ranges through transactions/Yjs updates, and derives mirror/hash/version after live state is updated.
 
-6. `plans/04_ai_write_api_plan.md` now validates both `baseVersionId` and `baseHash` for full writes and returns `versionId`, `versionNumber`, and `hash` for accepted writes/edits.
+6. `plans/06_ai_write_api_plan.md` now validates both `baseVersionId` and `baseHash` for full writes and returns `versionId`, `versionNumber`, and `hash` for accepted writes/edits.
 
 7. Plans that create/import/branch/version now use a checked-out Postgres client for transactions instead of repeated pool-level transaction calls.
 
@@ -43,9 +43,15 @@ The following corrections should be applied while executing the plans.
 
 15. `Crepe.Feature.AI` is intentionally excluded from the current execution. Revisit it after the human editor and live writer are stable, using its streaming and diff-review plugins as UI references rather than as a direct model/write path. Do not build AI streaming UX, selection-aware AI, or in-app AI diff UI for MVP.
 
-16. AI review/diffing should happen through a local proposal snapshot, not through app UI. `marklab snapshot create` should write only `proposal.md` and `metadata.json`; it should not create `baseline.md`, `before.md`, or `after.md` by default. Codex/Claude Code owns the native local file-edit review loop.
+16. AI review/diffing is primarily model/runtime behavior, not MarkLab product state. The MVP does not require in-app AI diff UI, server-side preview/change-set persistence, or default local proposal snapshots. Small exact changes use `edit_doc`; broader or riskier changes should be explained in chat before `write_doc`.
 
-17. Plan 7 is now CLI + agent skill first, not MCP first. The online submit must mirror the local native action: Edit -> `edit_doc`, MultiEdit -> `multi_edit_doc`, Write -> `write_doc`. MCP can be added later as a thin adapter over the stable API/CLI workflow, but MCP is not the policy layer.
+17. Plan 7 is now CLI + agent skill first, not MCP first. The public MVP write surface is `read_doc`, `edit_doc`, and `write_doc`; `multi_edit_doc`, `snapshot create`, `preview_doc_change`, `apply_doc_change`, and `change_sets` are not MVP public workflows. MCP can be added later as a thin adapter over the stable API/CLI workflow, but MCP is not the policy layer.
+
+18. The canonical Markdown mirror must be derived from Milkdown serializer output plus deterministic formatting. Prettier-only canonicalization is not enough to be the semantic source of truth for import, export, versions, read_doc, or AI live writes.
+19. Plan file numbering now matches the recommended execution order: `04_import_export`, `05_version_branch`, then `06_ai_write_api`. This avoids the earlier ambiguity where filenames implied AI routes could be implemented before import/export and version services existed.
+20. `doc-read.ts` is now created in `plans/04_import_export_plan.md` as a shared canonical branch read service. `plans/06_ai_write_api_plan.md` uses that existing service instead of creating it later, so import/export does not depend on the AI plan.
+21. `plans/05_version_branch_plan.md` now includes version list/show and branch-from-version HTTP routes. This closes the gap where the CLI plan required `versions list/show` commands but no API route plan exposed those operations.
+22. `LiveMarkdownWriter` imports in `plans/06_ai_write_api_plan.md` now point at `services/live-writer`, where the type is defined, rather than `services/editor-state`.
 
 ## Safe First Slice
 
