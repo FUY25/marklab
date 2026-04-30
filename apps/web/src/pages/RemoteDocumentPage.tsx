@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
+import { DocumentToolbar } from '../components/DocumentToolbar';
 import { MilkdownEditor } from '../components/MilkdownEditor';
 import { readWebConfig } from '../config';
 import { createEditorCollab } from '../lib/editor-collab';
@@ -60,11 +61,17 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
   }, [config.websocketUrl, roomName]);
 
   return (
-    <main className="app-shell" data-testid="remote-document-page">
+    <main className="app-shell remote-document-shell" data-testid="remote-document-page">
       <header className="app-header">
-        <h1>MarkLab</h1>
-        <span data-testid="remote-document-id">{docId}</span>
+        <div>
+          <p className="workspace-kicker">Cloud document</p>
+          <h1>MarkLab</h1>
+        </div>
+        <span className="document-id" data-testid="remote-document-id">
+          {docId}
+        </span>
       </header>
+      <DocumentToolbar docId={docId} branchId={branchId} />
       {connectionMessage ? <div role="alert">{connectionMessage}</div> : null}
       {collab ? (
         <MilkdownEditor

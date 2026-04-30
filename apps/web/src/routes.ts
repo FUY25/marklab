@@ -1,7 +1,8 @@
 export type AppRoute =
   | { kind: 'remote-document'; docId: string; branchId: string }
   | { kind: 'local-single' }
-  | { kind: 'local-two' };
+  | { kind: 'local-two' }
+  | { kind: 'home' };
 
 function decodePathPart(value: string): string | null {
   try {
@@ -35,9 +36,11 @@ export function parseAppRoute(location: Pick<Location, 'pathname' | 'search'>): 
   const queryBranchId = params.get('branchId');
   if (queryDocId && queryBranchId) return { kind: 'remote-document', docId: queryDocId, branchId: queryBranchId };
 
+  if (params.get('local') === 'one') return { kind: 'local-single' };
+
   if (params.get('collab') === 'two') return { kind: 'local-two' };
 
-  return { kind: 'local-single' };
+  return { kind: 'home' };
 }
 
 export function buildDocumentPath(docId: string, branchId: string): string {

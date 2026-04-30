@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { MilkdownEditor } from './components/MilkdownEditor';
+import { HomePage } from './pages/HomePage';
 import { RemoteDocumentPage } from './pages/RemoteDocumentPage';
 import { parseAppRoute } from './routes';
 
@@ -45,7 +46,9 @@ export function App() {
 
   if (route.kind === 'local-two') return <TwoEditorCollabHarness />;
 
-  return <SingleEditorWorkspace />;
+  if (route.kind === 'local-single') return <SingleEditorWorkspace />;
+
+  return <HomePage />;
 }
 
 function SingleEditorWorkspace() {
@@ -53,7 +56,7 @@ function SingleEditorWorkspace() {
   const awareness = useMemo(() => createAwareness(ydoc, 'Human Writer', '#2563eb'), [ydoc]);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell local-editor-shell">
       <header className="app-header">
         <h1>MarkLab</h1>
       </header>
