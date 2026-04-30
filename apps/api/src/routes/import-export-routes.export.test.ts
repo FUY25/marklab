@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
+import { toRoomName } from '../collab/persistence';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 
@@ -105,6 +106,50 @@ describe('export route version metadata consistency', () => {
     expect(response.headers['content-disposition']).toContain('__v0011__');
     expect(response.headers['content-disposition']).toContain(`__sha-${flushedHash.slice('sha256:'.length, 15)}__`);
     expect(queries.some((query) => query.sql.includes('current_markdown'))).toBe(false);
+  });
+
+  it('flushes an active collab document before export serializes body and filename metadata', async () => {
+    const staleHash = sha256Hex('# Stale export\n');
+    const activeHash = sha256Hex('# Active export\n');
+    let activeFlushed = false;
+    vi.mocked(flushBranchMarkdownMirror).mockImplementation(async () => {
+      if (!activeFlushed) {
+        return {
+          branchId: 'br_main',
+          markdown: '# Stale export\n',
+          hash: staleHash,
+          versionId: 'ver_003',
+          versionNumber: 3,
+          createdVersion: false,
+        };
+      }
+
+      return {
+        branchId: 'br_main',
+        markdown: '# Active export\n',
+        hash: activeHash,
+        versionId: 'ver_012',
+        versionNumber: 12,
+        createdVersion: true,
+      };
+    });
+    const { pool } = createExportPool({
+      currentHash: staleHash,
+      versionHash: activeHash,
+      currentMarkdown: '# Stale export\n',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      async flushCollabDocument(roomName) {
+        expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
+        activeFlushed = true;
+      },
+    });
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
+
+    expect(response.text).toBe('# Active export\n');
+    expect(response.headers['content-disposition']).toContain('__v0012__');
+    expect(response.headers['content-disposition']).toContain(`__sha-${activeHash.slice('sha256:'.length, 15)}__`);
   });
 
   it('exports with the flushed version metadata when flush creates a matching manual_save version', async () => {

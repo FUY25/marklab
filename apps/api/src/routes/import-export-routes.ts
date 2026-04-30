@@ -2,7 +2,9 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { buildExportFilename } from '@marklab/shared/src/export-filename';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import { z } from 'zod';
+import { toRoomName } from '../collab/persistence';
 import type { DbPool } from '../db/client';
+import type { HttpAppOptions } from '../http/app';
 import { createDoc } from '../services/doc-create';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 
@@ -31,7 +33,7 @@ function requiredParam(req: Request, name: string): string {
   return value;
 }
 
-export function createImportExportRoutes(pool: DbPool) {
+export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions = {}) {
   const router = Router();
 
   router.post('/docs', async (req: Request, res: Response, next: NextFunction) => {
@@ -59,6 +61,7 @@ export function createImportExportRoutes(pool: DbPool) {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
 
+      await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
 
       const metadata = await pool.query<{ title: string; branch_slug: string }>(

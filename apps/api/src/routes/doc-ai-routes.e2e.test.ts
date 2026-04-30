@@ -9,6 +9,7 @@ import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-run
 import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createPostgresLiveMarkdownWriter } from '../services/postgres-live-writer';
+import { toRoomName } from '../collab/persistence';
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -154,6 +155,21 @@ function createFakePool(options: FakePoolOptions = {}) {
   return { pool, queries };
 }
 
+async function updateFakePoolFromMarkdown(
+  fakePool: ReturnType<typeof createFakePool>,
+  markdown: string,
+  hash: string,
+  yjsState: Uint8Array,
+) {
+  await fakePool.pool.query('update document_branch_states', [
+    'br_main',
+    markdown,
+    hash,
+    Buffer.from(yjsState),
+    'active-flush-fingerprint',
+  ]);
+}
+
 function createRecordingLiveWriter(
   result: Pick<AppliedLiveMarkdownTransaction, 'serializedMarkdown' | 'yjsState'> &
     Partial<Omit<AppliedLiveMarkdownTransaction, 'serializedMarkdown' | 'yjsState'>>,
@@ -191,6 +207,93 @@ function createValidYjsState(): Uint8Array {
 }
 
 describe('doc AI routes minimal transaction e2e', () => {
+  it('flushes an active collab document before read_doc reads branch state', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const stale = await runtime.initializeFromMarkdown('# Stale mirror\n');
+    const active = await runtime.initializeFromMarkdown('# Active edit\n');
+    const fakePool = createFakePool({
+      currentMarkdown: stale.markdown,
+      currentHash: stale.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: stale.hash,
+      yjsState: stale.yjsState,
+      versionIds: ['ver_002'],
+    });
+    const flushedRooms: string[] = [];
+    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+      async flushCollabDocument(roomName) {
+        flushedRooms.push(roomName);
+        await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
+      },
+    });
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
+
+    expect(flushedRooms).toEqual([toRoomName('doc_001', 'br_main')]);
+    expect(response.body.markdown).toBe(active.markdown);
+    expect(response.body.hash).toBe(active.hash);
+  });
+
+  it('checks write_doc baseHash against active-flushed Yjs state instead of stale Postgres bytes', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const stale = await runtime.initializeFromMarkdown('# Stale mirror\n');
+    const active = await runtime.initializeFromMarkdown('# Active edit\n');
+    const fakePool = createFakePool({
+      currentMarkdown: stale.markdown,
+      currentHash: stale.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: stale.hash,
+      yjsState: stale.yjsState,
+      versionIds: ['ver_002', 'ver_003'],
+    });
+    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+      async flushCollabDocument(roomName) {
+        expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
+        await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: stale.hash, markdown: '# Agent write\n' })
+      .expect(409);
+
+    expect(response.body).toEqual({ error: 'live_yjs_state_changed' });
+  });
+
+  it('applies edit_doc against active-flushed Yjs state instead of stale Postgres bytes', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const stale = await runtime.initializeFromMarkdown('# Stale mirror\n');
+    const active = await runtime.initializeFromMarkdown('# Active edit\n');
+    const fakePool = createFakePool({
+      currentMarkdown: stale.markdown,
+      currentHash: stale.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: stale.hash,
+      yjsState: stale.yjsState,
+      versionIds: ['ver_002', 'ver_003'],
+    });
+    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+      async flushCollabDocument(roomName) {
+        expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
+        await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/edit')
+      .send({ oldString: 'Active', newString: 'Agent', replaceAll: false })
+      .expect(200);
+
+    const expectedAgentMarkdown = await canonicalizeMarkdown('# Agent edit\n');
+    const expectedAgentHash = sha256Hex(expectedAgentMarkdown);
+
+    expect(response.body).toEqual({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
+  });
+
   it('flushes live state and creates an autosave version before read_doc returns version and hash', async () => {
     const runtime = createHeadlessMilkdownRuntime();
     const seeded = await runtime.initializeFromMarkdown('# Human live edit\n');

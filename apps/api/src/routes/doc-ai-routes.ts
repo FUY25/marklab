@@ -1,11 +1,13 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
+import type { HttpAppOptions } from '../http/app';
 import { readBranchState } from '../services/doc-read';
 import { applyEditToMarkdown, EditConflictError } from '../services/doc-write';
 import { applyMarkdownToBranchState } from '../services/editor-state';
 import type { LiveMarkdownOperation, LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
+import { toRoomName } from '../collab/persistence';
 
 const writeSchema = z.object({
   baseVersionId: z.string().min(1),
@@ -26,13 +28,14 @@ function requiredParam(req: Request, name: string): string {
   return value;
 }
 
-export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) {
+export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const router = Router();
 
   router.get('/docs/:docId/branches/:branchId/read', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      await options.flushCollabDocument?.(toRoomName(docId, branchId));
       await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave');
       res.json(await readBranchState(pool, docId, branchId));
     } catch (error) {
@@ -46,6 +49,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
 
     try {
       const body = writeSchema.parse(req.body);
+      await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);
       if (current.versionId !== body.baseVersionId) throw new Error('stale_base_version');
 
@@ -85,6 +89,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const body = editSchema.parse(req.body);
+      await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);
       let nextMarkdown: string;
       try {

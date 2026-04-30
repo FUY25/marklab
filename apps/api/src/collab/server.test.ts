@@ -13,6 +13,11 @@ interface TestableHocuspocus {
   destroy?(): Promise<void> | void;
 }
 
+interface TestableCollabServer {
+  server: TestableHocuspocus;
+  flushDocument(roomName: string): Promise<void>;
+}
+
 function createState(text: string): Uint8Array {
   const doc = new Y.Doc();
   doc.getText('prosemirror').insert(0, text);
@@ -98,35 +103,85 @@ function createPersistencePool(initialState: Uint8Array) {
 }
 
 describe('createCollabServer persistence hooks', () => {
-  it('recovers after an API write wins the Yjs persistence race for an open document', async () => {
+  it('flushes an active document without waiting for the Hocuspocus store timer', async () => {
     const initialState = createState('loaded');
-    const apiState = updateState(initialState, (text) => text.insert(text.length, ' api'));
     const store = createPersistencePool(initialState);
-    const server = createCollabServer(store.pool) as unknown as TestableHocuspocus;
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
     const document = new Y.Doc();
     const roomName = toRoomName('doc_001', 'br_main');
 
     try {
-      const loadedState = await server.configuration.onLoadDocument({ documentName: roomName, document });
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('prosemirror').insert(document.getText('prosemirror').length, ' active');
+
+      await collab.flushDocument(roomName);
+
+      expect(store.getStoreAttemptCount()).toBe(1);
+      expect(textFromState(store.getPersistedState())).toBe('loaded active');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('retries an active flush after refreshing stale persistence metadata', async () => {
+    const initialState = createState('loaded');
+    const apiState = updateState(initialState, (text) => text.insert(text.length, ' api'));
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
       expect(loadedState).toBeInstanceOf(Uint8Array);
       Y.applyUpdate(document, loadedState ?? new Uint8Array());
       document.getText('prosemirror').insert(document.getText('prosemirror').length, ' human');
 
       store.replacePersistedState(apiState);
 
-      await server.configuration.onStoreDocument({ documentName: roomName, document });
+      await collab.flushDocument(roomName);
+
+      expect(store.getStoreAttemptCount()).toBe(2);
+      expect(textFromState(store.getPersistedState())).toContain('api');
+      expect(textFromState(store.getPersistedState())).toContain('human');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('recovers after an API write wins the Yjs persistence race for an open document', async () => {
+    const initialState = createState('loaded');
+    const apiState = updateState(initialState, (text) => text.insert(text.length, ' api'));
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('prosemirror').insert(document.getText('prosemirror').length, ' human');
+
+      store.replacePersistedState(apiState);
+
+      await collab.server.configuration.onStoreDocument({ documentName: roomName, document });
 
       expect(store.getStoreAttemptCount()).toBe(2);
       expect(textFromState(store.getPersistedState())).toContain('api');
       expect(textFromState(store.getPersistedState())).toContain('human');
 
       document.getText('prosemirror').insert(document.getText('prosemirror').length, ' again');
-      await server.configuration.onStoreDocument({ documentName: roomName, document });
+      await collab.server.configuration.onStoreDocument({ documentName: roomName, document });
 
       expect(textFromState(store.getPersistedState())).toContain('again');
     } finally {
       document.destroy();
-      await server.destroy?.();
+      await collab.server.destroy?.();
     }
   });
 });

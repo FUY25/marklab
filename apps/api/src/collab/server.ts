@@ -8,8 +8,14 @@ interface LoadedDocumentState {
   yjsState: Uint8Array | null;
 }
 
+export interface CollabServerHandle {
+  server: Hocuspocus;
+  flushDocument(roomName: string): Promise<void>;
+}
+
 export function createCollabServer(pool: DbPool) {
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
+  const activeDocumentByRoomName = new Map<string, Y.Doc>();
 
   async function refreshDocumentState(documentName: string, document: Y.Doc): Promise<LoadedDocumentState | null> {
     const loaded = await loadYjsStateWithMetadata(pool, documentName);
@@ -21,7 +27,37 @@ export function createCollabServer(pool: DbPool) {
     };
   }
 
-  return new Hocuspocus({
+  async function storeDocumentState(documentName: string, document: Y.Doc): Promise<void> {
+    const update = Y.encodeStateAsUpdate(document);
+    const loaded = loadedStateByDocument.get(document);
+    const stored = await storeYjsState(pool, documentName, update, loaded?.stateFingerprint ?? null, loaded?.yjsState ?? null);
+    if (stored.stored && stored.stateFingerprint !== undefined) {
+      loadedStateByDocument.set(document, {
+        stateFingerprint: stored.stateFingerprint,
+        yjsState: update,
+      });
+      return;
+    }
+
+    const refreshed = await refreshDocumentState(documentName, document);
+    if (!refreshed) {
+      loadedStateByDocument.delete(document);
+      return;
+    }
+
+    const mergedUpdate = Y.encodeStateAsUpdate(document);
+    const retry = await storeYjsState(pool, documentName, mergedUpdate, refreshed.stateFingerprint, refreshed.yjsState);
+    if (retry.stored && retry.stateFingerprint !== undefined) {
+      loadedStateByDocument.set(document, {
+        stateFingerprint: retry.stateFingerprint,
+        yjsState: mergedUpdate,
+      });
+    } else {
+      loadedStateByDocument.set(document, refreshed);
+    }
+  }
+
+  const server = new Hocuspocus({
     name: 'marklab',
     async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
       const loaded = await loadYjsStateWithMetadata(pool, documentName);
@@ -31,35 +67,21 @@ export function createCollabServer(pool: DbPool) {
           yjsState: loaded.yjsState,
         });
       }
+      activeDocumentByRoomName.set(documentName, document);
       return loaded.yjsState ?? createEmptyYjsState();
     },
     async onStoreDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
-      const update = Y.encodeStateAsUpdate(document);
-      const loaded = loadedStateByDocument.get(document);
-      const stored = await storeYjsState(pool, documentName, update, loaded?.stateFingerprint ?? null, loaded?.yjsState ?? null);
-      if (stored.stored && stored.stateFingerprint !== undefined) {
-        loadedStateByDocument.set(document, {
-          stateFingerprint: stored.stateFingerprint,
-          yjsState: update,
-        });
-      } else {
-        const refreshed = await refreshDocumentState(documentName, document);
-        if (!refreshed) {
-          loadedStateByDocument.delete(document);
-          return;
-        }
-
-        const mergedUpdate = Y.encodeStateAsUpdate(document);
-        const retry = await storeYjsState(pool, documentName, mergedUpdate, refreshed.stateFingerprint, refreshed.yjsState);
-        if (retry.stored && retry.stateFingerprint !== undefined) {
-          loadedStateByDocument.set(document, {
-            stateFingerprint: retry.stateFingerprint,
-            yjsState: mergedUpdate,
-          });
-        } else {
-          loadedStateByDocument.set(document, refreshed);
-        }
-      }
+      activeDocumentByRoomName.set(documentName, document);
+      await storeDocumentState(documentName, document);
     },
   });
+
+  return {
+    server,
+    async flushDocument(roomName: string) {
+      const document = activeDocumentByRoomName.get(roomName);
+      if (!document) return;
+      await storeDocumentState(roomName, document);
+    },
+  } satisfies CollabServerHandle;
 }

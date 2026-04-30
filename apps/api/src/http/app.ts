@@ -6,6 +6,10 @@ import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createVersionRoutes } from '../routes/version-routes';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 
+export interface HttpAppOptions {
+  flushCollabDocument?: (roomName: string) => Promise<void>;
+}
+
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   if (error instanceof ZodError) {
     res.status(400).json({ error: 'invalid_request', issues: error.issues });
@@ -60,7 +64,7 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   res.status(500).json({ error: 'internal_error' });
 };
 
-export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter) {
+export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
 
@@ -68,8 +72,8 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter) {
     res.json({ ok: true });
   });
 
-  app.use('/api', createDocAiRoutes(pool, liveWriter));
-  app.use('/api', createImportExportRoutes(pool));
+  app.use('/api', createDocAiRoutes(pool, liveWriter, options));
+  app.use('/api', createImportExportRoutes(pool, options));
   app.use('/api', createVersionRoutes(pool));
   app.use(errorHandler);
 

@@ -8,12 +8,12 @@ import { createPostgresLiveMarkdownWriter } from './services/postgres-live-write
 
 const port = Number(process.env.PORT ?? 3001);
 const pool = createPool();
-const collabServer = createCollabServer(pool);
+const collab = createCollabServer(pool);
 const liveWriter = createPostgresLiveMarkdownWriter(pool);
-const app = createHttpApp(pool, liveWriter);
+const app = createHttpApp(pool, liveWriter, { flushCollabDocument: collab.flushDocument });
 const httpServer = http.createServer(app);
 
-type ClientConnection = ReturnType<typeof collabServer.handleConnection>;
+type ClientConnection = ReturnType<typeof collab.server.handleConnection>;
 type PeerWithConnection = {
   hocuspocusConnection?: ClientConnection;
 };
@@ -22,7 +22,7 @@ const ws = crossws({
   hooks: {
     open(peer) {
       const peerWithConnection = peer as typeof peer & PeerWithConnection;
-      peerWithConnection.hocuspocusConnection = collabServer.handleConnection(
+      peerWithConnection.hocuspocusConnection = collab.server.handleConnection(
         peer.websocket as unknown as WebSocketLike,
         peer.request as Request,
         {},
