@@ -78,6 +78,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'document_not_found') {
+    res.status(404).json({ error: 'document_not_found' });
+    return;
+  }
+
   if (error instanceof Error && (error.message === 'version_not_found' || error.message === 'source_version_not_found')) {
     res.status(404).json({ error: error.message });
     return;
@@ -132,7 +137,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
 
   app.use('/api', createDocAiRoutes(pool, liveWriter, options));
   app.use('/api', createImportExportRoutes(pool, options));
-  app.use('/api', createVersionRoutes(pool));
+  app.use('/api', createVersionRoutes(pool, liveWriter, options));
   app.use(errorHandler);
 
   return app;

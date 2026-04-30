@@ -10,6 +10,10 @@ export type LiveMarkdownOperation =
       oldString: string;
       newString: string;
       replaceAll: boolean;
+    }
+  | {
+      kind: 'rollback';
+      sourceVersionId: string;
     };
 
 export interface LiveMarkdownTransaction {

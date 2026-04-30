@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DbExecutor, DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
-import { branchFromVersion, listVersions, nextVersionNumber, showVersion } from './version-service';
+import {
+  branchFromVersion,
+  getDocumentSummary,
+  listBranches,
+  listVersions,
+  nextVersionNumber,
+  showVersion,
+} from './version-service';
 import { initializeBranchEditorState } from './milkdown-transformer';
 
 vi.mock('./milkdown-transformer', () => ({
@@ -109,6 +116,62 @@ describe('showVersion', () => {
     } as DbExecutor;
 
     await expect(showVersion(pool, 'doc_001', 'ver_missing')).rejects.toThrow('version_not_found');
+  });
+});
+
+describe('getDocumentSummary', () => {
+  it('maps document metadata for API consumers', async () => {
+    const pool = {
+      query: async () => ({
+        rows: [{ id: 'doc_001', title: 'Launch notes', default_branch_id: 'br_main' }],
+      }),
+    } as DbExecutor;
+
+    await expect(getDocumentSummary(pool, 'doc_001')).resolves.toEqual({
+      docId: 'doc_001',
+      title: 'Launch notes',
+      defaultBranchId: 'br_main',
+    });
+  });
+
+  it('rejects unknown documents', async () => {
+    const pool = {
+      query: async () => ({ rows: [] }),
+    } as DbExecutor;
+
+    await expect(getDocumentSummary(pool, 'doc_missing')).rejects.toThrow('document_not_found');
+  });
+});
+
+describe('listBranches', () => {
+  it('maps branch metadata with head version numbers', async () => {
+    const pool = {
+      query: async () => ({
+        rows: [
+          {
+            id: 'br_main',
+            name: 'Main',
+            slug: 'main',
+            head_version_id: 'ver_002',
+            created_from_version_id: null,
+            is_archived: false,
+            version_number: 2,
+          },
+        ],
+      }),
+    } as DbExecutor;
+
+    await expect(listBranches(pool, 'doc_001')).resolves.toEqual([
+      {
+        branchId: 'br_main',
+        name: 'Main',
+        slug: 'main',
+        headVersionId: 'ver_002',
+        createdFromVersionId: null,
+        isArchived: false,
+        headVersionNumber: 2,
+      },
+    ]);
   });
 });
 

@@ -11,7 +11,7 @@ import type {
   LiveMarkdownWriter,
 } from './live-writer';
 import { shouldCreateVersionForCurrentHash } from './save-policy';
-import { createVersionWithClient, type VersionActorType } from './version-service';
+import { createVersionWithClient, type VersionActorType, type VersionOperation } from './version-service';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface ApplyMarkdownToBranchInput {
@@ -33,12 +33,14 @@ export interface ApplyMarkdownToBranchResult {
   versionNumber: number;
 }
 
-function versionOperationForLiveOperation(operation: LiveMarkdownOperation): 'write' | 'edit' {
+function versionOperationForLiveOperation(operation: LiveMarkdownOperation): 'write' | 'edit' | 'rollback' {
   switch (operation.kind) {
     case 'write':
       return 'write';
     case 'edit':
       return 'edit';
+    case 'rollback':
+      return 'rollback';
   }
 }
 
@@ -103,16 +105,21 @@ async function assertOperationStillApplies(
   liveTransaction: AppliedLiveMarkdownTransaction,
   targetCanonicalMarkdown: string,
 ): Promise<void> {
-  if (input.operation.kind === 'write') {
-    if (branchState.headVersionId !== input.operation.baseVersionId) throw new Error('stale_base_version');
-    if (liveTransaction.previousHash === undefined) throw new Error('live_writer_missing_previous_hash');
-    if (liveTransaction.previousHash !== input.operation.baseHash) throw new Error('stale_live_base_hash');
-    return;
+  switch (input.operation.kind) {
+    case 'write':
+      if (branchState.headVersionId !== input.operation.baseVersionId) throw new Error('stale_base_version');
+      if (liveTransaction.previousHash === undefined) throw new Error('live_writer_missing_previous_hash');
+      if (liveTransaction.previousHash !== input.operation.baseHash) throw new Error('stale_live_base_hash');
+      return;
+    case 'edit': {
+      const baseMarkdown = liveTransaction.previousSerializedMarkdown ?? branchState.currentMarkdown;
+      const expectedMarkdown = await expectedEditMarkdown(baseMarkdown, input.operation);
+      if (expectedMarkdown !== targetCanonicalMarkdown) throw new Error('live_yjs_state_changed');
+      return;
+    }
+    case 'rollback':
+      return;
   }
-
-  const baseMarkdown = liveTransaction.previousSerializedMarkdown ?? branchState.currentMarkdown;
-  const expectedMarkdown = await expectedEditMarkdown(baseMarkdown, input.operation);
-  if (expectedMarkdown !== targetCanonicalMarkdown) throw new Error('live_yjs_state_changed');
 }
 
 async function createPreAgentCheckpointIfNeeded(
@@ -134,6 +141,7 @@ async function createPreAgentCheckpointIfNeeded(
     return branchState.headVersionId;
   }
 
+  const checkpointOperation: VersionOperation = input.operation.kind === 'rollback' ? 'manual_save' : 'autosave';
   const checkpoint = await createVersionWithClient({
     client,
     docId: input.docId,
@@ -142,10 +150,42 @@ async function createPreAgentCheckpointIfNeeded(
     markdown: checkpointMarkdown,
     hash: checkpointHash,
     actorType: 'system',
-    operation: 'autosave',
+    operation: checkpointOperation,
   });
 
   return checkpoint.versionId;
+}
+
+export interface RestoreVersionToBranchInput {
+  pool: DbPool;
+  liveWriter: LiveMarkdownWriter;
+  docId: string;
+  branchId: string;
+  versionId: string;
+}
+
+export async function restoreVersionToBranchState(
+  input: RestoreVersionToBranchInput,
+): Promise<ApplyMarkdownToBranchResult> {
+  const source = await input.pool.query<{ id: string; doc_id: string; markdown_snapshot: string }>(
+    `select id, doc_id, markdown_snapshot
+       from document_versions
+      where id = $1`,
+    [input.versionId],
+  );
+  const sourceRow = source.rows[0];
+  if (!sourceRow || sourceRow.doc_id !== input.docId) throw new Error('source_version_not_found');
+
+  return applyMarkdownToBranchState({
+    pool: input.pool,
+    liveWriter: input.liveWriter,
+    docId: input.docId,
+    branchId: input.branchId,
+    parentVersionId: sourceRow.id,
+    markdown: sourceRow.markdown_snapshot,
+    operation: { kind: 'rollback', sourceVersionId: sourceRow.id },
+    actorType: 'system',
+  });
 }
 
 function assertValidLiveYjsState(yjsState: Uint8Array): void {

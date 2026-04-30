@@ -93,6 +93,52 @@ function toIsoString(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+export async function getDocumentSummary(pool: DbExecutor, docId: string) {
+  const result = await pool.query<{
+    id: string;
+    title: string;
+    default_branch_id: string | null;
+  }>(
+    `select d.id, d.title, d.default_branch_id
+       from documents d
+      where d.id = $1`,
+    [docId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('document_not_found');
+
+  return { docId: row.id, title: row.title, defaultBranchId: row.default_branch_id };
+}
+
+export async function listBranches(pool: DbExecutor, docId: string) {
+  const result = await pool.query<{
+    id: string;
+    name: string;
+    slug: string;
+    head_version_id: string | null;
+    created_from_version_id: string | null;
+    is_archived: boolean;
+    version_number: number | null;
+  }>(
+    `select b.id, b.name, b.slug, b.head_version_id, b.created_from_version_id, b.is_archived, v.version_number
+       from document_branches b
+       left join document_versions v on v.id = b.head_version_id
+      where b.doc_id = $1
+      order by b.created_at asc`,
+    [docId],
+  );
+
+  return result.rows.map((row) => ({
+    branchId: row.id,
+    name: row.name,
+    slug: row.slug,
+    headVersionId: row.head_version_id,
+    createdFromVersionId: row.created_from_version_id,
+    isArchived: row.is_archived,
+    headVersionNumber: row.version_number,
+  }));
+}
+
 export async function listVersions(pool: DbExecutor, docId: string, branchId: string) {
   const result = await pool.query<{
     id: string;

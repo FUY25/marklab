@@ -168,6 +168,58 @@ describe('applyMarkdownToBranchState', () => {
     });
   });
 
+  it('persists rollback versions through the live writer path', async () => {
+    const { pool, queries } = createFakePool();
+    const liveSerializedMarkdown = '# Restored snapshot\n';
+    const liveYjsState = createValidYjsState();
+    const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown, liveYjsState, 'sha256:head');
+
+    const result = await applyMarkdownToBranchState({
+      pool,
+      liveWriter,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      parentVersionId: 'ver_001',
+      markdown: '# Old snapshot\n',
+      operation: { kind: 'rollback', sourceVersionId: 'ver_old' },
+      actorType: 'system',
+    });
+
+    const expectedMarkdown = await canonicalizeMarkdown(liveSerializedMarkdown);
+    const expectedHash = sha256Hex(expectedMarkdown);
+
+    expect(liveWriter.transactions).toEqual([
+      {
+        branchId: 'br_main',
+        targetCanonicalMarkdown: '# Old snapshot\n',
+        operation: { kind: 'rollback', sourceVersionId: 'ver_old' },
+      },
+    ]);
+
+    const branchStateUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
+    expect(branchStateUpdate?.params).toEqual([
+      'br_main',
+      expectedMarkdown,
+      expectedHash,
+      Buffer.from(liveYjsState),
+      expect.any(String),
+    ]);
+
+    const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInsert?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_001',
+      2,
+      expectedMarkdown,
+      expectedHash,
+      'system',
+      null,
+      'rollback',
+    ]);
+    expect(result).toMatchObject({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
+  });
+
   it('creates a pre-agent checkpoint before a full write only when the live hash matches the submitted base hash', async () => {
     const { pool, queries } = createFakePool({
       currentMarkdown: '# Human draft\n',
