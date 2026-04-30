@@ -88,6 +88,15 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await page.goto(webUrl);
   await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
 
+  await page.getByLabel('Document id').fill(importedDocument.docId);
+  await page.getByLabel('Branch id').fill(importedDocument.branchId);
+  await page.getByRole('button', { name: 'Open' }).click();
+  await expect(page).toHaveURL(
+    `/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,
+  );
+  await page.goto(webUrl);
+  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
+
   await page.evaluate(() => localStorage.clear());
   await page.goto(
     `${webUrl}/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,

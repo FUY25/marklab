@@ -72,10 +72,13 @@ export function HomePage() {
     }
 
     setError(null);
+    const existingRecent = loadRecentDocuments().find(
+      (document) => document.docId === normalizedDocId && document.branchId === normalizedBranchId,
+    );
     const nextRecent = rememberRecentDocument({
       docId: normalizedDocId,
       branchId: normalizedBranchId,
-      title: normalizedDocId,
+      title: existingRecent?.title ?? normalizedDocId,
     });
     setRecentDocuments(nextRecent);
     openDocument(normalizedDocId, normalizedBranchId);
