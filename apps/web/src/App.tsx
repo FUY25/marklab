@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { MilkdownEditor } from './components/MilkdownEditor';
+import { RemoteDocumentPage } from './pages/RemoteDocumentPage';
+import { parseAppRoute } from './routes';
 
 const initialMarkdown = '# MarkLab\n\nEdit this collaborative Markdown document.\n';
 const remoteBridgeOrigin = 'remote-test-bridge';
@@ -35,9 +37,13 @@ function createLinkedDocs() {
 }
 
 export function App() {
-  const twoEditorMode = new URLSearchParams(window.location.search).get('collab') === 'two';
+  const route = parseAppRoute(window.location);
 
-  if (twoEditorMode) return <TwoEditorCollabHarness />;
+  if (route.kind === 'remote-document') {
+    return <RemoteDocumentPage docId={route.docId} branchId={route.branchId} />;
+  }
+
+  if (route.kind === 'local-two') return <TwoEditorCollabHarness />;
 
   return <SingleEditorWorkspace />;
 }
