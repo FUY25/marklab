@@ -31,17 +31,17 @@ Multiple coherent changes are represented as a guarded `write_doc` with full tar
 
 ## Full write safety
 
-Full writes are dangerous because they can overwrite human edits. Therefore `write_doc` requires exact `baseVersionId` and `baseHash` match.
+Full writes are dangerous because they can overwrite human edits. Therefore `write_doc` requires exact `baseVersionId` and `baseHash` match against the current branch head and the freshly serialized live Milkdown/Yjs state.
 
 Algorithm:
 
 ```ts
-export function canApplyFullWrite(currentVersionId: string, currentHash: string, baseVersionId: string, baseHash: string): boolean {
-  return currentVersionId === baseVersionId && currentHash === baseHash;
+export function canApplyFullWrite(headVersionId: string, liveHash: string, baseVersionId: string, baseHash: string): boolean {
+  return headVersionId === baseVersionId && liveHash === baseHash;
 }
 ```
 
-If the version id differs, reject with `409 stale_base_version`. If the hash differs, reject with `409 stale_base_hash`.
+If the version id differs, reject with `409 stale_base_version`. If the branch head still matches but freshly serialized live Yjs has a different hash from the submitted `baseHash`, reject with `409 live_yjs_state_changed` and require the agent to call `read_doc` again.
 
 > **Context note:** An earlier route sketch parsed `baseVersionId` but ignored it. That made the API contract misleading. The corrected full-write guard checks both version and hash and returns the current version/hash on conflict.
 
@@ -92,7 +92,7 @@ meaningful, broad, multi-region, high-stakes, destructive, or user-cautious chan
   -> model calls write_doc only after the user proceeds through the agent/tool loop
 ```
 
-The product server does not persist preview objects, change sets, local proposal snapshots, or accept/reject state in MVP. It reports server-level states such as `written`, `stale_base_version`, `stale_base_hash`, `old_string_not_found`, or `ambiguous_match`.
+The product server does not persist preview objects, change sets, local proposal snapshots, or accept/reject state in MVP. It reports server-level states such as `written`, `stale_base_version`, `live_yjs_state_changed`, `old_string_not_found`, or `ambiguous_match`.
 
 ## Applying AI edits to Milkdown state
 
@@ -152,14 +152,16 @@ autosave:
   trigger after roughly 30s idle or on blur/page hide
 
 pre-agent checkpoint:
-  before an agent write/edit, if branch current_hash differs from the head version hash, create a checkpoint version of the current human state
-  then create the AI version with that checkpoint as parent
+  before an accepted agent edit, if fresh live state differs from the head version hash, create a checkpoint version of the current human state
+  before an accepted agent write, create that checkpoint only when the submitted baseHash already matches the freshly serialized live hash
+  if write_doc baseHash differs from the freshly serialized live hash, reject instead of checkpointing through the stale base
+  then create the AI version with the checkpoint as parent when a checkpoint was created
 
 AI write/edit:
   create a version immediately after the minimal transaction live writer succeeds
 ```
 
-The pre-agent checkpoint bypasses the autosave throttle. This keeps version history honest: human work that existed before the agent operation is represented as a human/system checkpoint, and the agent version contains only the agent's submitted semantic operation on top of that checkpoint.
+The pre-agent checkpoint bypasses the autosave throttle. This keeps version history honest for accepted operations: human work that existed before the agent operation is represented as a human/system checkpoint, and the agent version contains only the agent's submitted semantic operation on top of that checkpoint. For full-document `write_doc`, the checkpoint must not silently bridge a stale submitted base; stale live state is a conflict and the agent must reread.
 
 ## Version DAG
 

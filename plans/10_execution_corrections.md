@@ -55,6 +55,7 @@ The following corrections should be applied while executing the plans.
 23. `LiveMarkdownWriter.applyMarkdownTransaction()` must return a valid non-empty encoded `yjsState` with `serializedMarkdown`, and `applyMarkdownToBranchState()` must persist that Yjs state transactionally with the canonical mirror and immutable version snapshot. Empty or invalid writer state is a fail-closed `503 invalid_live_yjs_state`, not a mirror-only fallback.
 24. Export must not produce a versioned filename unless the flushed mirror hash matches the branch head version hash. Normal dirty live state should be handled by the flush path creating or selecting a matching system version before export/read returns; `export_version_mismatch` is reserved for impossible or externally inconsistent post-flush state.
 25. `plans/06_2_live_writer_transformer_integration_plan.md` sits between Plan 6 and Plan 7. It converts the Plan 4/5/6 fail-closed seams into a real headless Milkdown transformer, concrete Postgres live writer, and read/export flush behavior. Plan 7 must not start until Plan 6.2's deployment gate passes.
+26. Full-document `write_doc` must reject if the freshly serialized live Yjs Markdown hash differs from the submitted `baseHash`. Pre-agent checkpoint creation can preserve human work for accepted edits or fresh-base writes, but it must not silently bridge a stale full-document write over newer live human edits. Agents should handle `live_yjs_state_changed` by calling `read_doc` again and rebuilding the target from the latest document.
 
 ## Safe First Slice
 

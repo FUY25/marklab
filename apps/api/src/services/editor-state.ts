@@ -3,7 +3,7 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbTransactionClient } from '../db/client';
 import { withTransaction } from '../db/client';
-import { applyEditToMarkdown, assertCanWrite } from './doc-write';
+import { applyEditToMarkdown } from './doc-write';
 import type {
   AppliedLiveMarkdownTransaction,
   LiveMarkdownOperation,
@@ -104,12 +104,9 @@ async function assertOperationStillApplies(
   targetCanonicalMarkdown: string,
 ): Promise<void> {
   if (input.operation.kind === 'write') {
-    assertCanWrite(
-      branchState.headVersionId,
-      branchState.currentHash,
-      input.operation.baseVersionId,
-      input.operation.baseHash,
-    );
+    if (branchState.headVersionId !== input.operation.baseVersionId) throw new Error('stale_base_version');
+    if (liveTransaction.previousHash === undefined) throw new Error('live_writer_missing_previous_hash');
+    if (liveTransaction.previousHash !== input.operation.baseHash) throw new Error('stale_live_base_hash');
     return;
   }
 

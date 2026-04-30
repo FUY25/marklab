@@ -136,9 +136,7 @@ export interface EditDocRequest {
 
 `ReadDocResponse.hash` is the current canonical mirror hash returned to agents as `baseHash`. `ReadDocResponse.versionId` is the branch head version used as `baseVersionId`. Before returning, `read_doc` flushes live Milkdown/Yjs state through the canonical serializer path; if the flushed mirror hash differs from the branch head version hash, it creates or selects a matching system autosave version so the returned `versionId` and `hash` describe the same Markdown body.
 
-> **Current implementation note:** The live-state flush and matching autosave version are Plan 6.2 behavior. In the current pre-6.2 code, `read_doc` reads the stored canonical mirror; the fail-closed Milkdown transformer and concrete read flush must not be treated as implemented yet.
-
-`write_doc` uses `baseVersionId` and `baseHash` as hard stale-write guards against the current branch head and current canonical mirror. `edit_doc` is a Claude-like exact string replacement against the current canonical Markdown; `observedVersionId` is optional audit context and is not a stale guard by default.
+`write_doc` uses `baseVersionId` and `baseHash` as hard stale-write guards against the current branch head and the freshly serialized live Milkdown/Yjs state. If the live serialized hash differs from the submitted `baseHash`, the write is rejected and the agent must call `read_doc` again before producing a new full-document target. `edit_doc` is a Claude-like exact string replacement against the current canonical Markdown; `observedVersionId` is optional audit context and is not a stale guard by default.
 
 ## API contracts
 
@@ -238,13 +236,11 @@ Response when accepted:
 }
 ```
 
-Response when stale:
+Response when live state changed after the agent read its base:
 
 ```json
 {
-  "error": "stale_base_hash",
-  "currentVersionId": "ver_045",
-  "currentHash": "sha256:..."
+  "error": "live_yjs_state_changed"
 }
 ```
 
@@ -261,6 +257,8 @@ HTTP status: `409`.
 ```
 
 > **Context note:** Earlier route sketches parsed `baseVersionId` but only checked `baseHash`. The corrected contract treats the version id as part of the full-write guard so agents receive precise conflict information.
+
+If the branch head is still the requested base version but freshly serialized live Yjs has moved past the submitted `baseHash`, return `409 live_yjs_state_changed`. This is the retry signal for agents: call `read_doc` again, merge the latest human/live edits into the intended target, and retry with the new base.
 
 An accepted `write_doc` is full-document at the API boundary only. Internally it must run through the minimal transaction live writer: parse the target canonical Markdown, compare it to the current Yjs-bound ProseMirror document, apply only changed ranges through transactions/Yjs updates, serialize the live document back to canonical Markdown, and then update `yjs_state`, `current_markdown`, `current_hash`, and the branch head version in one transaction.
 
@@ -321,7 +319,7 @@ read_doc -> edit_doc for one exact local replacement
 read_doc -> write_doc for full target Markdown
 ```
 
-The server reports deterministic execution outcomes such as `written`, `stale_base_version`, `stale_base_hash`, `old_string_not_found`, and `ambiguous_match`. User-level accept/reject is owned by Codex/Claude Code or the surrounding agent runtime, not by MarkLab API state.
+The server reports deterministic execution outcomes such as `written`, `stale_base_version`, `live_yjs_state_changed`, `old_string_not_found`, and `ambiguous_match`. User-level accept/reject is owned by Codex/Claude Code or the surrounding agent runtime, not by MarkLab API state.
 
 ### Export
 
@@ -335,8 +333,6 @@ Response:
 - Content-Disposition filename uses export metadata format.
 
 Before export, the branch is flushed through the same Milkdown serializer path used by `read_doc`. The response filename must use a version/hash that match the exported body; if the post-flush mirror and branch head version still disagree, return `409 export_version_mismatch` instead of producing a misleading versioned filename.
-
-> **Current implementation note:** Until Plan 6.2 replaces the fail-closed transformer, export can fail with `milkdown_transformer_not_configured`. The existing pre-6.2 route still refuses a versioned filename if an already-flushed/current mirror hash differs from the branch head version hash.
 
 ### Branch from version
 

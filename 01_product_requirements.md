@@ -80,13 +80,13 @@ Acceptance criteria:
 1. Agent calls `read_doc` and receives `versionId`, `hash`, and Markdown. The agent sends those values back to `write_doc` as `baseVersionId` and `baseHash`.
 2. For broad, meaningful, multi-location, high-stakes, or user-cautious changes, agent explains the proposed change in chat before writing. It should include a concise before/after excerpt or diff when that helps review.
 3. If the user proceeds through the agent/tool permission loop, agent calls `write_doc` with `baseVersionId`, `baseHash`, and the full target Markdown.
-4. Server accepts only if current version and hash still match.
+4. Server accepts only if the branch head version and freshly serialized live Yjs hash still match the submitted base.
 5. Server updates live editor state through the minimal transaction live writer and creates a version.
 6. CLI reports the server outcome with `versionId` and `hash` on success.
 
 Acceptance criteria:
 
-- Stale full-write returns `409 stale_base_hash` and does not modify the doc.
+- Full-write after newer live edits returns `409 live_yjs_state_changed` and does not modify the doc.
 - Stale full-write version returns `409 stale_base_version` and does not modify the doc.
 - Successful full-write creates a version.
 - Online users see the update.

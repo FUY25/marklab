@@ -16,8 +16,8 @@
 - Import Markdown creates doc, branch, Yjs state, mirror, and version.
 - New branch/import Yjs state is a valid encoded update containing the imported/version Markdown in the Milkdown/Yjs document model, not an empty collaborative document beside a non-empty mirror.
 - If MVP uses live-writer seed-if-empty as a fallback, tests prove the writer seeds from `current_markdown` before applying the target transaction.
-- `write_doc` rejects stale base hash.
 - `write_doc` rejects stale base version.
+- `write_doc` rejects when freshly serialized live Yjs hash differs from the submitted base hash, without creating checkpoint or agent versions.
 - `edit_doc` accepts unique old string even if base version is stale.
 - `edit_doc` rejects ambiguous string.
 - Branch from version creates isolated branch state.
@@ -30,7 +30,7 @@
 - HTTP e2e tests must prove stale full writes and unavailable live writers do not call or bypass the minimal transaction writer.
 - Export tests must prove dirty but serializable live state becomes a matching system version before export, while impossible post-flush hash disagreement returns `export_version_mismatch`.
 - CLI tests verify simple online command semantics: `read_doc` returns canonical Markdown, `edit_doc` submits one exact replacement, `write_doc` submits full target Markdown with base version/hash, and no default snapshot workflow is required.
-- Save-policy tests verify manual saves, autosave throttling, and pre-agent checkpoint creation when a dirty human mirror is not represented by the branch head version.
+- Save-policy tests verify manual saves, autosave throttling, and pre-agent checkpoint creation for accepted edits or fresh-base writes when a dirty human mirror is not represented by the branch head version.
 
 ### Editor spike tests
 

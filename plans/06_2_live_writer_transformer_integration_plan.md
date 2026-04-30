@@ -83,6 +83,10 @@ If the flush cannot serialize live state, export still fails closed. `export_ver
 
 `read_doc` is an agent boundary. It must flush the live Milkdown/Yjs state to the canonical mirror before returning Markdown. If the flushed hash differs from the head version hash, it must create a system `autosave` version so the returned `versionId` and `hash` are a valid pair for a later guarded `write_doc`.
 
+### Full Write Freshness Boundary
+
+`write_doc` must compare the submitted `baseHash` with the Markdown hash serialized from live Yjs before the agent transaction is applied. If those hashes differ, reject with a retryable conflict and require the agent to call `read_doc` again. Pre-agent checkpoint creation must not turn a stale full-document write into an accepted overwrite of newer human live edits.
+
 ## Task 1: Add API Milkdown Runtime Dependencies
 
 **Files:**

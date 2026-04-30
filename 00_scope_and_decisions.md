@@ -154,4 +154,4 @@ marklab export
 marklab import
 ```
 
-The CLI reports server outcomes such as `written`, `stale_base_version`, `stale_base_hash`, `old_string_not_found`, or `ambiguous_match`. It does not report user-level `accepted` or `rejected` because that decision belongs to Codex/Claude Code's permission and chat loop.
+The CLI reports server outcomes such as `written`, `stale_base_version`, `live_yjs_state_changed`, `old_string_not_found`, or `ambiguous_match`. It does not report user-level `accepted` or `rejected` because that decision belongs to Codex/Claude Code's permission and chat loop.

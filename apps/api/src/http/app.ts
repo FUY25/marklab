@@ -32,6 +32,16 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'live_writer_missing_previous_hash') {
+    res.status(503).json({ error: 'live_writer_missing_previous_hash' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'stale_live_base_hash') {
+    res.status(409).json({ error: 'live_yjs_state_changed' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'milkdown_transformer_not_configured') {
     res.status(503).json({ error: 'milkdown_transformer_not_configured' });
     return;

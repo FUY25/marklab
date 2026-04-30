@@ -202,21 +202,7 @@ Create `apps/api/src/services/doc-write.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { applyEditToMarkdown, assertCanWrite } from './doc-write';
-
-describe('assertCanWrite', () => {
-  it('accepts matching base version and hash', () => {
-    expect(() => assertCanWrite('ver_a', 'sha256:a', 'ver_a', 'sha256:a')).not.toThrow();
-  });
-
-  it('rejects stale base hash', () => {
-    expect(() => assertCanWrite('ver_a', 'sha256:b', 'ver_a', 'sha256:a')).toThrow('stale_base_hash');
-  });
-
-  it('rejects stale base version', () => {
-    expect(() => assertCanWrite('ver_b', 'sha256:a', 'ver_a', 'sha256:a')).toThrow('stale_base_version');
-  });
-});
+import { applyEditToMarkdown } from './doc-write';
 
 describe('applyEditToMarkdown', () => {
   it('applies unique old_string replacement', () => {
@@ -259,11 +245,6 @@ export class EditConflictError extends Error {
   }
 }
 
-export function assertCanWrite(currentVersionId: string, currentHash: string, baseVersionId: string, baseHash: string): void {
-  if (currentVersionId !== baseVersionId) throw new Error('stale_base_version');
-  if (currentHash !== baseHash) throw new Error('stale_base_hash');
-}
-
 export function applyEditToMarkdown(markdown: string, oldString: string, newString: string, replaceAll: boolean): string {
   const target = findEditTarget(markdown, oldString, replaceAll);
   if (target.kind === 'not_found') throw new EditConflictError('old_string_not_found');
@@ -277,7 +258,7 @@ export function applyEditToMarkdown(markdown: string, oldString: string, newStri
 }
 ```
 
-> **Context note:** The original route parsed `baseVersionId` but ignored it. The corrected full-write guard validates both base version and base hash, so stale full-document writes cannot silently cross version boundaries.
+> **Context note:** The original route parsed `baseVersionId` but ignored it. The corrected full-write guard validates the branch head version and the freshly serialized live Yjs hash, so stale full-document writes cannot silently cross version boundaries or overwrite newer live edits.
 
 `edit_doc` intentionally does not use cursor position or selection state. It applies exact `oldString`/`newString` replacement to the current canonical Markdown and then sends the resulting target Markdown through the same minimal transaction live writer as `write_doc`.
 
@@ -315,7 +296,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
 import { readBranchState } from '../services/doc-read';
-import { applyEditToMarkdown, assertCanWrite } from '../services/doc-write';
+import { applyEditToMarkdown } from '../services/doc-write';
 import { applyMarkdownToBranchState } from '../services/editor-state';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 
@@ -347,7 +328,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
     try {
       const body = writeSchema.parse(req.body);
       const current = await readBranchState(pool, req.params.docId, req.params.branchId);
-      assertCanWrite(current.versionId, current.hash, body.baseVersionId, body.baseHash);
+      if (current.versionId !== body.baseVersionId) throw new Error('stale_base_version');
       const applied = await applyMarkdownToBranchState({
         pool,
         liveWriter,
@@ -360,7 +341,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
       });
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {
-      if (error instanceof Error && (error.message === 'stale_base_hash' || error.message === 'stale_base_version')) {
+      if (error instanceof Error && error.message === 'stale_base_version') {
         const current = await readBranchState(pool, req.params.docId, req.params.branchId);
         res.status(409).json({
           error: error.message,

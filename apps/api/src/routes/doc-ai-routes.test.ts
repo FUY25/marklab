@@ -89,6 +89,7 @@ function createEchoLiveWriter(): LiveMarkdownWriter & { transactions: LiveMarkdo
       return {
         serializedMarkdown: transaction.targetCanonicalMarkdown,
         yjsState: createValidYjsState(),
+        ...(transaction.operation.kind === 'write' ? { previousHash: transaction.operation.baseHash } : {}),
         changedRangeCount: 1,
         changedCharacterCount: transaction.targetCanonicalMarkdown.length,
         documentCharacterCount: transaction.targetCanonicalMarkdown.length,

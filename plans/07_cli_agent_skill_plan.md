@@ -63,6 +63,8 @@ Use `edit_doc` when the change is one small exact replacement and `oldString` sh
 
 Use `write_doc` when the change affects multiple regions, changes structure, rewrites prose, deletes content, or cannot be represented as one exact replacement. `write_doc` requires `baseVersionId` and `baseHash` from a fresh `read_doc`.
 
+If `write_doc` returns `live_yjs_state_changed`, call `read_doc` again and rebuild the full target Markdown from the latest returned document. Do not retry the same full-document body against the old base.
+
 Before `write_doc`, the skill must instruct the model to explain the proposed change in chat. For high-stakes or meaningful changes, include a concise diff or before/after excerpt. The MarkLab server does not persist preview objects in MVP.
 
 ## Task 1: CLI package setup
@@ -410,6 +412,7 @@ Before `write-doc`, explain the proposed change in chat. For meaningful or high-
 - Do not call `write-doc` without a fresh `read-doc` base version and hash.
 - Do not use `edit-doc` for multiple independent changes or structural rewrites.
 - Do not bypass stale version/hash errors.
+- Do not retry the same `write-doc` body after `live_yjs_state_changed`; reread first and merge the latest human/live edits into a new target.
 - Do not treat product export files as live source of truth.
 - Do not require default local proposal snapshots, server-side change sets, or app-level accept/reject state.
 ```

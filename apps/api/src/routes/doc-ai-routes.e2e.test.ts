@@ -220,6 +220,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: liveSerializedMarkdown,
       yjsState: liveYjsState,
+      previousHash: 'sha256:current',
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -289,7 +290,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 
-  it('checks write guards before creating a dirty-branch checkpoint and agent child version', async () => {
+  it('accepts a checkpointed full write only when the live hash matches the submitted base hash', async () => {
     const { pool, queries } = createFakePool({
       currentMarkdown: '# Human draft\n',
       currentHash: 'sha256:dirty',
@@ -301,6 +302,8 @@ describe('doc AI routes minimal transaction e2e', () => {
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: '# Agent result\n',
       yjsState: createValidYjsState(),
+      previousSerializedMarkdown: '# Human draft\n',
+      previousHash: 'sha256:dirty',
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -322,7 +325,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     ]);
   });
 
-  it('flushes uncheckpointed live Yjs edits into an autosave before accepting a write based on the mirror', async () => {
+  it('rejects write_doc based on a stale mirror when freshly serialized live Yjs has changed', async () => {
     const runtime = createHeadlessMilkdownRuntime();
     const mirror = await runtime.initializeFromMarkdown('# Mirror A\n');
     const live = await runtime.initializeFromMarkdown('# Live B\n');
@@ -340,17 +343,10 @@ describe('doc AI routes minimal transaction e2e', () => {
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
       .send({ baseVersionId: 'ver_001', baseHash: mirror.hash, markdown: '# Agent C\n' })
-      .expect(200);
+      .expect(409);
 
-    const expectedAgentMarkdown = await canonicalizeMarkdown('# Agent C\n');
-    const expectedAgentHash = sha256Hex(expectedAgentMarkdown);
-    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
-
-    expect(response.body).toEqual({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
-    expect(versionInserts.map((query) => query.params)).toEqual([
-      ['doc_001', 'br_main', 'ver_001', 2, live.markdown, live.hash, 'system', null, 'autosave'],
-      ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'write'],
-    ]);
+    expect(response.body).toEqual({ error: 'live_yjs_state_changed' });
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 
   it('applies edits against flushed live Yjs markdown instead of the stale mirror', async () => {
@@ -415,6 +411,25 @@ describe('doc AI routes minimal transaction e2e', () => {
       .expect(503);
 
     expect(response.body).toEqual({ error: 'live_writer_not_configured' });
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
+  it('fails closed for write_doc when the live writer omits the fresh live base hash', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Agent result\n',
+      yjsState: createValidYjsState(),
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter);
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(503);
+
+    expect(response.body).toEqual({ error: 'live_writer_missing_previous_hash' });
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 

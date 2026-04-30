@@ -7,16 +7,6 @@ export class EditConflictError extends Error {
   }
 }
 
-export function assertCanWrite(
-  currentVersionId: string,
-  currentHash: string,
-  baseVersionId: string,
-  baseHash: string,
-): void {
-  if (currentVersionId !== baseVersionId) throw new Error('stale_base_version');
-  if (currentHash !== baseHash) throw new Error('stale_base_hash');
-}
-
 export function applyEditToMarkdown(
   markdown: string,
   oldString: string,

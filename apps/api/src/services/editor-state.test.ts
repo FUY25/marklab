@@ -77,6 +77,7 @@ function createFakePool(options: FakePoolOptions = {}) {
 function createCapturingLiveWriter(
   serializedMarkdown: string,
   yjsState = createValidYjsState(),
+  previousHash?: string,
 ): LiveMarkdownWriter & {
   transactions: LiveMarkdownTransaction[];
 } {
@@ -88,6 +89,7 @@ function createCapturingLiveWriter(
       return {
         serializedMarkdown,
         yjsState,
+        ...(previousHash === undefined ? {} : { previousHash }),
         changedRangeCount: 1,
         changedCharacterCount: serializedMarkdown.length,
         documentCharacterCount: serializedMarkdown.length,
@@ -111,7 +113,7 @@ describe('applyMarkdownToBranchState', () => {
     const { pool, queries } = createFakePool();
     const liveSerializedMarkdown = '## Serialized from live editor';
     const liveYjsState = createValidYjsState();
-    const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown, liveYjsState);
+    const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown, liveYjsState, 'sha256:head');
 
     const result = await applyMarkdownToBranchState({
       pool,
@@ -166,14 +168,29 @@ describe('applyMarkdownToBranchState', () => {
     });
   });
 
-  it('creates a pre-agent checkpoint for dirty human state before the agent version', async () => {
+  it('creates a pre-agent checkpoint before a full write only when the live hash matches the submitted base hash', async () => {
     const { pool, queries } = createFakePool({
       currentMarkdown: '# Human draft\n',
       currentHash: 'sha256:dirty',
       headVersionId: 'ver_001',
       headHash: 'sha256:head',
     });
-    const liveWriter = createCapturingLiveWriter('# Agent result\n');
+    const liveWriter: LiveMarkdownWriter = {
+      async applyMarkdownTransaction() {
+        return {
+          serializedMarkdown: '# Agent result\n',
+          yjsState: createValidYjsState(),
+          sourceStateFingerprint: '101',
+          previousSerializedMarkdown: '# Human draft\n',
+          previousHash: 'sha256:dirty',
+          changedRangeCount: 1,
+          changedCharacterCount: '# Agent result\n'.length,
+          documentCharacterCount: '# Agent result\n'.length,
+          fullDocumentReplacement: true,
+          appliedTransactionCount: 1,
+        };
+      },
+    };
 
     const result = await applyMarkdownToBranchState({
       pool,
@@ -195,6 +212,127 @@ describe('applyMarkdownToBranchState', () => {
       ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'write'],
     ]);
     expect(result).toMatchObject({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
+  });
+
+  it('rejects full writes when freshly serialized live markdown no longer matches the submitted base hash', async () => {
+    const { pool, queries } = createFakePool({
+      currentMarkdown: '# Mirror base\n',
+      currentHash: 'sha256:mirror-base',
+      headVersionId: 'ver_001',
+      headHash: 'sha256:mirror-base',
+    });
+    let attempts = 0;
+    const liveWriter: LiveMarkdownWriter = {
+      async applyMarkdownTransaction() {
+        attempts += 1;
+        return {
+          serializedMarkdown: '# Agent result\n',
+          yjsState: createValidYjsState(),
+          sourceStateFingerprint: '101',
+          previousSerializedMarkdown: '# Human live edit\n',
+          previousHash: 'sha256:live-edit',
+          changedRangeCount: 1,
+          changedCharacterCount: '# Agent result\n'.length,
+          documentCharacterCount: '# Agent result\n'.length,
+          fullDocumentReplacement: true,
+          appliedTransactionCount: 1,
+        };
+      },
+    };
+
+    await expect(
+      applyMarkdownToBranchState({
+        pool,
+        liveWriter,
+        docId: 'doc_001',
+        branchId: 'br_main',
+        parentVersionId: 'ver_001',
+        markdown: '# Agent result\n',
+        operation: { kind: 'write', baseVersionId: 'ver_001', baseHash: 'sha256:mirror-base' },
+        actorType: 'agent',
+      }),
+    ).rejects.toThrow('stale_live_base_hash');
+
+    expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('update document_branches'))).toBe(false);
+    expect(attempts).toBe(1);
+  });
+
+  it('fails closed for full writes when the live writer omits the fresh live base hash', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createCapturingLiveWriter('# Agent result\n');
+
+    await expect(
+      applyMarkdownToBranchState({
+        pool,
+        liveWriter,
+        docId: 'doc_001',
+        branchId: 'br_main',
+        parentVersionId: 'ver_001',
+        markdown: '# Agent result\n',
+        operation: { kind: 'write', baseVersionId: 'ver_001', baseHash: 'sha256:head' },
+        actorType: 'agent',
+      }),
+    ).rejects.toThrow('live_writer_missing_previous_hash');
+
+    expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('update document_branches'))).toBe(false);
+  });
+
+  it('does not use a stale SQL mirror hash to reject a full write whose live hash matches the submitted base', async () => {
+    const { pool, queries } = createFakePool({
+      currentMarkdown: '# Stale mirror\n',
+      currentHash: 'sha256:stale-mirror',
+      headVersionId: 'ver_001',
+      headHash: 'sha256:stale-mirror',
+    });
+    const liveWriter: LiveMarkdownWriter = {
+      async applyMarkdownTransaction() {
+        return {
+          serializedMarkdown: '# Agent result\n',
+          yjsState: createValidYjsState(),
+          sourceStateFingerprint: '101',
+          previousSerializedMarkdown: '# Live base\n',
+          previousHash: 'sha256:live-base',
+          changedRangeCount: 1,
+          changedCharacterCount: '# Agent result\n'.length,
+          documentCharacterCount: '# Agent result\n'.length,
+          fullDocumentReplacement: true,
+          appliedTransactionCount: 1,
+        };
+      },
+    };
+
+    const result = await applyMarkdownToBranchState({
+      pool,
+      liveWriter,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      parentVersionId: 'ver_001',
+      markdown: '# Agent result\n',
+      operation: { kind: 'write', baseVersionId: 'ver_001', baseHash: 'sha256:live-base' },
+      actorType: 'agent',
+    });
+
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+
+    expect(versionInserts.map((query) => query.params)).toEqual([
+      ['doc_001', 'br_main', 'ver_001', 2, '# Live base\n', 'sha256:live-base', 'system', null, 'autosave'],
+      [
+        'doc_001',
+        'br_main',
+        'ver_002',
+        3,
+        '# Agent result\n',
+        sha256Hex('# Agent result\n'),
+        'agent',
+        null,
+        'write',
+      ],
+    ]);
+    expect(result).toMatchObject({ versionId: 'ver_003', versionNumber: 3 });
   });
 
   it('retries against fresh live state when Hocuspocus persists between writer read and API write', async () => {

@@ -2,7 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
 import { readBranchState } from '../services/doc-read';
-import { applyEditToMarkdown, assertCanWrite, EditConflictError } from '../services/doc-write';
+import { applyEditToMarkdown, EditConflictError } from '../services/doc-write';
 import { applyMarkdownToBranchState } from '../services/editor-state';
 import type { LiveMarkdownOperation, LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
@@ -47,7 +47,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
     try {
       const body = writeSchema.parse(req.body);
       const current = await readBranchState(pool, docId, branchId);
-      assertCanWrite(current.versionId, current.hash, body.baseVersionId, body.baseHash);
+      if (current.versionId !== body.baseVersionId) throw new Error('stale_base_version');
 
       const applied = await applyMarkdownToBranchState({
         pool,
@@ -62,7 +62,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
 
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {
-      if (error instanceof Error && (error.message === 'stale_base_hash' || error.message === 'stale_base_version')) {
+      if (error instanceof Error && error.message === 'stale_base_version') {
         try {
           const current = await readBranchState(pool, docId, branchId);
           res.status(409).json({
