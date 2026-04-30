@@ -23,6 +23,7 @@
 - Branch from version creates isolated branch state.
 - Human Milkdown edits refresh `current_markdown/current_hash` before an agent `read_doc`.
 - `read_doc` flushes live state and creates/selects a matching autosave version when the flushed mirror hash differs from branch head.
+- `read_doc`, `write_doc`, `edit_doc`, restore, and export flush an active Hocuspocus Y.Doc before reading persisted branch state, so API boundaries do not miss browser edits that have not reached the normal store timer yet.
 - Human mirror refresh uses Milkdown serializer output plus canonical formatting, not Prettier-only formatting of stale strings.
 - AI write/edit updates live editor state before mirror/version persistence.
 - AI write/edit uses the minimal transaction live writer and does not perform mirror-only or wholesale live-document replacement.
@@ -47,8 +48,9 @@
 
 Use Playwright:
 
-1. User A opens doc.
-2. User B opens same doc.
+1. API imports a doc.
+2. User A opens `/docs/:docId/branches/:branchId`.
+3. User B opens the same route in a second browser context.
 3. User A edits heading.
 4. User B sees update.
 5. Agent API edits paragraph.
@@ -56,6 +58,11 @@ Use Playwright:
 7. Version list contains agent edit.
 8. User branches from old version.
 9. Main branch content remains unchanged.
+10. User restores an old version as a new version and both browsers update.
+11. Export filename version/hash match the exported body.
+12. Read-only share link cannot edit; edit share link can edit.
+
+The old `/?collab=two` harness remains useful, but it is not sufficient for MVP product E2E because it does not connect to the persistent backend.
 
 ## Required fixture suite
 
@@ -95,7 +102,8 @@ When a Markdown fixture breaks, add the smallest possible fixture showing the fa
 
 ## Manual QA checklist
 
-- Upload a Markdown file with table, task list, and code fence.
+- Create a blank doc from the root Web page and confirm it opens `/docs/:docId/branches/:branchId`.
+- Upload a Markdown file with table, task list, and code fence through the Web import control.
 - Confirm visual rendering.
 - Export and compare with canonical Markdown fixture expectations.
 - Use API to `edit_doc` a paragraph.
@@ -106,3 +114,8 @@ When a Markdown fixture breaks, add the smallest possible fixture showing the fa
 - Try stale full `write_doc` and confirm it is rejected.
 - Branch from an old version and edit the branch.
 - Confirm main branch content remains unchanged.
+- Restore an old version and confirm a new rollback version appears.
+- Enter the controlled MVP admin token and confirm create/import/access management works in auth-required mode.
+- Create an edit share link and confirm a second browser can edit through it.
+- Create a read-only share link and confirm editing is blocked.
+- Revoke an agent token and confirm CLI/API access fails in auth-required mode.

@@ -4,6 +4,7 @@
 
 ```text
 Browser
+  Document shell and remote document route
   Milkdown visual editor
   ProseMirror document state
   Yjs collaboration binding
@@ -152,6 +153,14 @@ room name = doc:{docId}:branch:{branchId}
 
 This avoids merging branches accidentally.
 
+The browser product route for a branch is:
+
+```text
+/docs/:docId/branches/:branchId
+```
+
+That route must connect to the Hocuspocus room above. Local development harnesses may still use local `Y.Doc` instances, but product routes must not silently fall back to local state when the provider cannot connect.
+
 ## Import and branch initialization
 
 Import and branch-from-version must initialize both durable representations:
@@ -169,7 +178,7 @@ source Markdown/version snapshot
 
 The preferred implementation is a headless Milkdown transformer service that produces valid Yjs state during import and branch creation. If MVP execution cannot make that transformer reliable immediately, the live writer must include an explicit seed-if-empty fallback before applying AI writes. Relying on the first browser editor opening `applyTemplate(initialMarkdown)` is not sufficient because agents may write before any human opens the branch.
 
-Before `read_doc` and export cross the API boundary, pending live editor state must be flushed through the same serializer path. If the flushed canonical hash differs from the branch head version hash, the flush path creates or selects a matching system version so callers receive a version/hash pair that actually represents the Markdown body.
+Before `read_doc`, `write_doc`, `edit_doc`, restore, and export cross the API boundary, pending live editor state must be flushed through the same serializer path. If the branch is currently open in Hocuspocus, the API boundary must first flush the active in-memory Y.Doc into durable branch state; it must not wait for an eventual Hocuspocus store timer. If the flushed canonical hash differs from the branch head version hash, the flush path creates or selects a matching system version so callers receive a version/hash pair that actually represents the Markdown body.
 
 > **Current implementation note:** This read/export flush-to-version behavior is assigned to Plan 6.2. In the pre-6.2 code, the Milkdown transformer may still fail closed and `read_doc` may return the current stored mirror without a live-state flush.
 
@@ -177,28 +186,49 @@ Before `read_doc` and export cross the API boundary, pending live editor state m
 
 ```text
 POST   /api/docs
+GET    /api/docs/:docId
+GET    /api/docs/:docId/branches
 POST   /api/docs/import
 GET    /api/docs/:docId/branches/:branchId/read
 POST   /api/docs/:docId/branches/:branchId/write
 POST   /api/docs/:docId/branches/:branchId/edit
 GET    /api/docs/:docId/branches/:branchId/export.md
-GET    /api/docs/:docId/versions
+GET    /api/docs/:docId/branches/:branchId/versions
+GET    /api/docs/:docId/versions/:versionId
 POST   /api/docs/:docId/versions/:versionId/branch
-POST   /api/docs/:docId/branches/:branchId/rollback
+POST   /api/docs/:docId/branches/:branchId/restore
+POST   /api/docs/:docId/branches/:branchId/agent-tokens
+GET    /api/docs/:docId/branches/:branchId/agent-tokens
+DELETE /api/agent-tokens/:tokenId
+POST   /api/docs/:docId/branches/:branchId/share-links
+GET    /api/docs/:docId/branches/:branchId/share-links
+DELETE /api/share-links/:linkId
 ```
+
+`rollback` means restore-as-new-version. It creates a new version whose Markdown equals the selected source version and does not delete previous versions.
 
 ## Deployment topology
 
 Recommended MVP:
 
 ```text
-Frontend: Next.js static/server app
+Frontend: Vite static React app
 Realtime/API backend: Node.js process on Fly.io/Railway/Render/DigitalOcean/AWS
 Database: Postgres
 Optional edge/CDN: Cloudflare DNS/CDN
 ```
 
 Do not rely on Vercel Serverless Functions for the WebSocket collaboration server because Vercel Functions do not act as WebSocket servers.
+
+Deployment must also provide the web app with:
+
+```text
+VITE_MARKLAB_API_URL
+VITE_MARKLAB_WS_URL, including the `/collab` WebSocket path
+MARKLAB_ADMIN_TOKEN_HASH
+```
+
+Production should enable `MARKLAB_REQUIRE_AUTH=true` so REST and Hocuspocus access require a valid share link or agent token.
 
 ## Cloudflare role
 

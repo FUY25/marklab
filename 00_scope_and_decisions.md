@@ -26,6 +26,10 @@ Humans edit the document in a WYSIWYG Markdown UI. AI agents read/write canonica
 14. CLI + agent skill for direct online document tools.
 15. Basic share links and agent tokens.
 16. Deployment to a persistent WebSocket-capable backend.
+17. Real browser document URLs such as `/docs/:docId/branches/:branchId`.
+18. Web UI for new document, Markdown import, open existing document, and export.
+19. Web UI for version history, branch from version, branch switching, and restore-as-new-version.
+20. Controlled MVP admin/bootstrap token for create/import and token management until full accounts exist.
 
 ### Out of scope for MVP
 
@@ -155,3 +159,37 @@ marklab import
 ```
 
 The CLI reports server outcomes such as `written`, `stale_base_version`, `live_yjs_state_changed`, `old_string_not_found`, or `ambiguous_match`. It does not report user-level `accepted` or `rejected` because that decision belongs to Codex/Claude Code's permission and chat loop.
+
+## Web product surface
+
+The browser MVP is not only a local editor harness. It must include:
+
+```text
+/docs/:docId/branches/:branchId
+  real backend document route backed by Hocuspocus room doc:{docId}:branch:{branchId}
+
+root document shell
+  create blank doc
+  import local .md
+  open existing doc by id/branch
+  export current branch as .md snapshot
+
+version and branch panel
+  list versions
+  preview old version Markdown
+  branch from selected version
+  switch branch
+  restore selected version as a new branch head version
+
+share/access panel
+  create edit/view share links
+  create read/write agent tokens
+  revoke links and tokens
+
+controlled MVP admin/bootstrap
+  create/import documents when production auth is enabled
+  manage document share links and agent tokens
+  replace later with account auth
+```
+
+The local single-editor route and `/?collab=two` harness remain useful for editor development and Playwright coverage, but they are not substitutes for product E2E. Product testing must use real document URLs connected to the persistent backend.

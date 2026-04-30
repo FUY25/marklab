@@ -154,6 +154,59 @@ Request:
 }
 ```
 
+### Document summary
+
+```http
+GET /api/docs/:docId
+```
+
+Response:
+
+```json
+{
+  "docId": "doc_abc",
+  "title": "Strategy memo",
+  "defaultBranchId": "br_main",
+  "branches": [
+    {
+      "branchId": "br_main",
+      "name": "Main",
+      "slug": "main",
+      "headVersionId": "ver_043",
+      "headVersionNumber": 43,
+      "createdFromVersionId": null,
+      "isArchived": false
+    }
+  ]
+}
+```
+
+This route supports the Web document shell, branch switcher, and version UI. It is not an agent write primitive.
+
+### Branch list
+
+```http
+GET /api/docs/:docId/branches
+```
+
+Response:
+
+```json
+{
+  "branches": [
+    {
+      "branchId": "br_main",
+      "name": "Main",
+      "slug": "main",
+      "headVersionId": "ver_043",
+      "headVersionNumber": 43,
+      "createdFromVersionId": null,
+      "isArchived": false
+    }
+  ]
+}
+```
+
 Response:
 
 ```json
@@ -348,6 +401,32 @@ Request:
 }
 ```
 
+### Restore version as new head
+
+```http
+POST /api/docs/:docId/branches/:branchId/restore
+```
+
+Request:
+
+```json
+{
+  "versionId": "ver_012"
+}
+```
+
+Response:
+
+```json
+{
+  "versionId": "ver_044",
+  "versionNumber": 44,
+  "hash": "sha256:..."
+}
+```
+
+Restore creates a new version with operation `rollback`, initializes live Yjs state from the selected version Markdown through the Milkdown transformer, updates the branch head, and leaves all previous versions intact.
+
 Response:
 
 ```json
@@ -402,3 +481,74 @@ Response:
   "createdAt": "2026-04-29T15:30:12.000Z"
 }
 ```
+
+### Agent tokens
+
+```http
+POST /api/docs/:docId/branches/:branchId/agent-tokens
+GET /api/docs/:docId/branches/:branchId/agent-tokens
+DELETE /api/agent-tokens/:tokenId
+```
+
+Create request:
+
+```json
+{
+  "name": "Codex",
+  "canWrite": true,
+  "expiresAt": null
+}
+```
+
+Create response includes the raw token exactly once:
+
+```json
+{
+  "tokenId": "tok_123",
+  "token": "ml_agent_...",
+  "name": "Codex",
+  "canRead": true,
+  "canWrite": true,
+  "expiresAt": null
+}
+```
+
+List responses must not include raw `token`.
+
+### Share links
+
+```http
+POST /api/docs/:docId/branches/:branchId/share-links
+GET /api/docs/:docId/branches/:branchId/share-links
+DELETE /api/share-links/:linkId
+```
+
+Create request:
+
+```json
+{
+  "role": "edit",
+  "expiresAt": null
+}
+```
+
+Create response includes the raw token exactly once:
+
+```json
+{
+  "linkId": "link_123",
+  "token": "ml_share_...",
+  "role": "edit",
+  "expiresAt": null
+}
+```
+
+Production mode should require either an `Authorization: Bearer <token>` header or a route/share token for protected REST and WebSocket document access.
+
+Until full user accounts exist, production create/import and access-management routes require an admin/bootstrap token:
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+The server stores only `MARKLAB_ADMIN_TOKEN_HASH`, not the raw admin token.

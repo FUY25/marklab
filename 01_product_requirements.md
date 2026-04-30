@@ -17,15 +17,17 @@ Claude Code, Codex, or another agent that needs to read and write the shared doc
 1. User opens the app.
 2. User clicks **New Markdown Doc**.
 3. App creates `doc_id` and default `main` branch.
-4. User edits in Milkdown visual editor.
-5. System updates collaboration state and canonical Markdown mirror.
-6. User exports `.md` if needed.
+4. App opens `/docs/:docId/branches/:branchId`.
+5. User edits in Milkdown visual editor.
+6. System updates collaboration state and canonical Markdown mirror.
+7. User exports `.md` if needed.
 
 Acceptance criteria:
 
 - The document persists after refresh.
 - A second browser can join the same doc and see edits in realtime.
 - Exported Markdown contains the current document content.
+- User does not need to manually paste API ids after creating the doc.
 
 ### Journey B: create from local Markdown
 
@@ -34,19 +36,21 @@ Acceptance criteria:
 3. App initializes the branch's ProseMirror/Yjs state from the parsed document.
 4. App serializes that editor state back to Markdown and applies the canonical formatter.
 5. App creates a cloud doc from the canonical Markdown.
-6. Milkdown renders the content visually.
-7. App records version `v1` with operation `import`.
+6. App opens `/docs/:docId/branches/:branchId`.
+7. Milkdown renders the content visually.
+8. App records version `v1` with operation `import`.
 
 Acceptance criteria:
 
 - Supported headings, lists, tables, code fences, links, images, blockquotes, math fences, Mermaid fences, and YAML frontmatter survive import/export semantically.
 - The exported file is named with doc/version/date/hash metadata.
 - The Markdown body is not modified to add app metadata by default.
+- Import is available through Web UI, not only API/CLI.
 
 ### Journey C: human collaboration
 
 1. Owner creates an edit link.
-2. Teammate opens link.
+2. Teammate opens the same `/docs/:docId/branches/:branchId` URL or an edit share link for that route.
 3. Both users edit the visual document.
 4. Both see the same final content.
 5. Presence shows both users connected.
@@ -56,6 +60,7 @@ Acceptance criteria:
 - Concurrent edits converge.
 - No user must manually refresh.
 - Presence does not need cursor or selection fidelity in MVP, but connected collaborators should be visible.
+- The same behavior works across two browser windows, not only inside the `/?collab=two` local harness.
 
 ### Journey D: AI reads and edits
 
@@ -109,6 +114,38 @@ Acceptance criteria:
 - The new branch has a separate head.
 - Editing one branch does not mutate the other branch.
 
+### Journey G: restore old version as new head
+
+1. User opens history.
+2. User previews an old version.
+3. User clicks **Restore as new version**.
+4. App creates a new version on the current branch whose content equals the selected old version.
+5. Older versions remain in history.
+
+Acceptance criteria:
+
+- Restore does not delete history.
+- Restore creates a version with operation `rollback`.
+- Connected browsers update to the restored content without refresh.
+
+### Journey H: share with human and agent
+
+1. User enters the controlled MVP admin token for the current browser session.
+2. User opens share/access panel.
+3. User creates an edit or view share link.
+4. User creates an agent token with read or write permission.
+5. User copies the raw token once at creation.
+6. User can revoke the token/link.
+
+Acceptance criteria:
+
+- Raw tokens are not shown after creation.
+- Read-only links/tokens cannot write.
+- Revoked or expired links/tokens cannot read, write, or connect to the collaboration room.
+- Production mode rejects unauthenticated document access.
+- Production mode rejects unauthenticated create/import and token management.
+- Admin token is session-scoped in the browser and is not stored as a raw database value.
+
 ## Feature requirements
 
 ## Visual editor
@@ -117,6 +154,24 @@ Acceptance criteria:
 - Render Markdown tables visually.
 - Support headings, lists, links, images, code blocks, blockquotes, tables, and task lists in MVP.
 - Support Mermaid/math as fenced blocks if the selected Milkdown plugins handle them reliably; otherwise preserve them as code fences and render in preview/export only.
+- Product document route is `/docs/:docId/branches/:branchId` and uses a Hocuspocus-backed Y.Doc, not a local-only Y.Doc.
+
+## Web document shell
+
+- Root route exposes New Markdown Doc, Import Markdown, Open existing document, and recent documents.
+- Create/import navigates directly to the real document URL.
+- Export is available from the document toolbar and uses the server-provided versioned filename.
+- API/export errors are visible to the user.
+- Local editor harness routes stay available for development and testing.
+
+## Web version and branch UI
+
+- Version history is visible in the browser.
+- Users can preview old version Markdown.
+- Users can branch from an old version.
+- Users can switch branches.
+- Users can restore an old version as a new version on the current branch.
+- Advanced graph visualization is not required in MVP.
 
 ## Canonical Markdown
 
@@ -145,6 +200,22 @@ Required CLI-only workflow tools:
 ```text
 config
 health
+```
+
+Required Web-only controls:
+
+```text
+new_doc
+import_markdown_file
+open_doc_by_id
+export_markdown_file
+copy_doc_link
+list_versions_panel
+branch_from_version_button
+restore_version_button
+create_share_link
+create_agent_token
+revoke_share_link_or_token
 ```
 
 Not required in MVP:
@@ -209,3 +280,4 @@ This makes it clear that exported local files are snapshots, not the source of t
 - Realtime editor should remain usable with documents up to 100 KB in MVP.
 - The backend must reject stale full writes instead of silently overwriting newer work.
 - Every accepted agent write/edit must be auditable through versions.
+- Browser users must be able to exercise the full create/import/edit/version/export path without using raw API calls.

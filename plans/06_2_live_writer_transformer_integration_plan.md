@@ -885,6 +885,8 @@ git commit -m "feat: wire concrete live markdown writer"
 
 ## Task 9: Browser Smoke Test for API-Originated Writes
 
+> **Context note:** This smoke test requires a real Web remote document route and a backend-backed browser fixture. That product entry point is now split into `plans/06_3_web_remote_document_mode_plan.md`. If Plan 6.2 implementation already completed without this test, treat this task as moved to Plan 6.3 rather than as coverage supplied by Plan 7.
+
 **Files:**
 - Modify: `apps/web/tests/milkdown-collab.spec.ts`
 

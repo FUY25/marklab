@@ -153,3 +153,44 @@ Mitigation:
 
 - Deploy Hocuspocus on a persistent Node backend.
 - Use Cloudflare/Vercel only for frontend/CDN unless using a proven realtime service.
+
+## Risk 10: Web app remains a local harness instead of product UI
+
+Impact:
+
+- Tests can pass against `/?collab=two` while the actual product cannot open a real backend document.
+- API/agent writes may be verified in backend tests but never proven visible in connected browsers.
+
+Mitigation:
+
+- Add `/docs/:docId/branches/:branchId` before Plan 7.
+- Require Playwright E2E that imports a backend doc, opens two browser contexts, and verifies browser-to-browser and API-to-browser updates.
+- Keep local harnesses for editor development, but do not count them as product E2E.
+
+## Risk 11: Versioning exists only as backend state
+
+Impact:
+
+- Users cannot understand or recover from AI writes.
+- Branching is technically available but not usable in the product.
+
+Mitigation:
+
+- Add a simple list-based version panel.
+- Show operation, actor type, created time, and hash prefix.
+- Support preview, branch from version, branch switch, and restore-as-new-version.
+- Defer graph visualization until after MVP.
+
+## Risk 12: Access control is deferred too long
+
+Impact:
+
+- A deployed document API or WebSocket room may be publicly writable.
+- CLI/agent workflows may rely on out-of-band tokens that the product cannot create or revoke.
+
+Mitigation:
+
+- Implement document-scoped share links and agent tokens before public deployment.
+- Require a controlled MVP admin/bootstrap token for create/import and token management until full accounts exist.
+- Hash tokens at rest and show raw tokens only once.
+- Gate REST and Hocuspocus access in production with `MARKLAB_REQUIRE_AUTH=true`.

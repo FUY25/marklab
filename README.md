@@ -30,6 +30,7 @@ A cloud Markdown document where humans collaborate in a polished WYSIWYG editor 
 - `06_testing_strategy.md` — tests, fixtures, and acceptance criteria.
 - `07_risks_and_attention.md` — engineering risks and mitigation.
 - `08_references.md` — sources and public docs used.
+- `09_mvp_launch_gap_matrix.md` — remaining launch gaps mapped to owning plans.
 - `plans/` — implementation plans split by subsystem.
 - `fixtures/` — Markdown fixture suite for round-trip and export tests.
 - `resource/milkdown/` — local Milkdown source clone used to verify current editor/collab APIs.
@@ -56,8 +57,14 @@ Key correction themes:
 5. Version DAG service and branch primitives.
 6. AI read/write/edit API using the live-state writer and version service.
 6.2. Concrete Milkdown transformer, live writer, and export/read version consistency.
+6.3. Web remote document mode and browser E2E for real backend documents.
+6.4. Web document lifecycle UI for create, import, open, and export.
+6.5. Web version history, branch, and restore UI.
+6.6. Basic access control, share links, and agent tokens.
 7. MarkLab CLI + agent skill integration.
-8. Deployment hardening.
+8. Deployment baseline.
+8.1. Deployment hardening, smoke tests, and runbook.
+11. MVP launch readiness gate.
 
 MCP can be added after the CLI/skill workflow is proven. It should be a thin adapter over the same API/CLI semantics.
 
@@ -66,3 +73,5 @@ This order keeps each subsystem testable on its own. Do not start with GitHub sy
 > **Context note:** The original order placed the AI API before versioning. The corrected AI API creates immutable versions on every accepted write/edit, so the version service must exist before the write/edit routes are completed.
 
 > **Context note:** Plan 6 leaves fail-closed seams for the Milkdown transformer and live writer so the API contract can land safely. Plan 6.2 must be executed before Plan 7 because CLI/agent commands need successful import/export/read/write/edit against real Yjs/ProseMirror state and version-consistent exports.
+
+> **Context note:** Plan 7 does not create the browser product surface. Real two-window cloud document sync, browser import/export controls, version/branch UI, and API-originated writes visible in the editor are covered by Plans 6.3 through 6.6 and must be completed before CLI/agent testing is treated as full product testing.
