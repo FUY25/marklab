@@ -11,6 +11,7 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const allowExistingApi = process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true';
 const webUrl = allowExistingApi ? process.env.MARKLAB_E2E_WEB_URL ?? 'http://127.0.0.1:5175' : 'http://127.0.0.1:5175';
 const apiUrl = allowExistingApi ? process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011' : 'http://127.0.0.1:3011';
+const adminToken = process.env.MARKLAB_E2E_ADMIN_TOKEN ?? 'marklab-e2e-admin-token';
 
 interface ImportedDocument {
   docId: string;
@@ -21,6 +22,10 @@ interface ReadDocument {
   versionId: string;
   hash: string;
   markdown: string;
+}
+
+interface CreatedShareLink {
+  token: string;
 }
 
 function requireRemoteApiReadiness() {
@@ -44,6 +49,7 @@ async function expectOkResponse(response: APIResponse, action: string) {
 
 async function importDocument(request: APIRequestContext): Promise<ImportedDocument> {
   const response = await request.post(`${apiUrl}/api/docs/import`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
     data: {
       title: 'Remote E2E',
       markdown: '# Remote E2E\n\nOriginal paragraph.\n',
@@ -57,10 +63,22 @@ async function readDocument(
   request: APIRequestContext,
   docId: string,
   branchId: string,
+  token: string,
 ): Promise<ReadDocument> {
-  const response = await request.get(`${apiUrl}/api/docs/${docId}/branches/${branchId}/read`);
+  const response = await request.get(`${apiUrl}/api/docs/${docId}/branches/${branchId}/read`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   await expectOkResponse(response, 'read_doc');
   return (await response.json()) as ReadDocument;
+}
+
+async function createEditShareToken(request: APIRequestContext, docId: string, branchId: string): Promise<string> {
+  const response = await request.post(`${apiUrl}/api/docs/${docId}/branches/${branchId}/share-links`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { role: 'edit' },
+  });
+  await expectOkResponse(response, 'create_share_link');
+  return ((await response.json()) as CreatedShareLink).token;
 }
 
 test('keeps two remote browser windows and API writes synchronized without refresh', async ({ browser, request }) => {
@@ -68,7 +86,9 @@ test('keeps two remote browser windows and API writes synchronized without refre
   await setupRemoteApi();
 
   const doc = await importDocument(request);
+  const editToken = await createEditShareToken(request, doc.docId, doc.branchId);
   const documentPath = `/docs/${encodeURIComponent(doc.docId)}/branches/${encodeURIComponent(doc.branchId)}`;
+  const editDocumentUrl = `${webUrl}${documentPath}?token=${encodeURIComponent(editToken)}&mode=edit`;
 
   let contextA: BrowserContext | undefined;
   let contextB: BrowserContext | undefined;
@@ -79,7 +99,7 @@ test('keeps two remote browser windows and API writes synchronized without refre
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();
 
-    await Promise.all([pageA.goto(`${webUrl}${documentPath}`), pageB.goto(`${webUrl}${documentPath}`)]);
+    await Promise.all([pageA.goto(editDocumentUrl), pageB.goto(editDocumentUrl)]);
 
     await expect(pageA.getByTestId('remote-document-page')).toBeVisible();
     await expect(pageB.getByTestId('remote-document-page')).toBeVisible();
@@ -98,9 +118,10 @@ test('keeps two remote browser windows and API writes synchronized without refre
     await pageA.keyboard.type('Browser A edit.');
     await expect(editorB).toContainText('Browser A edit.');
 
-    const current = await readDocument(request, doc.docId, doc.branchId);
+    const current = await readDocument(request, doc.docId, doc.branchId, editToken);
     expect(current.markdown).toContain('Browser A edit.');
     const writeResponse = await request.post(`${apiUrl}/api/docs/${doc.docId}/branches/${doc.branchId}/write`, {
+      headers: { Authorization: `Bearer ${editToken}` },
       data: {
         baseVersionId: current.versionId,
         baseHash: current.hash,

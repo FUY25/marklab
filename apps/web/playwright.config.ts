@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
 import {
   rejectManagedUrlOverrides,
@@ -16,6 +17,10 @@ const usesRemoteE2E = shouldStartApi || allowExistingApi;
 const apiUrl = shouldStartApi ? defaultApiUrl : process.env.MARKLAB_E2E_API_URL ?? defaultApiUrl;
 const websocketUrl =
   process.env.MARKLAB_E2E_WS_URL ?? `${apiUrl.replace(/^http/u, 'ws').replace(/\/+$/u, '')}/collab`;
+const e2eAdminToken = process.env.MARKLAB_E2E_ADMIN_TOKEN ?? 'marklab-e2e-admin-token';
+const e2eAdminTokenHash =
+  process.env.MARKLAB_ADMIN_TOKEN_HASH ??
+  `sha256:${createHash('sha256').update(e2eAdminToken, 'utf8').digest('hex')}`;
 
 if (allowExistingApi) {
   requireLocalHttpUrl(apiUrl, 'MARKLAB_E2E_API_URL');
@@ -37,7 +42,7 @@ export default defineConfig({
     ...(shouldStartApi
       ? [
           {
-            command: `cd ../.. && DATABASE_URL="$TEST_DATABASE_URL" PORT=${apiPort} pnpm --dir apps/api exec tsx -e "const events = new EventTarget(); globalThis.addEventListener = events.addEventListener.bind(events); globalThis.removeEventListener = events.removeEventListener.bind(events); globalThis.dispatchEvent = events.dispatchEvent.bind(events); import('./src/index.ts').catch((error) => { console.error(error); process.exit(1); });"`,
+            command: `cd ../.. && DATABASE_URL="$TEST_DATABASE_URL" PORT=${apiPort} MARKLAB_ADMIN_TOKEN_HASH=${e2eAdminTokenHash} pnpm --dir apps/api exec tsx -e "const events = new EventTarget(); globalThis.addEventListener = events.addEventListener.bind(events); globalThis.removeEventListener = events.removeEventListener.bind(events); globalThis.dispatchEvent = events.dispatchEvent.bind(events); import('./src/index.ts').catch((error) => { console.error(error); process.exit(1); });"`,
             url: `${defaultApiUrl}/healthz`,
             reuseExistingServer: false,
           },

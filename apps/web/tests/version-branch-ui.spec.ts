@@ -65,6 +65,8 @@ async function editDocument(request: APIRequestContext, docId: string, branchId:
 }
 
 test('branches from and restores older document versions', async ({ page, request }) => {
+  test.skip(process.env.MARKLAB_REQUIRE_AUTH === 'true', 'Covered by the unauthenticated version UI suite; auth access is covered in access-ui.spec.ts.');
+
   requireRemoteApiReadiness();
   await setupRemoteApi();
 

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Page } from '@playwright/test';
 import {
   rejectManagedUrlOverrides,
   requireLocalHttpUrl,
@@ -10,6 +10,8 @@ import {
 
 const allowExistingApi = process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true';
 const webUrl = allowExistingApi ? process.env.MARKLAB_E2E_WEB_URL ?? 'http://127.0.0.1:5175' : 'http://127.0.0.1:5175';
+const apiUrl = allowExistingApi ? process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011' : 'http://127.0.0.1:3011';
+const adminToken = process.env.MARKLAB_E2E_ADMIN_TOKEN ?? 'marklab-e2e-admin-token';
 
 function requireRemoteApiReadiness() {
   rejectManagedUrlOverrides();
@@ -37,17 +39,42 @@ function extractDocumentIds(url: string): { docId: string; branchId: string } {
   };
 }
 
+async function expectOkResponse(response: APIResponse, action: string) {
+  if (response.ok()) return;
+  throw new Error(`${action} failed with ${response.status()} ${response.statusText()}: ${await response.text()}`);
+}
+
+async function createEditShareUrl(request: APIRequestContext, docId: string, branchId: string): Promise<string> {
+  const response = await request.post(`${apiUrl}/api/docs/${docId}/branches/${branchId}/share-links`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { role: 'edit' },
+  });
+  await expectOkResponse(response, 'create_share_link');
+  const body = (await response.json()) as { token: string };
+  const url = new URL(`/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}`, webUrl);
+  url.searchParams.set('token', body.token);
+  url.searchParams.set('mode', 'edit');
+  return url.toString();
+}
+
+async function saveAdminToken(page: Page) {
+  await page.getByLabel('Admin token').fill(adminToken);
+  await page.getByRole('button', { name: 'Save admin token' }).click();
+  await expect(page.getByRole('status')).toContainText('Admin token saved for this browser session.');
+}
+
 async function expectRecentDocument(page: Page, title: string, branchId: string) {
   const recentDocuments = page.getByRole('region', { name: 'Recent documents' });
   await expect(recentDocuments).toContainText(title);
   await expect(recentDocuments).toContainText(branchId);
 }
 
-test('creates imports opens and exports cloud Markdown documents', async ({ page }) => {
+test('creates imports opens and exports cloud Markdown documents', async ({ page, request }) => {
   requireRemoteApiReadiness();
   await setupRemoteApi();
 
   await page.goto(webUrl);
+  await saveAdminToken(page);
 
   await expect(page.getByTestId('home-page')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'MarkLab' })).toBeVisible();
@@ -69,6 +96,7 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
 
   await expect(page).toHaveURL(/\/docs\/[^/]+\/branches\/[^/]+$/u);
   const importedDocument = extractDocumentIds(page.url());
+  await page.goto(await createEditShareUrl(request, importedDocument.docId, importedDocument.branchId));
   const importedEditor = page.getByTestId('milkdown-editor').locator('.ProseMirror');
   await expect(importedEditor).toContainText('Imported Lifecycle');
   await expect(importedEditor).toContainText('Imported body from fixture.');
