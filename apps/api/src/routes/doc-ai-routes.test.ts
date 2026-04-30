@@ -22,6 +22,20 @@ function createFakePool(options: FakePoolOptions = {}) {
   const query: DbPool['query'] = async <Row = unknown>(sql: string): Promise<DbQueryResult<Row>> => {
     queries.push(sql);
 
+    if (sql.includes('from document_branches b') && sql.includes('document_branch_states')) {
+      return {
+        rows: [
+          {
+            current_markdown: currentMarkdown,
+            current_hash: currentHash,
+            head_version_id: currentVersionId,
+            head_hash: currentHash,
+          } as Row,
+        ],
+        rowCount: 1,
+      };
+    }
+
     if (sql.includes('from documents d')) {
       return {
         rows: [

@@ -55,6 +55,7 @@ Key correction themes:
 4. Canonical Markdown import/export.
 5. Version DAG service and branch primitives.
 6. AI read/write/edit API using the live-state writer and version service.
+6.2. Concrete Milkdown transformer, live writer, and export/read version consistency.
 7. MarkLab CLI + agent skill integration.
 8. Deployment hardening.
 
@@ -63,3 +64,5 @@ MCP can be added after the CLI/skill workflow is proven. It should be a thin ada
 This order keeps each subsystem testable on its own. Do not start with GitHub sync, local watch sync, or complex permissions.
 
 > **Context note:** The original order placed the AI API before versioning. The corrected AI API creates immutable versions on every accepted write/edit, so the version service must exist before the write/edit routes are completed.
+
+> **Context note:** Plan 6 leaves fail-closed seams for the Milkdown transformer and live writer so the API contract can land safely. Plan 6.2 must be executed before Plan 7 because CLI/agent commands need successful import/export/read/write/edit against real Yjs/ProseMirror state and version-consistent exports.

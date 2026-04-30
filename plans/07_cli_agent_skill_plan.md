@@ -10,6 +10,10 @@
 
 ---
 
+## Prerequisites
+
+Plan 6.2 must be complete before this plan starts. The CLI wraps the live HTTP API, so `read_doc`, `edit_doc`, `write_doc`, `import-doc`, `export-doc`, and version commands must already operate against real Milkdown/Yjs state. In particular, export must return a filename whose version/hash match the exported body, and write/edit must return `versionId`, `versionNumber`, and `hash` after persisting the returned Yjs state transactionally.
+
 ## File Structure
 
 - Create: `apps/cli/package.json` - MarkLab CLI package.
@@ -285,8 +289,8 @@ export class MarklabClient {
 Run:
 
 ```bash
-pnpm --filter @marklab/cli test
-pnpm --filter @marklab/cli typecheck
+npx -y pnpm@10.0.0 --filter @marklab/cli test
+npx -y pnpm@10.0.0 --filter @marklab/cli typecheck
 ```
 
 Expected: PASS.
@@ -351,7 +355,7 @@ await createProgram().parseAsync(process.argv);
 Run:
 
 ```bash
-pnpm --filter @marklab/cli typecheck
+npx -y pnpm@10.0.0 --filter @marklab/cli typecheck
 ```
 
 Expected: PASS.

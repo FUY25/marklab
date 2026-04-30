@@ -12,6 +12,8 @@ interface FakePoolOptions {
   currentHash?: string;
   currentVersionId?: string;
   currentVersionNumber?: number;
+  headHash?: string;
+  versionIds?: string[];
 }
 
 interface CapturedQuery {
@@ -25,12 +27,29 @@ function createFakePool(options: FakePoolOptions = {}) {
   const currentHash = options.currentHash ?? 'sha256:current';
   const currentVersionId = options.currentVersionId ?? 'ver_001';
   const currentVersionNumber = options.currentVersionNumber ?? 1;
+  const headHash = options.headHash ?? currentHash;
+  const versionIds = [...(options.versionIds ?? ['ver_002', 'ver_003'])];
+  let nextVersionNumber = currentVersionNumber + 1;
 
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
     params?: readonly unknown[],
   ): Promise<DbQueryResult<Row>> => {
     queries.push(params === undefined ? { sql } : { sql, params });
+
+    if (sql.includes('from document_branches b') && sql.includes('document_branch_states')) {
+      return {
+        rows: [
+          {
+            current_markdown: currentMarkdown,
+            current_hash: currentHash,
+            head_version_id: currentVersionId,
+            head_hash: headHash,
+          } as Row,
+        ],
+        rowCount: 1,
+      };
+    }
 
     if (sql.includes('from documents d')) {
       return {
@@ -49,11 +68,11 @@ function createFakePool(options: FakePoolOptions = {}) {
     }
 
     if (sql.includes('coalesce(max(version_number)')) {
-      return { rows: [{ next_version_number: currentVersionNumber + 1 } as Row], rowCount: 1 };
+      return { rows: [{ next_version_number: nextVersionNumber++ } as Row], rowCount: 1 };
     }
 
     if (sql.includes('insert into document_versions')) {
-      return { rows: [{ id: 'ver_002' } as Row], rowCount: 1 };
+      return { rows: [{ id: versionIds.shift() ?? 'ver_next' } as Row], rowCount: 1 };
     }
 
     return { rows: [], rowCount: 1 };
@@ -162,6 +181,39 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 
+  it('checks write guards before creating a dirty-branch checkpoint and agent child version', async () => {
+    const { pool, queries } = createFakePool({
+      currentMarkdown: '# Human draft\n',
+      currentHash: 'sha256:dirty',
+      currentVersionId: 'ver_010',
+      currentVersionNumber: 10,
+      headHash: 'sha256:head',
+      versionIds: ['ver_011', 'ver_012'],
+    });
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Agent result\n',
+      yjsState: new Uint8Array([1, 2, 3]),
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter);
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_010', baseHash: 'sha256:dirty', markdown: '# Agent target' })
+      .expect(200);
+
+    const expectedMarkdown = await canonicalizeMarkdown('# Agent result\n');
+    const expectedHash = sha256Hex(expectedMarkdown);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+
+    expect(response.body).toEqual({ versionId: 'ver_012', versionNumber: 12, hash: expectedHash });
+    expect(versionInserts.map((query) => query.params)).toEqual([
+      ['doc_001', 'br_main', 'ver_010', 11, '# Human draft\n', 'sha256:dirty', 'system', null, 'autosave'],
+      ['doc_001', 'br_main', 'ver_011', 12, expectedMarkdown, expectedHash, 'agent', null, 'write'],
+    ]);
+  });
+
   it('fails closed without mirror or version writes when the live writer is not configured', async () => {
     const { pool, queries } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
@@ -172,6 +224,25 @@ describe('doc AI routes minimal transaction e2e', () => {
       .expect(503);
 
     expect(response.body).toEqual({ error: 'live_writer_not_configured' });
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
+  it('fails closed without mirror or version writes when the live writer returns an empty yjs state', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Live result\n',
+      yjsState: new Uint8Array(),
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter);
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(503);
+
+    expect(response.body).toEqual({ error: 'invalid_live_yjs_state' });
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 

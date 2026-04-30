@@ -173,8 +173,12 @@ On export:
 
 1. Flush pending human edits through the Milkdown serializer path.
 2. Use the resulting canonical Markdown mirror.
-3. Do not inject metadata into the body by default.
-4. Use metadata-rich filename.
+3. Ensure the exported body hash matches the version/hash used in the filename.
+4. If the flushed mirror hash differs from the current branch head version hash, create or select a matching system version before returning the file.
+5. Do not inject metadata into the body by default.
+6. Use metadata-rich filename.
+
+`export_version_mismatch` is a fail-closed response for impossible or externally inconsistent post-flush state. It should not be the normal result of a dirty but serializable human edit.
 
 Filename format:
 

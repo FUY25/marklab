@@ -26,7 +26,7 @@
 
 This plan does not build MCP or UI. It only builds HTTP APIs and service logic. It explicitly does not build AI streaming UX, in-app selection-aware AI, or in-app diff UI.
 
-> **Execution gate:** The HTTP route shape may exist before the concrete writer is wired, but accepted write/edit execution must fail closed with `503 live_writer_not_configured` until a concrete minimal transaction live writer exists. The writer must parse target canonical Markdown into an editor document, compare it to the current live Yjs-bound ProseMirror document, apply only changed ranges through ProseMirror transactions/Yjs updates, and return serialized Markdown from the resulting live state. The version service from `plans/05_version_branch_plan.md` must also exist before successful write/edit execution is enabled.
+> **Execution gate:** The HTTP route shape may exist before the concrete writer is wired, but accepted write/edit execution must fail closed with `503 live_writer_not_configured` until a concrete minimal transaction live writer exists. The writer must parse target canonical Markdown into an editor document, compare it to the current live Yjs-bound ProseMirror document, apply only changed ranges through ProseMirror transactions/Yjs updates, and return serialized Markdown plus a valid non-empty encoded Yjs state from the resulting live state. The version service from `plans/05_version_branch_plan.md` must also exist before successful write/edit execution is enabled.
 
 > **Context note:** The original plan included a mirror-only first pass for `applyMarkdownToBranchState`. That directly conflicts with the architecture rule that AI writes must update live collaboration state before updating the canonical mirror. The corrected plan makes the live-state writer an explicit dependency instead of shipping a route that can desync online editors.
 >
@@ -107,7 +107,7 @@ The returned `hash` is the current canonical mirror hash and is used as `baseHas
 Run:
 
 ```bash
-pnpm --filter @marklab/api typecheck
+npx -y pnpm@10.0.0 --filter @marklab/api typecheck
 ```
 
 Expected: PASS.
@@ -149,6 +149,7 @@ export interface LiveMarkdownTransaction {
 
 export interface AppliedLiveMarkdownTransaction {
   serializedMarkdown: string;
+  yjsState: Uint8Array;
   changedRangeCount: number;
   appliedTransactionCount: number;
 }
@@ -172,16 +173,16 @@ export function createUnavailableLiveMarkdownWriter(): LiveMarkdownWriter {
 2. Read the current live Yjs-bound ProseMirror document for `branchId`.
 3. Compare the target document with the current document.
 4. Dispatch ProseMirror transactions/Yjs updates for only changed ranges.
-5. Serialize the resulting live document back to Markdown and return it as `serializedMarkdown` with `changedRangeCount` and `appliedTransactionCount` metadata.
+5. Serialize the resulting live document back to Markdown and return it as `serializedMarkdown` with the valid non-empty encoded `yjsState`, `changedRangeCount`, and `appliedTransactionCount` metadata.
 6. If the live Yjs document is empty but the branch mirror contains Markdown, seed the live document from `current_markdown` before diffing the target Markdown.
 
 - [ ] **Step 2: Create editor state application service**
 
-Create `apps/api/src/services/editor-state.ts` so `applyMarkdownToBranchState` canonicalizes the requested target, calls `liveWriter.applyMarkdownTransaction`, canonicalizes the writer's `serializedMarkdown`, hashes that live serialization, then updates `document_branch_states` and creates the immutable version in one checked-out database transaction.
+Create `apps/api/src/services/editor-state.ts` so `applyMarkdownToBranchState` canonicalizes the requested target, calls `liveWriter.applyMarkdownTransaction`, validates that the returned `yjsState` is non-empty, canonicalizes the writer's `serializedMarkdown`, hashes that live serialization, then updates `document_branch_states` with the returned Yjs state and creates the immutable version in one checked-out database transaction.
 
 The version `operation` stored in `document_versions` is `write` for `kind: 'write'` and `edit` for `kind: 'edit'`. The richer operation metadata is for the live writer and audit hooks, not for the current enum column.
 
-> **Context note:** The original function wrote `current_markdown` directly and returned only `{ hash }`. The corrected contract first updates live branch state through `LiveMarkdownWriter`, then canonicalizes the Markdown serialized back from that live state, updates the mirror, and creates the immutable version returned to the API caller.
+> **Context note:** The original function wrote `current_markdown` directly and returned only `{ hash }`. The corrected contract first updates live branch state through `LiveMarkdownWriter`, then canonicalizes the Markdown serialized back from that live state, persists the returned Yjs update with the mirror, and creates the immutable version returned to the API caller. A writer that returns empty or invalid Yjs state must fail closed; it must not trigger a mirror-only write.
 
 - [ ] **Step 3: Commit**
 
@@ -444,7 +445,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter) {
 }
 ```
 
-The app-level error handler must map `live_writer_not_configured` to `503` so accepted write/edit requests cannot silently fall back to mirror-only persistence while the concrete minimal transaction writer is not wired.
+The app-level error handler must map `live_writer_not_configured` and `invalid_live_yjs_state` to `503` so accepted write/edit requests cannot silently fall back to mirror-only persistence while the concrete minimal transaction writer is not wired or returns unusable live state.
 
 - [ ] **Step 3: Update entrypoint call**
 
@@ -461,7 +462,7 @@ const app = createHttpApp(pool, liveWriter);
 Run:
 
 ```bash
-pnpm --filter @marklab/api typecheck
+npx -y pnpm@10.0.0 --filter @marklab/api typecheck
 ```
 
 Expected: PASS.

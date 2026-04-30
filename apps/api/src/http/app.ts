@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
+import { createVersionRoutes } from '../routes/version-routes';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
@@ -16,8 +17,18 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && (error.message === 'version_not_found' || error.message === 'source_version_not_found')) {
+    res.status(404).json({ error: error.message });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'live_writer_not_configured') {
     res.status(503).json({ error: 'live_writer_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'invalid_live_yjs_state') {
+    res.status(503).json({ error: 'invalid_live_yjs_state' });
     return;
   }
 
@@ -44,6 +55,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter) {
 
   app.use('/api', createDocAiRoutes(pool, liveWriter));
   app.use('/api', createImportExportRoutes(pool));
+  app.use('/api', createVersionRoutes(pool));
   app.use(errorHandler);
 
   return app;
