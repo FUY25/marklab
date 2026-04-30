@@ -27,6 +27,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'invalid_live_yjs_state') {
+    res.status(503).json({ error: 'invalid_live_yjs_state' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'milkdown_transformer_not_configured') {
     res.status(503).json({ error: 'milkdown_transformer_not_configured' });
     return;
