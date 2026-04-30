@@ -74,6 +74,13 @@ function createAccessRoutePool() {
       };
     }
 
+    if (sql.includes('from agent_tokens') && sql.includes('token_hash = $1')) {
+      const rows = agentTokens.filter(
+        (row) => row.token_hash === params?.[0] && row.doc_id === params?.[1] && (row.branch_id === params?.[2] || row.branch_id === null),
+      );
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+
     if (sql.includes('update agent_tokens')) {
       const row = agentTokens.find((candidate) => candidate.id === params?.[0] && !candidate.revoked_at);
       if (!row) return { rows: [], rowCount: 0 };
@@ -101,6 +108,13 @@ function createAccessRoutePool() {
         rows: shareLinks.filter((row) => row.doc_id === params?.[0] && row.branch_id === params?.[1] && !row.revoked_at) as Row[],
         rowCount: shareLinks.length,
       };
+    }
+
+    if (sql.includes('from share_links') && sql.includes('token_hash = $1')) {
+      const rows = shareLinks.filter(
+        (row) => row.token_hash === params?.[0] && row.doc_id === params?.[1] && (row.branch_id === params?.[2] || row.branch_id === null),
+      );
+      return { rows: rows as Row[], rowCount: rows.length };
     }
 
     if (sql.includes('update share_links')) {
@@ -136,6 +150,54 @@ describe('access routes', () => {
       .post('/api/docs/doc_001/branches/br_main/agent-tokens')
       .send({ name: 'Codex', canWrite: true })
       .expect(403, { error: 'forbidden' });
+  });
+
+  it('reports document access without exposing token secrets', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const createResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/agent-tokens')
+      .set(admin)
+      .send({ name: 'Read only', canWrite: false })
+      .expect(201);
+
+    const accessResponse = await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access')
+      .set({ Authorization: `Bearer ${createResponse.body.token}` })
+      .expect(200);
+
+    expect(accessResponse.body).toEqual({
+      canRead: true,
+      canWrite: false,
+      actorType: 'agent',
+    });
+    expect(JSON.stringify(accessResponse.body)).not.toContain(createResponse.body.token);
+  });
+
+  it('rejects document access introspection for invalid tokens when auth is required', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access')
+      .set({ Authorization: 'Bearer invalid-token' })
+      .expect(403, { error: 'forbidden' });
+  });
+
+  it('reports full document access when auth mode is disabled', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'false';
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app).get('/api/docs/doc_001/branches/br_main/access').expect(200, {
+      canRead: true,
+      canWrite: true,
+      actorType: 'user',
+    });
   });
 
   it('creates, lists without raw secret, and revokes agent tokens', async () => {

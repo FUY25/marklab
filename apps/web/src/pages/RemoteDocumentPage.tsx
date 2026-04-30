@@ -17,25 +17,19 @@ interface RemoteDocumentPageProps {
 }
 
 type EditorCollab = ReturnType<typeof createEditorCollab>;
-type DocumentAccessMode = 'editable' | 'read-only';
+type DocumentAccessMode = 'checking' | 'editable' | 'read-only';
 
 function readDocumentToken(): string | null {
   const token = new URLSearchParams(window.location.search).get('token');
   return token && token.trim() ? token : null;
 }
 
-function readAccessMode(documentToken: string | null): DocumentAccessMode {
-  if (!documentToken) return 'editable';
-  const mode = new URLSearchParams(window.location.search).get('mode');
-  return mode === 'edit' ? 'editable' : 'read-only';
-}
-
 export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps) {
   const config = useMemo(() => readWebConfig(), []);
   const roomName = useMemo(() => buildBranchRoomName(docId, branchId), [branchId, docId]);
   const documentToken = useMemo(() => readDocumentToken(), []);
-  const accessMode = useMemo(() => readAccessMode(documentToken), [documentToken]);
   const api = useMemo(() => new MarklabWebApi({ documentToken }), [documentToken]);
+  const [accessMode, setAccessMode] = useState<DocumentAccessMode>(documentToken ? 'checking' : 'editable');
   const [collab, setCollab] = useState<EditorCollab | null>(null);
   const [readOnlyDocument, setReadOnlyDocument] = useState<ReadDocumentResponse | null>(null);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
@@ -46,8 +40,37 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
   }, [branchId, docId]);
 
   useEffect(() => {
+    if (!documentToken) {
+      setAccessMode('editable');
+      return;
+    }
+
+    let isActive = true;
+    setAccessMode('checking');
     setConnectionMessage(null);
     setReadOnlyDocument(null);
+
+    void api
+      .getDocumentAccess(docId, branchId)
+      .then((access) => {
+        if (isActive) setAccessMode(access.canWrite ? 'editable' : 'read-only');
+      })
+      .catch((error: unknown) => {
+        if (!isActive) return;
+        setAccessMode('read-only');
+        setConnectionMessage(error instanceof Error ? error.message : 'Unable to verify document access.');
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [api, branchId, docId, documentToken]);
+
+  useEffect(() => {
+    setConnectionMessage(null);
+    setReadOnlyDocument(null);
+
+    if (accessMode === 'checking') return;
 
     if (accessMode === 'read-only') {
       let isActive = true;
@@ -105,6 +128,8 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
     };
   }, [accessMode, api, branchId, config.websocketUrl, docId, documentToken, roomName]);
 
+  const isReadOnly = accessMode === 'read-only';
+
   return (
     <main className="app-shell remote-document-shell" data-testid="remote-document-page">
       <header className="app-header">
@@ -120,7 +145,7 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
       {connectionMessage ? <div role="alert">{connectionMessage}</div> : null}
       <section className="remote-document-layout" aria-label="Document editor and history">
         <div className="remote-editor-workspace">
-          {accessMode === 'read-only' ? (
+          {isReadOnly ? (
             <article className="read-only-document" data-testid="read-only-document" aria-label="Read-only Markdown">
               <div className="read-only-heading">
                 <p className="workspace-kicker">Read-only</p>
@@ -128,6 +153,13 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
               </div>
               <pre>{readOnlyDocument?.markdown ?? 'Loading document...'}</pre>
             </article>
+          ) : accessMode === 'checking' ? (
+            <div className="read-only-document" data-testid="document-access-check" role="status">
+              <div className="read-only-heading">
+                <p className="workspace-kicker">Access</p>
+                <h2>Checking permissions</h2>
+              </div>
+            </div>
           ) : collab ? (
             <MilkdownEditor
               initialMarkdown=""
@@ -139,9 +171,9 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
           ) : null}
         </div>
         <div className="remote-workbench">
-          <BranchSwitcher docId={docId} branchId={branchId} />
-          <ShareAccessPanel docId={docId} branchId={branchId} />
-          <VersionHistoryPanel docId={docId} branchId={branchId} />
+          {isReadOnly ? null : <BranchSwitcher docId={docId} branchId={branchId} />}
+          {isReadOnly ? null : <ShareAccessPanel docId={docId} branchId={branchId} />}
+          <VersionHistoryPanel docId={docId} branchId={branchId} readOnly={isReadOnly} />
         </div>
       </section>
     </main>

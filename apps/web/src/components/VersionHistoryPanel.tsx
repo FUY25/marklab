@@ -10,6 +10,7 @@ import { buildDocumentPath } from '../routes';
 interface VersionHistoryPanelProps {
   docId: string;
   branchId: string;
+  readOnly?: boolean;
 }
 
 function formatCreatedAt(value: string): string {
@@ -31,7 +32,7 @@ function operationLabel(operation: VersionOperation): string {
   return operation.replace(/_/gu, ' ');
 }
 
-export function VersionHistoryPanel({ docId, branchId }: VersionHistoryPanelProps) {
+export function VersionHistoryPanel({ docId, branchId, readOnly = false }: VersionHistoryPanelProps) {
   const api = useMemo(() => new MarklabWebApi(), []);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -200,42 +201,46 @@ export function VersionHistoryPanel({ docId, branchId }: VersionHistoryPanelProp
         </pre>
       </div>
 
-      <form className="version-action" onSubmit={handleBranchFromVersion}>
-        <label htmlFor="new-branch-name">New branch name</label>
-        <div className="version-action-row">
-          <input
-            id="new-branch-name"
-            type="text"
-            value={branchName}
-            onChange={(event) => setBranchName(event.currentTarget.value)}
-            disabled={!selectedVersion || busyAction !== null}
-            autoComplete="off"
-          />
-          <button type="submit" disabled={!selectedVersion || busyAction !== null}>
-            {busyAction === 'branch' ? 'Branching...' : 'Branch from this version'}
-          </button>
-        </div>
-      </form>
+      {readOnly ? null : (
+        <>
+          <form className="version-action" onSubmit={handleBranchFromVersion}>
+            <label htmlFor="new-branch-name">New branch name</label>
+            <div className="version-action-row">
+              <input
+                id="new-branch-name"
+                type="text"
+                value={branchName}
+                onChange={(event) => setBranchName(event.currentTarget.value)}
+                disabled={!selectedVersion || busyAction !== null}
+                autoComplete="off"
+              />
+              <button type="submit" disabled={!selectedVersion || busyAction !== null}>
+                {busyAction === 'branch' ? 'Branching...' : 'Branch from this version'}
+              </button>
+            </div>
+          </form>
 
-      <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
-        <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
-        <div className="version-action-row">
-          <input
-            id="restore-confirmation"
-            type="text"
-            value={restoreConfirmation}
-            onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
-            disabled={!selectedVersion || busyAction !== null}
-            autoComplete="off"
-          />
-          <button
-            type="submit"
-            disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
-          >
-            {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
-          </button>
-        </div>
-      </form>
+          <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
+            <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
+            <div className="version-action-row">
+              <input
+                id="restore-confirmation"
+                type="text"
+                value={restoreConfirmation}
+                onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
+                disabled={!selectedVersion || busyAction !== null}
+                autoComplete="off"
+              />
+              <button
+                type="submit"
+                disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
+              >
+                {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
 
       <span className="version-panel-status" role={statusKind}>
         {status}

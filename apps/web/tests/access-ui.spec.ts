@@ -163,6 +163,9 @@ test('manages share links and agent tokens under required auth', async ({ browse
     await expect(viewPage.getByTestId('read-only-document')).toContainText('Access UI');
     await expect(viewPage.getByTestId('milkdown-editor')).toHaveCount(0);
     await expect(viewPage.locator('.ProseMirror')).toHaveCount(0);
+    await expect(viewPage.getByTestId('share-access-panel')).toHaveCount(0);
+    await expect(viewPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
+    await expect(viewPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);
   } finally {
     await viewContext?.close();
   }
@@ -171,6 +174,23 @@ test('manages share links and agent tokens under required auth', async ({ browse
   const readResult = await readDocument(request, doc, agentToken);
   expect(readResult.markdown).toContain('Shared edit.');
   await expectStatus(await writeDocument(request, doc, agentToken, `${readResult.markdown}\nForbidden write.\n`), 403, 'read-only write_doc');
+
+  let readOnlyAgentContext: BrowserContext | undefined;
+  try {
+    readOnlyAgentContext = await browser.newContext();
+    const readOnlyAgentPage = await readOnlyAgentContext.newPage();
+    await readOnlyAgentPage.goto(
+      `${webUrl}${documentPath(doc)}?token=${encodeURIComponent(agentToken)}&mode=edit`,
+    );
+    await expect(readOnlyAgentPage.getByTestId('read-only-document')).toContainText('Access UI');
+    await expect(readOnlyAgentPage.getByTestId('milkdown-editor')).toHaveCount(0);
+    await expect(readOnlyAgentPage.locator('.ProseMirror')).toHaveCount(0);
+    await expect(readOnlyAgentPage.getByTestId('share-access-panel')).toHaveCount(0);
+    await expect(readOnlyAgentPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
+    await expect(readOnlyAgentPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);
+  } finally {
+    await readOnlyAgentContext?.close();
+  }
 
   await page.getByRole('button', { name: 'Revoke agent token Read-only agent' }).click();
   await expectStatus(

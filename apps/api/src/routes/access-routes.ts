@@ -1,7 +1,13 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
-import { generateAgentToken, generateShareToken, hashToken, verifyAdminToken } from '../services/access-control';
+import {
+  generateAgentToken,
+  generateShareToken,
+  hashToken,
+  verifyAdminToken,
+  verifyDocumentAccess,
+} from '../services/access-control';
 
 interface AgentTokenRow {
   id: string;
@@ -39,6 +45,12 @@ function bearerToken(req: Request): string | undefined {
   const header = req.header('authorization');
   const match = /^Bearer\s+(.+)$/iu.exec(header ?? '');
   return match?.[1];
+}
+
+function documentToken(req: Request): string | undefined {
+  const queryToken = req.query.token;
+  if (typeof queryToken === 'string' && queryToken) return queryToken;
+  return bearerToken(req);
 }
 
 function requireAdmin(req: Request): void {
@@ -79,6 +91,35 @@ function toShareLinkSummary(row: ShareLinkRow) {
 
 export function createAccessRoutes(pool: DbPool) {
   const router = Router();
+
+  router.get('/docs/:docId/branches/:branchId/access', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!authRequired()) {
+        res.json({ canRead: true, canWrite: true, actorType: 'user' });
+        return;
+      }
+
+      const docId = requiredParam(req, 'docId');
+      const branchId = requiredParam(req, 'branchId');
+      const token = documentToken(req);
+      const readAccess = await verifyDocumentAccess(pool, token, docId, branchId, 'read');
+      let canWrite = false;
+      try {
+        await verifyDocumentAccess(pool, token, docId, branchId, 'write');
+        canWrite = true;
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'forbidden') throw error;
+      }
+
+      res.json({
+        canRead: true,
+        canWrite,
+        actorType: readAccess.actorType,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post('/docs/:docId/branches/:branchId/agent-tokens', async (req: Request, res: Response, next: NextFunction) => {
     try {

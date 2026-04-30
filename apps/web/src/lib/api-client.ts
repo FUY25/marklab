@@ -74,6 +74,12 @@ export interface ReadDocumentResponse {
   markdown: string;
 }
 
+export interface DocumentAccessResponse {
+  canRead: boolean;
+  canWrite: boolean;
+  actorType: 'agent' | 'user';
+}
+
 export interface AgentTokenSummary {
   tokenId: string;
   name: string;
@@ -216,6 +222,14 @@ export class MarklabWebApi {
       { headers: this.documentHeaders() },
     );
     return requireJsonResponse<ReadDocumentResponse>(response, 'read_doc');
+  }
+
+  async getDocumentAccess(docId: string, branchId: string): Promise<DocumentAccessResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/access`,
+      { headers: this.documentHeaders() },
+    );
+    return requireJsonResponse<DocumentAccessResponse>(response, 'document_access');
   }
 
   async exportMarkdown(docId: string, branchId: string): Promise<ExportedMarkdown> {
