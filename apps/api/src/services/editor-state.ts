@@ -45,15 +45,17 @@ export async function applyMarkdownToBranchState(
   const liveTransaction = await input.liveWriter.applyMarkdownTransaction(transaction);
   const canonicalMarkdown = await canonicalizeMarkdown(liveTransaction.serializedMarkdown);
   const hash = sha256Hex(canonicalMarkdown);
+  if (liveTransaction.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
 
   const version = await withTransaction(input.pool, async (client) => {
     const updateResult = await client.query(
       `update document_branch_states
           set current_markdown = $2,
               current_hash = $3,
+              yjs_state = $4,
               updated_at = now()
         where branch_id = $1`,
-      [input.branchId, canonicalMarkdown, hash],
+      [input.branchId, canonicalMarkdown, hash, Buffer.from(liveTransaction.yjsState)],
     );
 
     if ((updateResult.rowCount ?? 1) === 0) throw new Error('branch_not_found');

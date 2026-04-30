@@ -66,6 +66,7 @@ function createEchoLiveWriter(): LiveMarkdownWriter & { transactions: LiveMarkdo
       transactions.push(transaction);
       return {
         serializedMarkdown: transaction.targetCanonicalMarkdown,
+        yjsState: new Uint8Array([1, 2, 3]),
         changedRangeCount: 1,
         appliedTransactionCount: 1,
       };

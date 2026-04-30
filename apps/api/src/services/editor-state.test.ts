@@ -43,7 +43,10 @@ function createFakePool() {
   return { pool, queries };
 }
 
-function createCapturingLiveWriter(serializedMarkdown: string): LiveMarkdownWriter & {
+function createCapturingLiveWriter(
+  serializedMarkdown: string,
+  yjsState = new Uint8Array([1, 2, 3]),
+): LiveMarkdownWriter & {
   transactions: LiveMarkdownTransaction[];
 } {
   const transactions: LiveMarkdownTransaction[] = [];
@@ -51,7 +54,7 @@ function createCapturingLiveWriter(serializedMarkdown: string): LiveMarkdownWrit
     transactions,
     async applyMarkdownTransaction(transaction) {
       transactions.push(transaction);
-      return { serializedMarkdown, changedRangeCount: 1, appliedTransactionCount: 1 };
+      return { serializedMarkdown, yjsState, changedRangeCount: 1, appliedTransactionCount: 1 };
     },
   };
 }
@@ -60,7 +63,8 @@ describe('applyMarkdownToBranchState', () => {
   it('persists the live writer serialized markdown and passes operation metadata', async () => {
     const { pool, queries } = createFakePool();
     const liveSerializedMarkdown = '## Serialized from live editor';
-    const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown);
+    const liveYjsState = new Uint8Array([7, 8, 9]);
+    const liveWriter = createCapturingLiveWriter(liveSerializedMarkdown, liveYjsState);
 
     const result = await applyMarkdownToBranchState({
       pool,
@@ -98,7 +102,7 @@ describe('applyMarkdownToBranchState', () => {
     ]);
 
     const branchStateUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
-    expect(branchStateUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash]);
+    expect(branchStateUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash, Buffer.from(liveYjsState)]);
 
     const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
     expect(versionInsert?.params).toEqual([

@@ -98,6 +98,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     const liveSerializedMarkdown = '## Live serialized\n\n|A|B|\n|-|-|\n|1|2|\n';
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: liveSerializedMarkdown,
+      yjsState: new Uint8Array([1, 2, 3]),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -121,7 +122,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(response.body).toEqual({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
 
     const mirrorUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
-    expect(mirrorUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash]);
+    expect(mirrorUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash, Buffer.from([1, 2, 3])]);
 
     const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
     expect(versionInsert?.params).toEqual([
@@ -141,6 +142,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     const { pool, queries } = createFakePool({ currentVersionId: 'ver_002' });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: '# Should not be used\n',
+      yjsState: new Uint8Array([1, 2, 3]),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
@@ -177,6 +179,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     const { pool, queries } = createFakePool({ currentMarkdown: 'A old\nB old\n', currentVersionId: 'ver_current' });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: 'A new\nB old\n',
+      yjsState: new Uint8Array([1, 2, 3]),
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });

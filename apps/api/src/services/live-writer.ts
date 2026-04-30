@@ -20,6 +20,7 @@ export interface LiveMarkdownTransaction {
 
 export interface AppliedLiveMarkdownTransaction {
   serializedMarkdown: string;
+  yjsState: Uint8Array;
   changedRangeCount: number;
   appliedTransactionCount: number;
 }

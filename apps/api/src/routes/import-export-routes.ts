@@ -15,6 +15,16 @@ const importSchema = z.object({
   markdown: z.string(),
 });
 
+class ExportVersionMismatchError extends Error {
+  constructor(
+    public readonly currentHash: string,
+    public readonly versionHash: string,
+  ) {
+    super('export_version_mismatch');
+    this.name = 'ExportVersionMismatchError';
+  }
+}
+
 function requiredParam(req: Request, name: string): string {
   const value = req.params[name];
   if (typeof value !== 'string' || !value) throw new Error(`missing_route_param:${name}`);
@@ -52,15 +62,19 @@ export function createImportExportRoutes(pool: DbPool) {
       await flushBranchMarkdownMirror(pool, docId, branchId);
       const state = await readBranchState(pool, docId, branchId);
 
-      const metadata = await pool.query<{ title: string; branch_slug: string }>(
-        `select d.title, b.slug as branch_slug
+      const metadata = await pool.query<{ title: string; branch_slug: string; version_hash: string }>(
+        `select d.title, b.slug as branch_slug, v.hash as version_hash
            from documents d
            join document_branches b on b.doc_id = d.id
+           join document_versions v on v.id = b.head_version_id
           where d.id = $1 and b.id = $2 and b.is_archived = false`,
         [docId, branchId],
       );
       const metadataRow = metadata.rows[0];
       if (!metadataRow) throw new Error('branch_not_found');
+      if (metadataRow.version_hash !== state.hash) {
+        throw new ExportVersionMismatchError(state.hash, metadataRow.version_hash);
+      }
 
       const filename = buildExportFilename({
         title: metadataRow.title,
@@ -75,6 +89,15 @@ export function createImportExportRoutes(pool: DbPool) {
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(state.markdown);
     } catch (error) {
+      if (error instanceof ExportVersionMismatchError) {
+        res.status(409).json({
+          error: 'export_version_mismatch',
+          currentHash: error.currentHash,
+          versionHash: error.versionHash,
+        });
+        return;
+      }
+
       next(error);
     }
   });
