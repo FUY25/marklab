@@ -367,6 +367,288 @@ button:disabled {
   color: var(--workspace-danger);
 }
 
+.remote-document-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  gap: 16px;
+  align-items: start;
+}
+
+.remote-editor-workspace,
+.remote-workbench {
+  min-width: 0;
+}
+
+.remote-workbench {
+  display: grid;
+  gap: 12px;
+}
+
+.branch-switcher,
+.version-history-panel {
+  min-width: 0;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.branch-switcher {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+  padding: 12px;
+}
+
+.branch-switcher label,
+.version-action label {
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.branch-switcher select,
+.version-action input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 7px 9px;
+  color: var(--workspace-ink);
+  background: #ffffff;
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.branch-switcher select:focus,
+.version-action input:focus {
+  border-color: var(--workspace-action);
+  box-shadow: 0 0 0 3px rgba(31, 79, 70, 0.12);
+}
+
+.branch-switcher-status {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--workspace-soft);
+  font-size: 12px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-switcher-status[role='alert'] {
+  color: var(--workspace-danger);
+}
+
+.version-history-panel {
+  overflow: hidden;
+}
+
+.version-panel-heading,
+.version-detail-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.version-panel-heading {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.version-panel-heading h2,
+.version-detail-title h3 {
+  margin: 0;
+  color: var(--workspace-ink);
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.version-panel-heading span,
+.version-detail-title span {
+  color: var(--workspace-soft);
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.version-list {
+  display: grid;
+  max-height: 240px;
+  overflow: auto;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.version-row {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 14px;
+  color: var(--workspace-ink);
+  background: #ffffff;
+  border: 0;
+  border-left: 3px solid transparent;
+  text-align: left;
+}
+
+.version-row + .version-row {
+  border-top: 1px solid var(--workspace-border);
+}
+
+.version-row:hover,
+.version-row-active {
+  background: var(--workspace-surface-muted);
+  border-left-color: var(--workspace-action);
+}
+
+.version-row-main,
+.version-row-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-row-main strong {
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.version-row-main span,
+.version-row-meta span,
+.version-row-meta time,
+.version-row-meta code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-row-main span {
+  color: var(--workspace-muted);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.version-row-meta {
+  color: var(--workspace-soft);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.version-row-meta code {
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+}
+
+.version-empty {
+  margin: 0;
+  padding: 14px;
+  color: var(--workspace-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.version-detail {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.version-preview {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 150px;
+  max-height: 230px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  color: var(--workspace-ink);
+  background: #fbfbfa;
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.version-action {
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.version-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.version-action button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  color: #ffffff;
+  background: var(--workspace-action);
+  border: 1px solid var(--workspace-action);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.version-action button:hover {
+  background: var(--workspace-action-hover);
+  border-color: var(--workspace-action-hover);
+}
+
+.version-action-danger button {
+  background: var(--workspace-danger);
+  border-color: var(--workspace-danger);
+}
+
+.version-action-danger button:hover {
+  background: #7f1717;
+  border-color: #7f1717;
+}
+
+.version-panel-status {
+  display: block;
+  min-height: 18px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 10px 14px;
+  color: var(--workspace-muted);
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-panel-status[role='alert'] {
+  color: var(--workspace-danger);
+}
+
 .milkdown-editor {
   min-height: 520px;
   background: #ffffff;
@@ -436,6 +718,10 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .remote-document-layout {
+    grid-template-columns: 1fr;
+  }
+
   .workspace-header,
   .app-header {
     align-items: flex-start;
@@ -453,5 +739,9 @@ button:disabled {
 
   .collab-pane .milkdown-editor .ProseMirror {
     padding: 24px 22px 36px;
+  }
+
+  .version-action-row {
+    grid-template-columns: 1fr;
   }
 }

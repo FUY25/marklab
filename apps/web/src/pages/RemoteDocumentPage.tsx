@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
+import { BranchSwitcher } from '../components/BranchSwitcher';
 import { DocumentToolbar } from '../components/DocumentToolbar';
 import { MilkdownEditor } from '../components/MilkdownEditor';
+import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { readWebConfig } from '../config';
 import { createEditorCollab } from '../lib/editor-collab';
 import { buildBranchRoomName } from '../lib/remote-room';
@@ -79,15 +81,23 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
       </header>
       <DocumentToolbar docId={docId} branchId={branchId} />
       {connectionMessage ? <div role="alert">{connectionMessage}</div> : null}
-      {collab ? (
-        <MilkdownEditor
-          initialMarkdown=""
-          ydoc={collab.ydoc}
-          awareness={collab.awareness}
-          applyInitialTemplate={false}
-          testId="milkdown-editor"
-        />
-      ) : null}
+      <section className="remote-document-layout" aria-label="Document editor and history">
+        <div className="remote-editor-workspace">
+          {collab ? (
+            <MilkdownEditor
+              initialMarkdown=""
+              ydoc={collab.ydoc}
+              awareness={collab.awareness}
+              applyInitialTemplate={false}
+              testId="milkdown-editor"
+            />
+          ) : null}
+        </div>
+        <div className="remote-workbench">
+          <BranchSwitcher docId={docId} branchId={branchId} />
+          <VersionHistoryPanel docId={docId} branchId={branchId} />
+        </div>
+      </section>
     </main>
   );
 }
