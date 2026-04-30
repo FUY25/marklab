@@ -10,7 +10,12 @@ export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
 }
 
-const defaultCorsOrigins = new Set(['http://127.0.0.1:5175', 'http://localhost:5175']);
+const defaultCorsOrigins = new Set([
+  'http://127.0.0.1:5173',
+  'http://localhost:5173',
+  'http://127.0.0.1:5175',
+  'http://localhost:5175',
+]);
 const corsMethods = 'GET, POST, DELETE, OPTIONS';
 const corsHeaders = 'content-type, authorization';
 const exposedCorsHeaders = 'content-disposition';

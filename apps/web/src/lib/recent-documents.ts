@@ -8,6 +8,15 @@ export interface RecentDocument {
 const recentDocumentsKey = 'marklab.recentDocuments.v1';
 const maxRecentDocuments = 10;
 
+function defaultStorage(): Storage | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function isRecentDocument(value: unknown): value is RecentDocument {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<RecentDocument>;
@@ -21,9 +30,12 @@ function isRecentDocument(value: unknown): value is RecentDocument {
   );
 }
 
-export function loadRecentDocuments(storage: Storage = localStorage): RecentDocument[] {
+export function loadRecentDocuments(storage?: Storage): RecentDocument[] {
+  const targetStorage = storage ?? defaultStorage();
+  if (!targetStorage) return [];
+
   try {
-    const raw = storage.getItem(recentDocumentsKey);
+    const raw = targetStorage.getItem(recentDocumentsKey);
     if (!raw) return [];
 
     const parsed = JSON.parse(raw) as unknown;
@@ -37,20 +49,23 @@ export function loadRecentDocuments(storage: Storage = localStorage): RecentDocu
 
 export function rememberRecentDocument(
   document: Omit<RecentDocument, 'openedAt'> & Partial<Pick<RecentDocument, 'openedAt'>>,
-  storage: Storage = localStorage,
+  storage?: Storage,
 ): RecentDocument[] {
+  const targetStorage = storage ?? defaultStorage();
   const nextDocument: RecentDocument = {
     ...document,
     title: document.title.trim() || document.docId,
     openedAt: document.openedAt ?? new Date().toISOString(),
   };
-  const deduped = loadRecentDocuments(storage).filter(
+  const deduped = (targetStorage ? loadRecentDocuments(targetStorage) : []).filter(
     (item) => item.docId !== nextDocument.docId || item.branchId !== nextDocument.branchId,
   );
   const nextDocuments = [nextDocument, ...deduped].slice(0, maxRecentDocuments);
 
+  if (!targetStorage) return nextDocuments;
+
   try {
-    storage.setItem(recentDocumentsKey, JSON.stringify(nextDocuments));
+    targetStorage.setItem(recentDocumentsKey, JSON.stringify(nextDocuments));
   } catch {
     // Local storage can be unavailable in private browsing or quota-constrained sessions.
   }
