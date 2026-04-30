@@ -35,6 +35,9 @@ create table if not exists document_branch_states (
   updated_at timestamptz not null default now()
 );
 
+alter table document_branch_states
+  add column if not exists yjs_state_fingerprint text;
+
 create table if not exists document_versions (
   id uuid primary key default gen_random_uuid(),
   doc_id uuid not null references documents(id) on delete cascade,

@@ -7,7 +7,7 @@ import { initializeBranchEditorState } from '../services/milkdown-transformer';
 
 vi.mock('../services/milkdown-transformer', () => ({
   initializeBranchEditorState: vi.fn(async () => ({
-    yjsState: Uint8Array.from([4, 5, 6]),
+    yjsState: Uint8Array.from([0, 0]),
     markdown: '# Branch copy\n',
     hash: 'sha256:branch-copy',
   })),

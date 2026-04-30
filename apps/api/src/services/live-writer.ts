@@ -21,7 +21,13 @@ export interface LiveMarkdownTransaction {
 export interface AppliedLiveMarkdownTransaction {
   serializedMarkdown: string;
   yjsState: Uint8Array;
+  sourceStateFingerprint?: string;
+  previousSerializedMarkdown?: string;
+  previousHash?: string;
   changedRangeCount: number;
+  changedCharacterCount: number;
+  documentCharacterCount: number;
+  fullDocumentReplacement: boolean;
   appliedTransactionCount: number;
 }
 

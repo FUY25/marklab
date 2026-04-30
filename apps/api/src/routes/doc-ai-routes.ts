@@ -86,7 +86,16 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
       const branchId = requiredParam(req, 'branchId');
       const body = editSchema.parse(req.body);
       const current = await readBranchState(pool, docId, branchId);
-      const nextMarkdown = applyEditToMarkdown(current.markdown, body.oldString, body.newString, body.replaceAll);
+      let nextMarkdown: string;
+      try {
+        nextMarkdown = applyEditToMarkdown(current.markdown, body.oldString, body.newString, body.replaceAll);
+      } catch (error) {
+        if (error instanceof EditConflictError && error.message === 'old_string_not_found') {
+          nextMarkdown = current.markdown;
+        } else {
+          throw error;
+        }
+      }
       const operation: LiveMarkdownOperation =
         body.observedVersionId === undefined
           ? {

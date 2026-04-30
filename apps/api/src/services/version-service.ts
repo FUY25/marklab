@@ -1,6 +1,7 @@
 import type { DbExecutor, DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { initializeBranchEditorState } from './milkdown-transformer';
+import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export type VersionActorType = 'agent' | 'user' | 'system';
 export type VersionOperation = 'create' | 'import' | 'autosave' | 'manual_save' | 'write' | 'edit' | 'rollback' | 'branch';
@@ -186,9 +187,15 @@ export async function branchFromVersion(
     const initialized = await initializeBranchEditorState(sourceRow.markdown_snapshot);
 
     await client.query(
-      `insert into document_branch_states (branch_id, yjs_state, current_markdown, current_hash)
-       values ($1, $2, $3, $4)`,
-      [branchId, Buffer.from(initialized.yjsState), initialized.markdown, initialized.hash],
+      `insert into document_branch_states (branch_id, yjs_state, yjs_state_fingerprint, current_markdown, current_hash)
+       values ($1, $2, $3, $4, $5)`,
+      [
+        branchId,
+        Buffer.from(initialized.yjsState),
+        encodeYjsStateFingerprint(initialized.yjsState),
+        initialized.markdown,
+        initialized.hash,
+      ],
     );
 
     const version = await client.query<{ id: string }>(

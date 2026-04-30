@@ -5,7 +5,7 @@ import { initializeBranchEditorState } from './milkdown-transformer';
 
 vi.mock('./milkdown-transformer', () => ({
   initializeBranchEditorState: vi.fn(async () => ({
-    yjsState: Uint8Array.from([1, 2, 3]),
+    yjsState: Uint8Array.from([0, 0]),
     markdown: '# Branched\n',
     hash: 'sha256:branched',
   })),
@@ -166,7 +166,8 @@ describe('branchFromVersion', () => {
     const stateInsert = queries.find((query) => query.sql.includes('insert into document_branch_states'));
     expect(stateInsert?.params).toEqual([
       'br_new',
-      Buffer.from(Uint8Array.from([1, 2, 3])),
+      Buffer.from(Uint8Array.from([0, 0])),
+      expect.any(String),
       '# Branched\n',
       'sha256:branched',
     ]);

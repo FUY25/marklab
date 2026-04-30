@@ -2,6 +2,7 @@ import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { createHeadlessMilkdownRuntime } from './milkdown-headless-runtime';
 import { createVersionWithClient } from './version-service';
+import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface InitializedBranchEditorState {
   yjsState: Uint8Array;
@@ -45,11 +46,13 @@ export async function flushBranchMarkdownMirror(
   return withTransaction(pool, async (client) => {
     const state = await client.query<{
       yjs_state: Buffer;
+      yjs_state_fingerprint: string | null;
       head_version_id: string | null;
       head_version_number: number | null;
       head_hash: string | null;
     }>(
       `select s.yjs_state,
+              s.yjs_state_fingerprint,
               b.head_version_id,
               v.version_number as head_version_number,
               v.hash as head_hash
@@ -69,8 +72,9 @@ export async function flushBranchMarkdownMirror(
     const update = await client.query(
       `update document_branch_states
           set yjs_state = $3,
-              current_markdown = $4,
-              current_hash = $5,
+              yjs_state_fingerprint = $4,
+              current_markdown = $5,
+              current_hash = $6,
               updated_at = now()
         where branch_id = $1
           and exists (
@@ -78,7 +82,14 @@ export async function flushBranchMarkdownMirror(
               from document_branches
              where id = $1 and doc_id = $2 and is_archived = false
           )`,
-      [branchId, docId, Buffer.from(serialized.yjsState), serialized.markdown, serialized.hash],
+      [
+        branchId,
+        docId,
+        Buffer.from(serialized.yjsState),
+        row.yjs_state_fingerprint ?? encodeYjsStateFingerprint(serialized.yjsState),
+        serialized.markdown,
+        serialized.hash,
+      ],
     );
     if ((update.rowCount ?? 1) === 0) throw new Error('branch_not_found');
 

@@ -3,9 +3,16 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbTransactionClient } from '../db/client';
 import { withTransaction } from '../db/client';
-import type { LiveMarkdownOperation, LiveMarkdownTransaction, LiveMarkdownWriter } from './live-writer';
+import { applyEditToMarkdown, assertCanWrite } from './doc-write';
+import type {
+  AppliedLiveMarkdownTransaction,
+  LiveMarkdownOperation,
+  LiveMarkdownTransaction,
+  LiveMarkdownWriter,
+} from './live-writer';
 import { shouldCreateVersionForCurrentHash } from './save-policy';
 import { createVersionWithClient, type VersionActorType } from './version-service';
+import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface ApplyMarkdownToBranchInput {
   pool: DbPool;
@@ -40,6 +47,7 @@ interface BranchVersionState {
   currentHash: string;
   headVersionId: string;
   headHash: string;
+  stateFingerprint: string;
 }
 
 async function readBranchVersionStateForUpdate(
@@ -49,11 +57,15 @@ async function readBranchVersionStateForUpdate(
   const result = await client.query<{
     current_markdown: string;
     current_hash: string;
+    yjs_state: Buffer;
+    yjs_state_fingerprint: string | null;
     head_version_id: string | null;
     head_hash: string | null;
   }>(
     `select s.current_markdown,
             s.current_hash,
+            s.yjs_state,
+            s.yjs_state_fingerprint,
             b.head_version_id,
             v.hash as head_hash
        from document_branches b
@@ -72,15 +84,56 @@ async function readBranchVersionStateForUpdate(
     currentHash: row.current_hash,
     headVersionId: row.head_version_id,
     headHash: row.head_hash,
+    stateFingerprint: row.yjs_state_fingerprint ?? encodeYjsStateFingerprint(new Uint8Array(row.yjs_state)),
   };
+}
+
+async function expectedEditMarkdown(
+  baseMarkdown: string,
+  operation: Extract<LiveMarkdownOperation, { kind: 'edit' }>,
+): Promise<string> {
+  return canonicalizeMarkdown(
+    applyEditToMarkdown(baseMarkdown, operation.oldString, operation.newString, operation.replaceAll),
+  );
+}
+
+async function assertOperationStillApplies(
+  branchState: BranchVersionState,
+  input: ApplyMarkdownToBranchInput,
+  liveTransaction: AppliedLiveMarkdownTransaction,
+  targetCanonicalMarkdown: string,
+): Promise<void> {
+  if (input.operation.kind === 'write') {
+    assertCanWrite(
+      branchState.headVersionId,
+      branchState.currentHash,
+      input.operation.baseVersionId,
+      input.operation.baseHash,
+    );
+    return;
+  }
+
+  const baseMarkdown = liveTransaction.previousSerializedMarkdown ?? branchState.currentMarkdown;
+  const expectedMarkdown = await expectedEditMarkdown(baseMarkdown, input.operation);
+  if (expectedMarkdown !== targetCanonicalMarkdown) throw new Error('live_yjs_state_changed');
 }
 
 async function createPreAgentCheckpointIfNeeded(
   client: DbTransactionClient,
   input: ApplyMarkdownToBranchInput,
+  liveTransaction: AppliedLiveMarkdownTransaction,
+  targetCanonicalMarkdown: string,
 ): Promise<string> {
   const branchState = await readBranchVersionStateForUpdate(client, input.branchId);
-  if (!shouldCreateVersionForCurrentHash(branchState.currentHash, branchState.headHash)) {
+  if (liveTransaction.sourceStateFingerprint !== undefined && liveTransaction.sourceStateFingerprint !== branchState.stateFingerprint) {
+    throw new Error('live_yjs_state_changed');
+  }
+  await assertOperationStillApplies(branchState, input, liveTransaction, targetCanonicalMarkdown);
+
+  const checkpointMarkdown = liveTransaction.previousSerializedMarkdown ?? branchState.currentMarkdown;
+  const checkpointHash = liveTransaction.previousHash ?? branchState.currentHash;
+
+  if (!shouldCreateVersionForCurrentHash(checkpointHash, branchState.headHash)) {
     return branchState.headVersionId;
   }
 
@@ -89,8 +142,8 @@ async function createPreAgentCheckpointIfNeeded(
     docId: input.docId,
     branchId: input.branchId,
     parentVersionId: branchState.headVersionId,
-    markdown: branchState.currentMarkdown,
-    hash: branchState.currentHash,
+    markdown: checkpointMarkdown,
+    hash: checkpointHash,
     actorType: 'system',
     operation: 'autosave',
   });
@@ -114,43 +167,69 @@ function assertValidLiveYjsState(yjsState: Uint8Array): void {
 export async function applyMarkdownToBranchState(
   input: ApplyMarkdownToBranchInput,
 ): Promise<ApplyMarkdownToBranchResult> {
-  const requestedMarkdown = await canonicalizeMarkdown(input.markdown);
-  const transaction: LiveMarkdownTransaction = {
-    branchId: input.branchId,
-    targetCanonicalMarkdown: requestedMarkdown,
-    operation: input.operation,
-  };
-  const liveTransaction = await input.liveWriter.applyMarkdownTransaction(transaction);
-  assertValidLiveYjsState(liveTransaction.yjsState);
-  const canonicalMarkdown = await canonicalizeMarkdown(liveTransaction.serializedMarkdown);
-  const hash = sha256Hex(canonicalMarkdown);
+  let targetCanonicalMarkdown = await canonicalizeMarkdown(input.markdown);
 
-  const version = await withTransaction(input.pool, async (client) => {
-    const parentVersionId = await createPreAgentCheckpointIfNeeded(client, input);
-    const updateResult = await client.query(
-      `update document_branch_states
-          set current_markdown = $2,
-              current_hash = $3,
-              yjs_state = $4,
-              updated_at = now()
-        where branch_id = $1`,
-      [input.branchId, canonicalMarkdown, hash, Buffer.from(liveTransaction.yjsState)],
-    );
-
-    if ((updateResult.rowCount ?? 1) === 0) throw new Error('branch_not_found');
-
-    return createVersionWithClient({
-      client,
-      docId: input.docId,
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const transaction: LiveMarkdownTransaction = {
       branchId: input.branchId,
-      parentVersionId,
-      markdown: canonicalMarkdown,
-      hash,
-      actorType: input.actorType,
-      actorId: input.actorId,
-      operation: versionOperationForLiveOperation(input.operation),
-    });
-  });
+      targetCanonicalMarkdown,
+      operation: input.operation,
+    };
+    const liveTransaction = await input.liveWriter.applyMarkdownTransaction(transaction);
+    assertValidLiveYjsState(liveTransaction.yjsState);
 
-  return { canonicalMarkdown, hash, ...version };
+    if (input.operation.kind === 'edit' && liveTransaction.previousSerializedMarkdown !== undefined) {
+      const rebasedMarkdown = await expectedEditMarkdown(liveTransaction.previousSerializedMarkdown, input.operation);
+      if (rebasedMarkdown !== targetCanonicalMarkdown) {
+        targetCanonicalMarkdown = rebasedMarkdown;
+        continue;
+      }
+    }
+
+    const canonicalMarkdown = await canonicalizeMarkdown(liveTransaction.serializedMarkdown);
+    const hash = sha256Hex(canonicalMarkdown);
+    const yjsStateFingerprint = encodeYjsStateFingerprint(liveTransaction.yjsState);
+
+    try {
+      const version = await withTransaction(input.pool, async (client) => {
+        const parentVersionId = await createPreAgentCheckpointIfNeeded(
+          client,
+          input,
+          liveTransaction,
+          targetCanonicalMarkdown,
+        );
+        const updateResult = await client.query(
+          `update document_branch_states
+              set current_markdown = $2,
+                  current_hash = $3,
+                  yjs_state = $4,
+                  yjs_state_fingerprint = $5,
+                  updated_at = now()
+            where branch_id = $1`,
+          [input.branchId, canonicalMarkdown, hash, Buffer.from(liveTransaction.yjsState), yjsStateFingerprint],
+        );
+
+        if ((updateResult.rowCount ?? 1) === 0) throw new Error('branch_not_found');
+
+        return createVersionWithClient({
+          client,
+          docId: input.docId,
+          branchId: input.branchId,
+          parentVersionId,
+          markdown: canonicalMarkdown,
+          hash,
+          actorType: input.actorType,
+          actorId: input.actorId,
+          operation: versionOperationForLiveOperation(input.operation),
+        });
+      });
+
+      return { canonicalMarkdown, hash, ...version };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'live_yjs_state_changed' && attempt < 2) continue;
+      throw error;
+    }
+  }
+
+  throw new Error('live_yjs_state_changed');
 }

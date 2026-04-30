@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
@@ -81,39 +82,44 @@ describe('export route version metadata consistency', () => {
     vi.clearAllMocks();
   });
 
-  it('rejects export when post-flush branch state does not match flushed version metadata', async () => {
+  it('exports the exact flushed payload even when a later branch-state read would differ', async () => {
+    const flushedHash = sha256Hex('# Flushed export\n');
     vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
       branchId: 'br_main',
-      markdown: '# Exported\n',
-      hash: 'sha256:fresh',
+      markdown: '# Flushed export\n',
+      hash: flushedHash,
       versionId: 'ver_011',
       versionNumber: 11,
       createdVersion: true,
     });
-    const { pool } = createExportPool({ currentHash: 'sha256:old', versionHash: 'sha256:old' });
+    const { pool, queries } = createExportPool({
+      currentHash: 'sha256:old',
+      versionHash: flushedHash,
+      currentMarkdown: '# Concurrent newer mirror\n',
+    });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
-    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(409);
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
 
-    expect(response.body).toEqual({
-      error: 'export_version_mismatch',
-      currentHash: 'sha256:old',
-      versionHash: 'sha256:fresh',
-    });
+    expect(response.text).toBe('# Flushed export\n');
+    expect(response.headers['content-disposition']).toContain('__v0011__');
+    expect(response.headers['content-disposition']).toContain(`__sha-${flushedHash.slice('sha256:'.length, 15)}__`);
+    expect(queries.some((query) => query.sql.includes('current_markdown'))).toBe(false);
   });
 
   it('exports with the flushed version metadata when flush creates a matching manual_save version', async () => {
+    const flushedHash = sha256Hex('# Exported\n');
     vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
       branchId: 'br_main',
       markdown: '# Exported\n',
-      hash: 'sha256:fresh',
+      hash: flushedHash,
       versionId: 'ver_011',
       versionNumber: 11,
       createdVersion: true,
     });
     const { pool } = createExportPool({
-      currentHash: 'sha256:fresh',
-      versionHash: 'sha256:fresh',
+      currentHash: flushedHash,
+      versionHash: flushedHash,
       versionId: 'ver_011',
       versionNumber: 11,
     });
@@ -125,6 +131,30 @@ describe('export route version metadata consistency', () => {
     expect(response.text).toBe('# Exported\n');
     expect(response.headers['content-type']).toContain('text/markdown');
     expect(response.headers['content-disposition']).toContain('__v0011__');
-    expect(response.headers['content-disposition']).toContain('__sha-fresh__');
+    expect(response.headers['content-disposition']).toContain(`__sha-${flushedHash.slice('sha256:'.length, 15)}__`);
+  });
+
+  it('refuses a versioned export filename when the flushed body does not match the flushed hash', async () => {
+    vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
+      branchId: 'br_main',
+      markdown: '# Exported\n',
+      hash: 'sha256:not-the-body',
+      versionId: 'ver_011',
+      versionNumber: 11,
+      createdVersion: false,
+    });
+    const { pool } = createExportPool({
+      currentHash: 'sha256:not-the-body',
+      versionHash: 'sha256:not-the-body',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(409);
+
+    expect(response.body).toEqual({
+      error: 'export_version_mismatch',
+      currentHash: expect.stringMatching(/^sha256:/u),
+      versionHash: 'sha256:not-the-body',
+    });
   });
 });

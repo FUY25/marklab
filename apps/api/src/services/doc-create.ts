@@ -1,6 +1,7 @@
 import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { initializeBranchEditorState } from './milkdown-transformer';
+import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface CreateDocInput {
   pool: DbPool;
@@ -39,9 +40,15 @@ export async function createDoc(input: CreateDocInput): Promise<CreateDocResult>
     const branchId = requiredId(branch.rows[0]?.id, 'document_branch');
 
     await client.query(
-      `insert into document_branch_states (branch_id, yjs_state, current_markdown, current_hash)
-       values ($1, $2, $3, $4)`,
-      [branchId, Buffer.from(initialized.yjsState), initialized.markdown, initialized.hash],
+      `insert into document_branch_states (branch_id, yjs_state, yjs_state_fingerprint, current_markdown, current_hash)
+       values ($1, $2, $3, $4, $5)`,
+      [
+        branchId,
+        Buffer.from(initialized.yjsState),
+        encodeYjsStateFingerprint(initialized.yjsState),
+        initialized.markdown,
+        initialized.hash,
+      ],
     );
 
     const version = await client.query<{ id: string }>(

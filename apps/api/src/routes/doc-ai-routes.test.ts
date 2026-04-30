@@ -90,6 +90,9 @@ function createEchoLiveWriter(): LiveMarkdownWriter & { transactions: LiveMarkdo
         serializedMarkdown: transaction.targetCanonicalMarkdown,
         yjsState: createValidYjsState(),
         changedRangeCount: 1,
+        changedCharacterCount: transaction.targetCanonicalMarkdown.length,
+        documentCharacterCount: transaction.targetCanonicalMarkdown.length,
+        fullDocumentReplacement: true,
         appliedTransactionCount: 1,
       };
     },
@@ -178,7 +181,14 @@ describe('doc AI routes', () => {
   });
 
   it('rejects ambiguous edit matches', async () => {
-    const { pool } = createFakePool({ currentMarkdown: 'old old' });
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('old old');
+    const { pool } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+    });
     const app = createHttpApp(pool, createEchoLiveWriter());
 
     const response = await request(app)
@@ -190,7 +200,14 @@ describe('doc AI routes', () => {
   });
 
   it('passes exact edit operation metadata without stale base guards to the live writer transaction', async () => {
-    const { pool } = createFakePool({ currentMarkdown: 'old paragraph\n' });
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('old paragraph\n');
+    const { pool } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+    });
     const liveWriter = createEchoLiveWriter();
     const app = createHttpApp(pool, liveWriter);
 
@@ -216,7 +233,15 @@ describe('doc AI routes', () => {
   });
 
   it('accepts exact edits even when the optional observed version is stale', async () => {
-    const { pool } = createFakePool({ currentMarkdown: 'old paragraph\n', currentVersionId: 'ver_current' });
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('old paragraph\n');
+    const { pool } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+      currentVersionId: 'ver_current',
+    });
     const liveWriter = createEchoLiveWriter();
     const app = createHttpApp(pool, liveWriter);
 

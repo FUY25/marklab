@@ -37,6 +37,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'live_yjs_state_changed') {
+    res.status(409).json({ error: 'live_yjs_state_changed' });
+    return;
+  }
+
   if (error instanceof Error && error.message.startsWith('missing_route_param:')) {
     res.status(400).json({ error: 'invalid_route' });
     return;

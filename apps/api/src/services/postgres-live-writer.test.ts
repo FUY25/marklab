@@ -3,7 +3,7 @@ import type { DbPool, DbQueryResult } from '../db/client';
 import { createHeadlessMilkdownRuntime } from './milkdown-headless-runtime';
 import { createPostgresLiveMarkdownWriter } from './postgres-live-writer';
 
-function createPoolWithBranchState(input: { yjsState: Uint8Array; markdown: string; hash: string }) {
+function createPoolWithBranchState(input: { yjsState: Uint8Array; markdown: string; hash: string; stateFingerprint?: string }) {
   const queries: { sql: string; params?: readonly unknown[] }[] = [];
   const pool: DbPool = {
     async query<Row = unknown>(sql: string, params?: readonly unknown[]): Promise<DbQueryResult<Row>> {
@@ -15,6 +15,7 @@ function createPoolWithBranchState(input: { yjsState: Uint8Array; markdown: stri
               yjs_state: Buffer.from(input.yjsState),
               current_markdown: input.markdown,
               current_hash: input.hash,
+              yjs_state_fingerprint: input.stateFingerprint ?? '101',
             } as Row,
           ],
           rowCount: 1,
@@ -45,6 +46,7 @@ describe('createPostgresLiveMarkdownWriter', () => {
 
     expect(applied.serializedMarkdown).toContain('Changed');
     expect(applied.yjsState.byteLength).toBeGreaterThan(0);
+    expect(applied.sourceStateFingerprint).toBe('101');
     expect(applied.changedRangeCount).toBeGreaterThan(0);
     expect(applied.appliedTransactionCount).toBeGreaterThan(0);
   });

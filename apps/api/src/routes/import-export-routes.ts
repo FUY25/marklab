@@ -1,9 +1,9 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { buildExportFilename } from '@marklab/shared/src/export-filename';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
 import { createDoc } from '../services/doc-create';
-import { readBranchState } from '../services/doc-read';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 
 const createSchema = z.object({
@@ -60,28 +60,25 @@ export function createImportExportRoutes(pool: DbPool) {
       const branchId = requiredParam(req, 'branchId');
 
       const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
-      const state = await readBranchState(pool, docId, branchId);
 
-      const metadata = await pool.query<{ title: string; branch_slug: string; version_hash: string }>(
-        `select d.title, b.slug as branch_slug, v.hash as version_hash
+      const metadata = await pool.query<{ title: string; branch_slug: string }>(
+        `select d.title, b.slug as branch_slug
            from documents d
            join document_branches b on b.doc_id = d.id
-           join document_versions v on v.id = b.head_version_id
           where d.id = $1 and b.id = $2 and b.is_archived = false`,
         [docId, branchId],
       );
       const metadataRow = metadata.rows[0];
       if (!metadataRow) throw new Error('branch_not_found');
-      if (state.versionId !== flushed.versionId || state.hash !== flushed.hash) {
-        throw new ExportVersionMismatchError(state.hash, flushed.hash);
-      }
-      if (metadataRow.version_hash !== flushed.hash) {
-        throw new ExportVersionMismatchError(metadataRow.version_hash, flushed.hash);
+
+      const bodyHash = sha256Hex(flushed.markdown);
+      if (bodyHash !== flushed.hash) {
+        throw new ExportVersionMismatchError(bodyHash, flushed.hash);
       }
 
       const filename = buildExportFilename({
         title: metadataRow.title,
-        docId: state.docId,
+        docId,
         branchSlug: metadataRow.branch_slug,
         versionNumber: flushed.versionNumber,
         exportedAt: new Date(),
@@ -90,7 +87,7 @@ export function createImportExportRoutes(pool: DbPool) {
 
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(state.markdown);
+      res.send(flushed.markdown);
     } catch (error) {
       if (error instanceof ExportVersionMismatchError) {
         res.status(409).json({

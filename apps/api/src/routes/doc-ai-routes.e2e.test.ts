@@ -33,6 +33,7 @@ function createFakePool(options: FakePoolOptions = {}) {
   let currentVersionNumber = options.currentVersionNumber ?? 1;
   let headHash = options.headHash ?? currentHash;
   let yjsState = options.yjsState ?? createValidYjsState();
+  let stateFingerprint = '101';
   const versionIds = [...(options.versionIds ?? ['ver_002', 'ver_003'])];
   let nextVersionNumber = currentVersionNumber + 1;
   let pendingVersion:
@@ -60,6 +61,21 @@ function createFakePool(options: FakePoolOptions = {}) {
             head_version_id: currentVersionId,
             head_version_number: currentVersionNumber,
             head_hash: headHash,
+            yjs_state_fingerprint: stateFingerprint,
+          } as Row,
+        ],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from document_branch_states')) {
+      return {
+        rows: [
+          {
+            yjs_state: Buffer.from(yjsState),
+            current_markdown: currentMarkdown,
+            current_hash: currentHash,
+            yjs_state_fingerprint: stateFingerprint,
           } as Row,
         ],
         rowCount: 1,
@@ -85,12 +101,14 @@ function createFakePool(options: FakePoolOptions = {}) {
     if (sql.includes('update document_branch_states')) {
       if (params?.[2] instanceof Buffer) {
         yjsState = new Uint8Array(params[2]);
-        currentMarkdown = String(params[3]);
-        currentHash = String(params[4]);
+        stateFingerprint = String(params[3]);
+        currentMarkdown = String(params[4]);
+        currentHash = String(params[5]);
       } else {
         currentMarkdown = String(params?.[1]);
         currentHash = String(params?.[2]);
         yjsState = params?.[3] instanceof Buffer ? new Uint8Array(params[3]) : yjsState;
+        stateFingerprint = String(params?.[4] ?? stateFingerprint);
       }
       return { rows: [], rowCount: 1 };
     }
@@ -137,14 +155,22 @@ function createFakePool(options: FakePoolOptions = {}) {
 }
 
 function createRecordingLiveWriter(
-  result: AppliedLiveMarkdownTransaction,
+  result: Pick<AppliedLiveMarkdownTransaction, 'serializedMarkdown' | 'yjsState'> &
+    Partial<Omit<AppliedLiveMarkdownTransaction, 'serializedMarkdown' | 'yjsState'>>,
 ): LiveMarkdownWriter & { transactions: LiveMarkdownTransaction[] } {
   const transactions: LiveMarkdownTransaction[] = [];
   return {
     transactions,
     async applyMarkdownTransaction(transaction) {
       transactions.push(transaction);
-      return result;
+      return {
+        changedRangeCount: 1,
+        changedCharacterCount: result.serializedMarkdown.length,
+        documentCharacterCount: result.serializedMarkdown.length,
+        fullDocumentReplacement: true,
+        appliedTransactionCount: 1,
+        ...result,
+      };
     },
   };
 }
@@ -217,7 +243,13 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(response.body).toEqual({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
 
     const mirrorUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
-    expect(mirrorUpdate?.params).toEqual(['br_main', expectedMarkdown, expectedHash, Buffer.from(liveYjsState)]);
+    expect(mirrorUpdate?.params).toEqual([
+      'br_main',
+      expectedMarkdown,
+      expectedHash,
+      Buffer.from(liveYjsState),
+      expect.any(String),
+    ]);
 
     const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
     expect(versionInsert?.params).toEqual([
@@ -290,6 +322,89 @@ describe('doc AI routes minimal transaction e2e', () => {
     ]);
   });
 
+  it('flushes uncheckpointed live Yjs edits into an autosave before accepting a write based on the mirror', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const mirror = await runtime.initializeFromMarkdown('# Mirror A\n');
+    const live = await runtime.initializeFromMarkdown('# Live B\n');
+    const { pool, queries } = createFakePool({
+      currentMarkdown: mirror.markdown,
+      currentHash: mirror.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: mirror.hash,
+      yjsState: live.yjsState,
+      versionIds: ['ver_002', 'ver_003'],
+    });
+    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: mirror.hash, markdown: '# Agent C\n' })
+      .expect(200);
+
+    const expectedAgentMarkdown = await canonicalizeMarkdown('# Agent C\n');
+    const expectedAgentHash = sha256Hex(expectedAgentMarkdown);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+
+    expect(response.body).toEqual({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
+    expect(versionInserts.map((query) => query.params)).toEqual([
+      ['doc_001', 'br_main', 'ver_001', 2, live.markdown, live.hash, 'system', null, 'autosave'],
+      ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'write'],
+    ]);
+  });
+
+  it('applies edits against flushed live Yjs markdown instead of the stale mirror', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const mirror = await runtime.initializeFromMarkdown('# Mirror A\n');
+    const live = await runtime.initializeFromMarkdown('# Live B\n');
+    const { pool, queries } = createFakePool({
+      currentMarkdown: mirror.markdown,
+      currentHash: mirror.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: mirror.hash,
+      yjsState: live.yjsState,
+      versionIds: ['ver_002', 'ver_003'],
+    });
+    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/edit')
+      .send({ oldString: 'Live', newString: 'Agent', replaceAll: false })
+      .expect(200);
+
+    const expectedAgentMarkdown = await canonicalizeMarkdown('# Agent B\n');
+    const expectedAgentHash = sha256Hex(expectedAgentMarkdown);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+
+    expect(response.body).toEqual({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
+    expect(versionInserts.map((query) => query.params)).toEqual([
+      ['doc_001', 'br_main', 'ver_001', 2, live.markdown, live.hash, 'system', null, 'autosave'],
+      ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'edit'],
+    ]);
+  });
+
+  it('returns a retryable conflict when live freshness contention exhausts retries', async () => {
+    const { pool, queries } = createFakePool();
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Agent result\n',
+      yjsState: createValidYjsState(),
+      sourceStateFingerprint: 'stale-state',
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter);
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(409);
+
+    expect(response.body).toEqual({ error: 'live_yjs_state_changed' });
+    expect(liveWriter.transactions).toHaveLength(3);
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
   it('fails closed without mirror or version writes when the live writer is not configured', async () => {
     const { pool, queries } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
@@ -297,6 +412,23 @@ describe('doc AI routes minimal transaction e2e', () => {
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
       .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(503);
+
+    expect(response.body).toEqual({ error: 'live_writer_not_configured' });
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
+  it('fails closed on edit without flushing dirty live state when the live writer is not configured', async () => {
+    const { pool, queries } = createFakePool({
+      currentMarkdown: '# Human draft\n',
+      currentHash: 'sha256:dirty',
+      headHash: 'sha256:head',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/edit')
+      .send({ oldString: 'Human', newString: 'Agent', replaceAll: false })
       .expect(503);
 
     expect(response.body).toEqual({ error: 'live_writer_not_configured' });
@@ -342,7 +474,15 @@ describe('doc AI routes minimal transaction e2e', () => {
   });
 
   it('persists exact edit as one edit version after one live transaction', async () => {
-    const { pool, queries } = createFakePool({ currentMarkdown: 'A old\nB old\n', currentVersionId: 'ver_current' });
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('A old\nB old\n');
+    const { pool, queries } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+      currentVersionId: 'ver_current',
+    });
     const liveWriter = createRecordingLiveWriter({
       serializedMarkdown: 'A new\nB old\n',
       yjsState: createValidYjsState(),

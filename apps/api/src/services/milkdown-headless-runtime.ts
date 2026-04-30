@@ -16,7 +16,12 @@ export interface RuntimeMarkdownState {
 export interface AppliedHeadlessMarkdownTransaction {
   serializedMarkdown: string;
   yjsState: Uint8Array;
+  previousSerializedMarkdown: string;
+  previousHash: string;
   changedRangeCount: number;
+  changedCharacterCount: number;
+  documentCharacterCount: number;
+  fullDocumentReplacement: boolean;
   appliedTransactionCount: number;
 }
 
@@ -38,6 +43,14 @@ interface RuntimeSession {
   ydoc: Y.Doc;
   cleanup(): void;
 }
+
+interface ChangeMetadata {
+  changedCharacterCount: number;
+  documentCharacterCount: number;
+  fullDocumentReplacement: boolean;
+}
+
+let headlessLifecycleMutex: Promise<void> = Promise.resolve();
 
 const crepeFeatures: Partial<Record<CrepeFeature, boolean>> = {
   [CrepeFeature.Cursor]: false,
@@ -137,42 +150,107 @@ function installDom(dom: JSDOM): () => void {
   };
 }
 
+async function withHeadlessLifecycleLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = headlessLifecycleMutex;
+  let release: () => void = () => undefined;
+  headlessLifecycleMutex = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous.catch(() => undefined);
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
+function calculateChangeMetadata(currentMarkdown: string, targetMarkdown: string): ChangeMetadata {
+  const documentCharacterCount = targetMarkdown.length;
+  if (currentMarkdown === targetMarkdown) {
+    return {
+      changedCharacterCount: 0,
+      documentCharacterCount,
+      fullDocumentReplacement: false,
+    };
+  }
+
+  const shorterLength = Math.min(currentMarkdown.length, targetMarkdown.length);
+  let prefixLength = 0;
+  while (prefixLength < shorterLength && currentMarkdown[prefixLength] === targetMarkdown[prefixLength]) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < shorterLength - prefixLength &&
+    currentMarkdown[currentMarkdown.length - 1 - suffixLength] === targetMarkdown[targetMarkdown.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const sourceChangedCharacterCount = Math.max(currentMarkdown.length - prefixLength - suffixLength, 0);
+  const targetChangedCharacterCount = Math.max(targetMarkdown.length - prefixLength - suffixLength, 0);
+  const changedCharacterCount = Math.max(sourceChangedCharacterCount, targetChangedCharacterCount);
+  const comparedLength = Math.max(currentMarkdown.length, targetMarkdown.length, 1);
+
+  return {
+    changedCharacterCount,
+    documentCharacterCount,
+    fullDocumentReplacement: changedCharacterCount / comparedLength >= 0.5,
+  };
+}
+
 async function createSession(input: { yjsState?: Uint8Array; seedMarkdown?: string }): Promise<RuntimeSession> {
   const dom = new JSDOM('<!doctype html><html><body><div id="editor"></div></body></html>');
   const restoreDom = installDom(dom);
-  const root = dom.window.document.querySelector('#editor');
-  if (!root) throw new Error('headless_root_not_found');
-
   const ydoc = new Y.Doc();
-  if (input.yjsState) {
-    if (input.yjsState.byteLength === 0) throw new Error('invalid_yjs_state');
-    Y.applyUpdate(ydoc, input.yjsState);
-  }
+  let crepe: Crepe | undefined;
 
-  const crepe = new Crepe({
-    root,
-    defaultValue: '',
-    features: crepeFeatures,
-  });
-  crepe.editor.use(collab);
-  await crepe.create();
+  try {
+    const root = dom.window.document.querySelector('#editor');
+    if (!root) throw new Error('headless_root_not_found');
 
-  crepe.editor.action((ctx) => {
-    const service = ctx.get(collabServiceCtx).bindDoc(ydoc);
-    if (input.seedMarkdown !== undefined) service.applyTemplate(input.seedMarkdown);
-    service.connect();
-  });
+    if (input.yjsState) {
+      if (input.yjsState.byteLength === 0) throw new Error('invalid_yjs_state');
+      Y.applyUpdate(ydoc, input.yjsState);
+    }
 
-  return {
-    crepe,
-    ydoc,
-    cleanup() {
-      crepe.destroy();
+    crepe = new Crepe({
+      root,
+      defaultValue: '',
+      features: crepeFeatures,
+    });
+    crepe.editor.use(collab);
+    await crepe.create();
+
+    crepe.editor.action((ctx) => {
+      const service = ctx.get(collabServiceCtx).bindDoc(ydoc);
+      if (input.seedMarkdown !== undefined) service.applyTemplate(input.seedMarkdown);
+      service.connect();
+    });
+
+    const sessionCrepe = crepe;
+    return {
+      crepe: sessionCrepe,
+      ydoc,
+      cleanup() {
+        sessionCrepe.destroy();
+        ydoc.destroy();
+        dom.window.close();
+        restoreDom();
+      },
+    };
+  } catch (error) {
+    try {
+      if (crepe) crepe.destroy();
       ydoc.destroy();
       dom.window.close();
+    } finally {
       restoreDom();
-    },
-  };
+    }
+    throw error;
+  }
 }
 
 async function serializeSession(session: RuntimeSession): Promise<RuntimeMarkdownState> {
@@ -189,59 +267,74 @@ async function serializeSession(session: RuntimeSession): Promise<RuntimeMarkdow
 export function createHeadlessMilkdownRuntime(): HeadlessMilkdownRuntime {
   return {
     async initializeFromMarkdown(markdown) {
-      const session = await createSession({ seedMarkdown: markdown });
-      try {
-        return await serializeSession(session);
-      } finally {
-        session.cleanup();
-      }
+      return withHeadlessLifecycleLock(async () => {
+        const session = await createSession({ seedMarkdown: markdown });
+        try {
+          return await serializeSession(session);
+        } finally {
+          session.cleanup();
+        }
+      });
     },
 
     async serializeYjsState(yjsState) {
-      const session = await createSession({ yjsState });
-      try {
-        return await serializeSession(session);
-      } finally {
-        session.cleanup();
-      }
+      return withHeadlessLifecycleLock(async () => {
+        const session = await createSession({ yjsState });
+        try {
+          return await serializeSession(session);
+        } finally {
+          session.cleanup();
+        }
+      });
     },
 
     async applyChangedRanges(input) {
-      const session = await createSession({ yjsState: input.yjsState, seedMarkdown: input.seedMarkdown });
-      try {
-        return await session.crepe.editor.action(async (ctx) => {
-          const view = ctx.get(editorViewCtx);
-          const parser = ctx.get(parserCtx);
-          const targetDoc = parser(input.targetCanonicalMarkdown);
-          if (!targetDoc) throw new Error('target_markdown_parse_failed');
+      return withHeadlessLifecycleLock(async () => {
+        const session = await createSession({ yjsState: input.yjsState, seedMarkdown: input.seedMarkdown });
+        try {
+          const beforeState = await serializeSession(session);
+          const changeMetadata = calculateChangeMetadata(beforeState.markdown, input.targetCanonicalMarkdown);
 
-          const currentDoc = view.state.doc;
-          const start = currentDoc.content.findDiffStart(targetDoc.content);
-          const end = currentDoc.content.findDiffEnd(targetDoc.content);
-          if (start === null || !end) {
+          return await session.crepe.editor.action(async (ctx) => {
+            const view = ctx.get(editorViewCtx);
+            const parser = ctx.get(parserCtx);
+            const targetDoc = parser(input.targetCanonicalMarkdown);
+            if (!targetDoc) throw new Error('target_markdown_parse_failed');
+
+            const currentDoc = view.state.doc;
+            const start = currentDoc.content.findDiffStart(targetDoc.content);
+            const end = currentDoc.content.findDiffEnd(targetDoc.content);
+            if (start === null || !end) {
+              const state = await serializeSession(session);
+              return {
+                serializedMarkdown: state.markdown,
+                yjsState: state.yjsState,
+                previousSerializedMarkdown: beforeState.markdown,
+                previousHash: beforeState.hash,
+                changedRangeCount: 0,
+                ...changeMetadata,
+                appliedTransactionCount: 0,
+              };
+            }
+
+            const transaction = view.state.tr.replace(start, end.a, targetDoc.slice(start, end.b, true));
+            view.dispatch(transaction);
+
             const state = await serializeSession(session);
             return {
               serializedMarkdown: state.markdown,
               yjsState: state.yjsState,
-              changedRangeCount: 0,
-              appliedTransactionCount: 0,
+              previousSerializedMarkdown: beforeState.markdown,
+              previousHash: beforeState.hash,
+              changedRangeCount: 1,
+              ...changeMetadata,
+              appliedTransactionCount: 1,
             };
-          }
-
-          const transaction = view.state.tr.replace(start, end.a, targetDoc.slice(start, end.b, true));
-          view.dispatch(transaction);
-
-          const state = await serializeSession(session);
-          return {
-            serializedMarkdown: state.markdown,
-            yjsState: state.yjsState,
-            changedRangeCount: 1,
-            appliedTransactionCount: 1,
-          };
-        });
-      } finally {
-        session.cleanup();
-      }
+          });
+        } finally {
+          session.cleanup();
+        }
+      });
     },
   };
 }

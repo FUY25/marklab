@@ -22,6 +22,7 @@ function createFlushPool(input: { yjsState: Uint8Array; headHash: string }) {
         rows: [
           {
             yjs_state: Buffer.from(input.yjsState),
+            yjs_state_fingerprint: 'state-fingerprint',
             head_version_id: 'ver_001',
             head_version_number: 1,
             head_hash: input.headHash,
