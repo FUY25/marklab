@@ -6,19 +6,10 @@ export type LiveMarkdownOperation =
     }
   | {
       kind: 'edit';
-      baseVersionId: string;
+      observedVersionId?: string;
       oldString: string;
       newString: string;
       replaceAll: boolean;
-    }
-  | {
-      kind: 'multi_edit';
-      baseVersionId: string;
-      edits: Array<{
-        oldString: string;
-        newString: string;
-        replaceAll: boolean;
-      }>;
     };
 
 export interface LiveMarkdownTransaction {

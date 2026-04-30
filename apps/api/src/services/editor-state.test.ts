@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
-import { applyMarkdownToBranchState, type LiveMarkdownTransaction, type LiveMarkdownWriter } from './editor-state';
+import { createUnavailableLiveMarkdownWriter, type LiveMarkdownTransaction, type LiveMarkdownWriter } from './live-writer';
+import { applyMarkdownToBranchState } from './editor-state';
 
 interface CapturedQuery {
   sql: string;
@@ -70,7 +71,7 @@ describe('applyMarkdownToBranchState', () => {
       markdown: '# Requested target',
       operation: {
         kind: 'edit',
-        baseVersionId: 'ver_001',
+        observedVersionId: 'ver_seen',
         oldString: 'Requested',
         newString: 'Serialized',
         replaceAll: false,
@@ -88,7 +89,7 @@ describe('applyMarkdownToBranchState', () => {
         targetCanonicalMarkdown: '# Requested target\n',
         operation: {
           kind: 'edit',
-          baseVersionId: 'ver_001',
+          observedVersionId: 'ver_seen',
           oldString: 'Requested',
           newString: 'Serialized',
           replaceAll: false,
@@ -122,11 +123,7 @@ describe('applyMarkdownToBranchState', () => {
 
   it('does not persist mirror or version state when the live writer fails', async () => {
     const { pool, queries } = createFakePool();
-    const liveWriter: LiveMarkdownWriter = {
-      async applyMarkdownTransaction() {
-        throw new Error('live_writer_not_configured');
-      },
-    };
+    const liveWriter = createUnavailableLiveMarkdownWriter();
 
     await expect(
       applyMarkdownToBranchState({

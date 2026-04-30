@@ -4,7 +4,7 @@ import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp } from '../http/app';
-import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/editor-state';
+import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 
 interface FakePoolOptions {
@@ -173,40 +173,38 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
   });
 
-  it('persists multi-edit as one edit version after one live transaction', async () => {
-    const { pool, queries } = createFakePool({ currentMarkdown: 'A old\nB old\n' });
+  it('persists exact edit as one edit version after one live transaction', async () => {
+    const { pool, queries } = createFakePool({ currentMarkdown: 'A old\nB old\n', currentVersionId: 'ver_current' });
     const liveWriter = createRecordingLiveWriter({
-      serializedMarkdown: 'A new\nB new\n',
-      changedRangeCount: 2,
+      serializedMarkdown: 'A new\nB old\n',
+      changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
     const app = createHttpApp(pool, liveWriter);
 
     const response = await request(app)
-      .post('/api/docs/doc_001/branches/br_main/multi-edit')
+      .post('/api/docs/doc_001/branches/br_main/edit')
       .send({
-        baseVersionId: 'ver_001',
-        edits: [
-          { oldString: 'A old', newString: 'A new', replaceAll: false },
-          { oldString: 'B old', newString: 'B new', replaceAll: false },
-        ],
+        observedVersionId: 'ver_observed',
+        oldString: 'A old',
+        newString: 'A new',
+        replaceAll: false,
       })
       .expect(200);
 
-    const expectedMarkdown = await canonicalizeMarkdown('A new\nB new\n');
+    const expectedMarkdown = await canonicalizeMarkdown('A new\nB old\n');
     const expectedHash = sha256Hex(expectedMarkdown);
 
     expect(liveWriter.transactions).toEqual([
       {
         branchId: 'br_main',
-        targetCanonicalMarkdown: 'A new\nB new\n',
+        targetCanonicalMarkdown: 'A new\nB old\n',
         operation: {
-          kind: 'multi_edit',
-          baseVersionId: 'ver_001',
-          edits: [
-            { oldString: 'A old', newString: 'A new', replaceAll: false },
-            { oldString: 'B old', newString: 'B new', replaceAll: false },
-          ],
+          kind: 'edit',
+          observedVersionId: 'ver_observed',
+          oldString: 'A old',
+          newString: 'A new',
+          replaceAll: false,
         },
       },
     ]);
@@ -216,7 +214,7 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(versionInsert?.params).toEqual([
       'doc_001',
       'br_main',
-      'ver_001',
+      'ver_current',
       2,
       expectedMarkdown,
       expectedHash,

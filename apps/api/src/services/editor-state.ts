@@ -5,13 +5,6 @@ import { withTransaction } from '../db/client';
 import type { LiveMarkdownOperation, LiveMarkdownTransaction, LiveMarkdownWriter } from './live-writer';
 import { createVersionWithClient, type VersionActorType } from './version-service';
 
-export type {
-  AppliedLiveMarkdownTransaction,
-  LiveMarkdownOperation,
-  LiveMarkdownTransaction,
-  LiveMarkdownWriter,
-} from './live-writer';
-
 export interface ApplyMarkdownToBranchInput {
   pool: DbPool;
   liveWriter: LiveMarkdownWriter;
@@ -31,8 +24,13 @@ export interface ApplyMarkdownToBranchResult {
   versionNumber: number;
 }
 
-function versionOperationForLiveOperation(operation: LiveMarkdownOperation) {
-  return operation.kind === 'write' ? 'write' : 'edit';
+function versionOperationForLiveOperation(operation: LiveMarkdownOperation): 'write' | 'edit' {
+  switch (operation.kind) {
+    case 'write':
+      return 'write';
+    case 'edit':
+      return 'edit';
+  }
 }
 
 export async function applyMarkdownToBranchState(

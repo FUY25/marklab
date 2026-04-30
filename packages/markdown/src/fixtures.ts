@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 export const fixtureNames = [
   '01_basic.md',
@@ -11,5 +10,5 @@ export const fixtureNames = [
 export type FixtureName = (typeof fixtureNames)[number];
 
 export async function readFixture(name: FixtureName): Promise<string> {
-  return readFile(join(process.cwd(), 'fixtures', name), 'utf8');
+  return readFile(new URL(`../../../fixtures/${name}`, import.meta.url), 'utf8');
 }

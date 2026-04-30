@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
-import type { LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/editor-state';
+import type { LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -145,20 +145,20 @@ describe('doc AI routes', () => {
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
-      .send({ baseVersionId: 'ver_001', oldString: 'old', newString: 'new', replaceAll: false })
+      .send({ oldString: 'old', newString: 'new', replaceAll: false })
       .expect(409);
 
     expect(response.body).toEqual({ error: 'ambiguous_match', matchCount: 2 });
   });
 
-  it('passes exact edit operation metadata to the live writer transaction', async () => {
+  it('passes exact edit operation metadata without stale base guards to the live writer transaction', async () => {
     const { pool } = createFakePool({ currentMarkdown: 'old paragraph\n' });
     const liveWriter = createEchoLiveWriter();
     const app = createHttpApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
-      .send({ baseVersionId: 'ver_001', oldString: 'old', newString: 'new', replaceAll: false })
+      .send({ observedVersionId: 'ver_seen', oldString: 'old', newString: 'new', replaceAll: false })
       .expect(200);
 
     expect(liveWriter.transactions).toEqual([
@@ -167,7 +167,7 @@ describe('doc AI routes', () => {
         targetCanonicalMarkdown: 'new paragraph\n',
         operation: {
           kind: 'edit',
-          baseVersionId: 'ver_001',
+          observedVersionId: 'ver_seen',
           oldString: 'old',
           newString: 'new',
           replaceAll: false,
@@ -177,58 +177,41 @@ describe('doc AI routes', () => {
     expect(response.body).toMatchObject({ versionId: 'ver_002', versionNumber: 2 });
   });
 
-  it('applies ordered multi-edit operations through one live writer transaction', async () => {
-    const { pool } = createFakePool({ currentMarkdown: 'A old\nB old\n' });
+  it('accepts exact edits even when the optional observed version is stale', async () => {
+    const { pool } = createFakePool({ currentMarkdown: 'old paragraph\n', currentVersionId: 'ver_current' });
     const liveWriter = createEchoLiveWriter();
     const app = createHttpApp(pool, liveWriter);
 
     const response = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/edit')
+      .send({ observedVersionId: 'ver_old', oldString: 'old', newString: 'new', replaceAll: false })
+      .expect(200);
+
+    expect(liveWriter.transactions[0]?.operation).toEqual({
+      kind: 'edit',
+      observedVersionId: 'ver_old',
+      oldString: 'old',
+      newString: 'new',
+      replaceAll: false,
+    });
+    expect(response.body).toMatchObject({ versionId: 'ver_002', versionNumber: 2 });
+  });
+
+  it('does not expose a public multi-edit route', async () => {
+    const { pool } = createFakePool({ currentMarkdown: 'A old\nB old\n' });
+    const liveWriter = createEchoLiveWriter();
+    const app = createHttpApp(pool, liveWriter);
+
+    await request(app)
       .post('/api/docs/doc_001/branches/br_main/multi-edit')
       .send({
-        baseVersionId: 'ver_001',
         edits: [
           { oldString: 'A old', newString: 'A new', replaceAll: false },
           { oldString: 'B old', newString: 'B new', replaceAll: false },
         ],
       })
-      .expect(200);
+      .expect(404);
 
-    expect(liveWriter.transactions).toEqual([
-      {
-        branchId: 'br_main',
-        targetCanonicalMarkdown: 'A new\nB new\n',
-        operation: {
-          kind: 'multi_edit',
-          baseVersionId: 'ver_001',
-          edits: [
-            { oldString: 'A old', newString: 'A new', replaceAll: false },
-            { oldString: 'B old', newString: 'B new', replaceAll: false },
-          ],
-        },
-      },
-    ]);
-    expect(response.body).toMatchObject({ versionId: 'ver_002', versionNumber: 2 });
-  });
-
-  it('rejects multi-edit atomically when one ordered operation fails', async () => {
-    const { pool, queries } = createFakePool({ currentMarkdown: 'A old\n' });
-    const liveWriter = createEchoLiveWriter();
-    const app = createHttpApp(pool, liveWriter);
-
-    const response = await request(app)
-      .post('/api/docs/doc_001/branches/br_main/multi-edit')
-      .send({
-        baseVersionId: 'ver_001',
-        edits: [
-          { oldString: 'A old', newString: 'A new', replaceAll: false },
-          { oldString: 'missing', newString: 'new', replaceAll: false },
-        ],
-      })
-      .expect(409);
-
-    expect(response.body).toEqual({ error: 'old_string_not_found', editIndex: 1 });
     expect(liveWriter.transactions).toEqual([]);
-    expect(queries.some((sql) => sql.includes('update document_branch_states'))).toBe(false);
-    expect(queries.some((sql) => sql.includes('insert into document_versions'))).toBe(false);
   });
 });
