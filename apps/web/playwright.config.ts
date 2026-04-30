@@ -2,24 +2,34 @@ import { defineConfig } from '@playwright/test';
 
 const port = 5175;
 const baseURL = `http://127.0.0.1:${port}`;
+const apiPort = 3011;
+const defaultApiUrl = `http://127.0.0.1:${apiPort}`;
+const allowExistingApi = process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true';
+const shouldStartApi = Boolean(process.env.TEST_DATABASE_URL) && !allowExistingApi;
+const usesRemoteE2E = shouldStartApi || allowExistingApi;
+const apiUrl = shouldStartApi ? defaultApiUrl : process.env.MARKLAB_E2E_API_URL ?? defaultApiUrl;
+const websocketUrl =
+  process.env.MARKLAB_E2E_WS_URL ?? `${apiUrl.replace(/^http/u, 'ws').replace(/\/+$/u, '')}/collab`;
 
 export default defineConfig({
   testDir: './tests',
-  globalSetup: './tests/setup-remote-api.ts',
   use: {
     baseURL,
   },
   webServer: [
     {
-      command: `cd ../.. && VITE_MARKLAB_API_URL=http://127.0.0.1:3001 VITE_MARKLAB_WS_URL=ws://127.0.0.1:3001/collab pnpm --filter @marklab/web exec vite --host 127.0.0.1 --port ${port} --strictPort`,
+      command: `cd ../.. && VITE_MARKLAB_API_URL=${apiUrl} VITE_MARKLAB_WS_URL=${websocketUrl} pnpm --filter @marklab/web exec vite --host 127.0.0.1 --port ${port} --strictPort`,
       url: baseURL,
-      reuseExistingServer: true,
+      reuseExistingServer: !usesRemoteE2E,
     },
-    {
-      command:
-        'cd ../.. && DATABASE_URL="$TEST_DATABASE_URL" PORT=3001 pnpm --dir apps/api exec tsx -e "const events = new EventTarget(); globalThis.addEventListener = events.addEventListener.bind(events); globalThis.removeEventListener = events.removeEventListener.bind(events); globalThis.dispatchEvent = events.dispatchEvent.bind(events); import(\'./src/index.ts\').catch((error) => { console.error(error); process.exit(1); });"',
-      url: 'http://127.0.0.1:3001/healthz',
-      reuseExistingServer: true,
-    },
+    ...(shouldStartApi
+      ? [
+          {
+            command: `cd ../.. && DATABASE_URL="$TEST_DATABASE_URL" PORT=${apiPort} pnpm --dir apps/api exec tsx -e "const events = new EventTarget(); globalThis.addEventListener = events.addEventListener.bind(events); globalThis.removeEventListener = events.removeEventListener.bind(events); globalThis.dispatchEvent = events.dispatchEvent.bind(events); import('./src/index.ts').catch((error) => { console.error(error); process.exit(1); });"`,
+            url: `${defaultApiUrl}/healthz`,
+            reuseExistingServer: false,
+          },
+        ]
+      : []),
   ],
 });

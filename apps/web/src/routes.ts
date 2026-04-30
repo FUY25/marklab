@@ -3,31 +3,37 @@ export type AppRoute =
   | { kind: 'local-single' }
   | { kind: 'local-two' };
 
-function decodePathPart(value: string): string {
-  return decodeURIComponent(value);
+function decodePathPart(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 export function parseAppRoute(location: Pick<Location, 'pathname' | 'search'>): AppRoute {
   const pathParts = location.pathname.split('/').filter(Boolean);
   const [docsSegment, docIdSegment, branchesSegment, branchIdSegment] = pathParts;
+  const docId = docIdSegment ? decodePathPart(docIdSegment) : null;
+  const branchId = branchIdSegment ? decodePathPart(branchIdSegment) : null;
   if (
     pathParts.length === 4 &&
     docsSegment === 'docs' &&
-    docIdSegment &&
+    docId &&
     branchesSegment === 'branches' &&
-    branchIdSegment
+    branchId
   ) {
     return {
       kind: 'remote-document',
-      docId: decodePathPart(docIdSegment),
-      branchId: decodePathPart(branchIdSegment),
+      docId,
+      branchId,
     };
   }
 
   const params = new URLSearchParams(location.search);
-  const docId = params.get('docId');
-  const branchId = params.get('branchId');
-  if (docId && branchId) return { kind: 'remote-document', docId, branchId };
+  const queryDocId = params.get('docId');
+  const queryBranchId = params.get('branchId');
+  if (queryDocId && queryBranchId) return { kind: 'remote-document', docId: queryDocId, branchId: queryBranchId };
 
   if (params.get('collab') === 'two') return { kind: 'local-two' };
 

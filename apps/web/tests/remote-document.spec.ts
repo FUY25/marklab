@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
-import type { BrowserContext, APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse, BrowserContext } from '@playwright/test';
+import { requireLocalHttpUrl, setupRemoteApi } from './setup-remote-api';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const webUrl = process.env.MARKLAB_E2E_WEB_URL ?? 'http://127.0.0.1:5175';
-const apiUrl = process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3001';
+const apiUrl = process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011';
 
 interface ImportedDocument {
   docId: string;
@@ -17,8 +18,18 @@ interface ReadDocument {
 }
 
 function requireRemoteApiReadiness() {
-  if (process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true') return;
+  if (process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true') {
+    requireLocalHttpUrl(apiUrl, 'MARKLAB_E2E_API_URL');
+    return;
+  }
+
   if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required for remote document browser tests');
+}
+
+async function expectOkResponse(response: APIResponse, action: string) {
+  if (response.ok()) return;
+
+  throw new Error(`${action} failed with ${response.status()} ${response.statusText()}: ${await response.text()}`);
 }
 
 async function importDocument(request: APIRequestContext): Promise<ImportedDocument> {
@@ -28,7 +39,7 @@ async function importDocument(request: APIRequestContext): Promise<ImportedDocum
       markdown: '# Remote E2E\n\nOriginal paragraph.\n',
     },
   });
-  expect(response.ok()).toBeTruthy();
+  await expectOkResponse(response, 'import_doc');
   return (await response.json()) as ImportedDocument;
 }
 
@@ -38,12 +49,13 @@ async function readDocument(
   branchId: string,
 ): Promise<ReadDocument> {
   const response = await request.get(`${apiUrl}/api/docs/${docId}/branches/${branchId}/read`);
-  expect(response.ok()).toBeTruthy();
+  await expectOkResponse(response, 'read_doc');
   return (await response.json()) as ReadDocument;
 }
 
 test('keeps two remote browser windows and API writes synchronized without refresh', async ({ browser, request }) => {
   requireRemoteApiReadiness();
+  await setupRemoteApi();
 
   const doc = await importDocument(request);
   const documentPath = `/docs/${encodeURIComponent(doc.docId)}/branches/${encodeURIComponent(doc.branchId)}`;
@@ -77,6 +89,7 @@ test('keeps two remote browser windows and API writes synchronized without refre
     await expect(editorB).toContainText('Browser A edit.');
 
     const current = await readDocument(request, doc.docId, doc.branchId);
+    expect(current.markdown).toContain('Browser A edit.');
     const writeResponse = await request.post(`${apiUrl}/api/docs/${doc.docId}/branches/${doc.branchId}/write`, {
       data: {
         baseVersionId: current.versionId,
@@ -84,8 +97,10 @@ test('keeps two remote browser windows and API writes synchronized without refre
         markdown: `${current.markdown.trimEnd()}\n\nAPI write visible.\n`,
       },
     });
-    expect(writeResponse.ok()).toBeTruthy();
+    await expectOkResponse(writeResponse, 'write_doc');
 
+    await expect(editorA).toContainText('Browser A edit.');
+    await expect(editorB).toContainText('Browser A edit.');
     await expect(editorA).toContainText('API write visible.');
     await expect(editorB).toContainText('API write visible.');
   } finally {
