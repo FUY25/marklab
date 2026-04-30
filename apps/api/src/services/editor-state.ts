@@ -29,6 +29,7 @@ export interface ApplyMarkdownToBranchInput {
 export interface ApplyMarkdownToBranchResult {
   canonicalMarkdown: string;
   hash: string;
+  yjsState: Uint8Array;
   versionId: string;
   versionNumber: number;
 }
@@ -261,7 +262,7 @@ export async function applyMarkdownToBranchState(
         });
       });
 
-      return { canonicalMarkdown, hash, ...version };
+      return { canonicalMarkdown, hash, yjsState: liveTransaction.yjsState, ...version };
     } catch (error) {
       if (error instanceof Error && error.message === 'live_yjs_state_changed' && attempt < 2) continue;
       throw error;

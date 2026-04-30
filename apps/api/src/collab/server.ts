@@ -2,6 +2,7 @@ import { Hocuspocus } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
 import { verifyDocumentAccess } from '../services/access-control';
+import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import { createEmptyYjsState, loadYjsStateWithMetadata, parseRoomName, storeYjsState } from './persistence';
 
 interface LoadedDocumentState {
@@ -16,6 +17,7 @@ interface StoreDocumentStateOptions {
 export interface CollabServerHandle {
   server: Hocuspocus;
   flushDocument(roomName: string): Promise<void>;
+  applyDocumentState(roomName: string, yjsState: Uint8Array): Promise<void>;
 }
 
 export function createCollabServer(pool: DbPool) {
@@ -118,6 +120,24 @@ export function createCollabServer(pool: DbPool) {
       const document = activeDocumentByRoomName.get(roomName);
       if (!document) return;
       await storeDocumentState(roomName, document, { failOnPersistFailure: true });
+    },
+    async applyDocumentState(roomName: string, yjsState: Uint8Array) {
+      const document = activeDocumentByRoomName.get(roomName);
+      if (!document) return;
+
+      const nextState = new Uint8Array(yjsState);
+      const validationDocument = new Y.Doc();
+      try {
+        Y.applyUpdate(validationDocument, nextState);
+      } finally {
+        validationDocument.destroy();
+      }
+
+      loadedStateByDocument.set(document, {
+        stateFingerprint: encodeYjsStateFingerprint(nextState),
+        yjsState: nextState,
+      });
+      Y.applyUpdate(document, nextState);
     },
   } satisfies CollabServerHandle;
 }

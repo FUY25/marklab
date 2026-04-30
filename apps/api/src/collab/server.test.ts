@@ -19,6 +19,7 @@ interface TestableHocuspocus {
 interface TestableCollabServer {
   server: TestableHocuspocus;
   flushDocument(roomName: string): Promise<void>;
+  applyDocumentState(roomName: string, yjsState: Uint8Array): Promise<void>;
 }
 
 function createState(text: string): Uint8Array {
@@ -290,6 +291,37 @@ describe('createCollabServer persistence hooks', () => {
       await collab.server.configuration.onStoreDocument({ documentName: roomName, document });
 
       expect(textFromState(store.getPersistedState())).toContain('again');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('applies a committed REST Yjs state to an active room before the next store', async () => {
+    const initialState = createState('loaded');
+    const apiState = updateState(initialState, (text) => {
+      text.delete(0, text.length);
+      text.insert(0, 'api result');
+    });
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+
+      store.replacePersistedState(apiState);
+      await collab.applyDocumentState(roomName, apiState);
+
+      expect(textFromState(Y.encodeStateAsUpdate(document))).toBe('api result');
+
+      await collab.server.configuration.onStoreDocument({ documentName: roomName, document });
+
+      expect(store.getStoreAttemptCount()).toBe(1);
+      expect(textFromState(store.getPersistedState())).toBe('api result');
     } finally {
       document.destroy();
       await collab.server.destroy?.();

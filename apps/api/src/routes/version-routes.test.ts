@@ -334,10 +334,14 @@ describe('version routes', () => {
     const { pool, queries } = createRestorePool({ events });
     const liveWriter = createRestoreLiveWriter();
     const flushedRooms: string[] = [];
+    const appliedRooms: Array<{ roomName: string; yjsState: Uint8Array }> = [];
     const app = createHttpApp(pool, liveWriter, {
       async flushCollabDocument(roomName) {
         flushedRooms.push(roomName);
         events.push('flush');
+      },
+      async applyCollabDocumentState(roomName, yjsState) {
+        appliedRooms.push({ roomName, yjsState });
       },
     });
 
@@ -347,6 +351,7 @@ describe('version routes', () => {
       .expect(200);
 
     expect(flushedRooms).toEqual([toRoomName('doc_001', 'br_main')]);
+    expect(appliedRooms).toEqual([{ roomName: toRoomName('doc_001', 'br_main'), yjsState: liveWriter.yjsState }]);
     expect(events.slice(0, 3)).toEqual(['flush', 'read_branch_state', 'read_source_version']);
     expect(liveWriter.transactions).toEqual([
       {

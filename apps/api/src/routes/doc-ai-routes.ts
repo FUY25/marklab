@@ -65,6 +65,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
         operation: { kind: 'write', baseVersionId: body.baseVersionId, baseHash: body.baseHash },
         actorType: 'agent',
       });
+      await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
 
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {
@@ -130,6 +131,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
         operation,
         actorType: 'agent',
       });
+      await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
 
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {

@@ -10,6 +10,7 @@ import type { LiveMarkdownWriter } from '../services/live-writer';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
+  applyCollabDocumentState?: (roomName: string, yjsState: Uint8Array) => Promise<void>;
   auth?: HttpRequestAuth;
 }
 

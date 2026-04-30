@@ -163,6 +163,7 @@ describe('applyMarkdownToBranchState', () => {
     expect(result).toEqual({
       canonicalMarkdown: expectedMarkdown,
       hash: expectedHash,
+      yjsState: liveYjsState,
       versionId: 'ver_002',
       versionNumber: 2,
     });

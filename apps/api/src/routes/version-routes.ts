@@ -123,6 +123,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
         branchId,
         versionId: body.versionId,
       });
+      await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {
       next(error);

@@ -388,7 +388,12 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const appliedRooms: Array<{ roomName: string; yjsState: Uint8Array }> = [];
+    const app = createHttpApp(pool, liveWriter, {
+      async applyCollabDocumentState(roomName, yjsState) {
+        appliedRooms.push({ roomName, yjsState });
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -406,6 +411,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       },
     ]);
     expect(response.body).toEqual({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
+    expect(appliedRooms).toEqual([{ roomName: toRoomName('doc_001', 'br_main'), yjsState: liveYjsState }]);
 
     const mirrorUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
     expect(mirrorUpdate?.params).toEqual([

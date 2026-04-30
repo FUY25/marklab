@@ -10,7 +10,10 @@ const port = Number(process.env.PORT ?? 3001);
 const pool = createPool();
 const collab = createCollabServer(pool);
 const liveWriter = createPostgresLiveMarkdownWriter(pool);
-const app = createHttpApp(pool, liveWriter, { flushCollabDocument: collab.flushDocument });
+const app = createHttpApp(pool, liveWriter, {
+  flushCollabDocument: collab.flushDocument,
+  applyCollabDocumentState: collab.applyDocumentState,
+});
 const httpServer = http.createServer(app);
 
 type ClientConnection = ReturnType<typeof collab.server.handleConnection>;
