@@ -1,6 +1,7 @@
 import { type FormEvent, useMemo, useState } from 'react';
 import { MarklabWebApi, type CreatedDocument } from '../lib/api-client';
 import { loadRecentDocuments, rememberRecentDocument, type RecentDocument } from '../lib/recent-documents';
+import { clearSessionAdminToken, readSessionAdminToken, writeSessionAdminToken } from '../lib/session-auth';
 import { buildDocumentPath } from '../routes';
 
 function openDocument(docId: string, branchId: string) {
@@ -21,6 +22,9 @@ export function HomePage() {
   const [title, setTitle] = useState('Untitled document');
   const [docId, setDocId] = useState('');
   const [branchId, setBranchId] = useState('');
+  const [adminToken, setAdminToken] = useState(() => readSessionAdminToken() ?? '');
+  const [adminTokenSaved, setAdminTokenSaved] = useState(() => Boolean(readSessionAdminToken()));
+  const [adminStatus, setAdminStatus] = useState<string | null>(null);
   const [recentDocuments, setRecentDocuments] = useState<RecentDocument[]>(() => loadRecentDocuments());
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<'create' | 'import' | null>(null);
@@ -84,6 +88,30 @@ export function HomePage() {
     openDocument(normalizedDocId, normalizedBranchId);
   }
 
+  function handleSaveAdminToken(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedToken = adminToken.trim();
+    if (!normalizedToken) {
+      clearSessionAdminToken();
+      setAdminToken('');
+      setAdminTokenSaved(false);
+      setAdminStatus('Admin token cleared.');
+      return;
+    }
+
+    writeSessionAdminToken(normalizedToken);
+    setAdminToken(normalizedToken);
+    setAdminTokenSaved(true);
+    setAdminStatus('Admin token saved for this browser session.');
+  }
+
+  function handleClearAdminToken() {
+    clearSessionAdminToken();
+    setAdminToken('');
+    setAdminTokenSaved(false);
+    setAdminStatus('Admin token cleared.');
+  }
+
   return (
     <main className="workspace-shell" data-testid="home-page">
       <header className="workspace-header">
@@ -98,6 +126,30 @@ export function HomePage() {
           {error}
         </div>
       ) : null}
+
+      <form className="admin-token-panel" aria-label="Admin session token" onSubmit={handleSaveAdminToken}>
+        <div className="field-stack">
+          <label htmlFor="admin-token">Admin token</label>
+          <input
+            id="admin-token"
+            type="password"
+            value={adminToken}
+            onChange={(event) => {
+              setAdminToken(event.currentTarget.value);
+              setAdminStatus(null);
+            }}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div className="action-row">
+          <button type="submit">Save admin token</button>
+          <button type="button" className="button-secondary" onClick={handleClearAdminToken} disabled={!adminTokenSaved && !adminToken}>
+            Clear
+          </button>
+          <span role="status">{adminStatus}</span>
+        </div>
+      </form>
 
       <section className="workspace-grid" aria-label="Document actions">
         <form className="workspace-panel workspace-panel-primary" onSubmit={handleCreate}>

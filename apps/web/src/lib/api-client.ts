@@ -1,4 +1,5 @@
 import { readWebConfig } from '../config';
+import { readSessionAdminToken } from './session-auth';
 
 export interface CreatedDocument {
   docId: string;
@@ -67,6 +68,60 @@ export interface RestoreVersionResponse {
   hash: string;
 }
 
+export interface ReadDocumentResponse {
+  versionId: string;
+  hash: string;
+  markdown: string;
+}
+
+export interface AgentTokenSummary {
+  tokenId: string;
+  name: string;
+  canRead: boolean;
+  canWrite: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface CreatedAgentToken {
+  tokenId: string;
+  name: string;
+  canRead: boolean;
+  canWrite: boolean;
+  expiresAt: string | null;
+  token: string;
+}
+
+export interface AgentTokensResponse {
+  tokens: AgentTokenSummary[];
+}
+
+export type ShareLinkRole = 'view' | 'edit';
+
+export interface ShareLinkSummary {
+  linkId: string;
+  role: ShareLinkRole;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface CreatedShareLink {
+  linkId: string;
+  role: ShareLinkRole;
+  expiresAt: string | null;
+  token: string;
+}
+
+export interface ShareLinksResponse {
+  links: ShareLinkSummary[];
+}
+
+export interface MarklabWebApiOptions {
+  apiUrl?: string;
+  adminToken?: string | null;
+  documentToken?: string | null;
+}
+
 function trimQuotes(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
@@ -98,17 +153,49 @@ async function requireJsonResponse<T>(response: Response, action: string): Promi
   throw new Error(`${action}_failed:${response.status}:${body}`);
 }
 
+function currentUrlDocumentToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const token = new URLSearchParams(window.location.search).get('token');
+  return token && token.trim() ? token : null;
+}
+
+function withBearerToken(headers: HeadersInit, token: string | null): HeadersInit {
+  if (!token) return headers;
+  return { ...headers, Authorization: `Bearer ${token}` };
+}
+
 export class MarklabWebApi {
   private readonly apiUrl: string;
+  private readonly adminToken: string | null | undefined;
+  private readonly documentToken: string | null | undefined;
 
-  constructor(apiUrl = readWebConfig().apiUrl) {
-    this.apiUrl = apiUrl;
+  constructor(input: string | MarklabWebApiOptions = {}) {
+    const options = typeof input === 'string' ? { apiUrl: input } : input;
+    this.apiUrl = options.apiUrl ?? readWebConfig().apiUrl;
+    this.adminToken = options.adminToken;
+    this.documentToken = options.documentToken;
+  }
+
+  private resolvedAdminToken(): string | null {
+    return this.adminToken === undefined ? readSessionAdminToken() : this.adminToken;
+  }
+
+  private resolvedDocumentToken(): string | null {
+    return this.documentToken === undefined ? currentUrlDocumentToken() : this.documentToken;
+  }
+
+  private adminHeaders(headers: HeadersInit = {}): HeadersInit {
+    return withBearerToken(headers, this.resolvedAdminToken());
+  }
+
+  private documentHeaders(headers: HeadersInit = {}): HeadersInit {
+    return withBearerToken(headers, this.resolvedDocumentToken());
   }
 
   async createBlankDoc(title: string): Promise<CreatedDocument> {
     const response = await fetch(`${this.apiUrl}/api/docs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ title }),
     });
     return requireJsonResponse<CreatedDocument>(response, 'create_doc');
@@ -117,15 +204,24 @@ export class MarklabWebApi {
   async importMarkdown(title: string, markdown: string): Promise<CreatedDocument> {
     const response = await fetch(`${this.apiUrl}/api/docs/import`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ title, markdown }),
     });
     return requireJsonResponse<CreatedDocument>(response, 'import_doc');
   }
 
+  async readDocument(docId: string, branchId: string): Promise<ReadDocumentResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/read`,
+      { headers: this.documentHeaders() },
+    );
+    return requireJsonResponse<ReadDocumentResponse>(response, 'read_doc');
+  }
+
   async exportMarkdown(docId: string, branchId: string): Promise<ExportedMarkdown> {
     const response = await fetch(
       `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/export.md`,
+      { headers: this.documentHeaders() },
     );
     const body = await response.text();
     if (!response.ok) throw new Error(`export_failed:${response.status}:${body}`);
@@ -137,31 +233,38 @@ export class MarklabWebApi {
   }
 
   async getDocument(docId: string): Promise<DocumentSummary> {
-    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}`);
+    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}`, {
+      headers: this.documentHeaders(),
+    });
     return requireJsonResponse<DocumentSummary>(response, 'request');
   }
 
   async listBranches(docId: string): Promise<BranchesResponse> {
-    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches`);
+    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches`, {
+      headers: this.documentHeaders(),
+    });
     return requireJsonResponse<BranchesResponse>(response, 'request');
   }
 
   async listVersions(docId: string, branchId: string): Promise<VersionsResponse> {
     const response = await fetch(
       `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/versions`,
+      { headers: this.documentHeaders() },
     );
     return requireJsonResponse<VersionsResponse>(response, 'request');
   }
 
   async showVersion(docId: string, versionId: string): Promise<VersionDetail> {
-    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/versions/${encodeURIComponent(versionId)}`);
+    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/versions/${encodeURIComponent(versionId)}`, {
+      headers: this.documentHeaders(),
+    });
     return requireJsonResponse<VersionDetail>(response, 'request');
   }
 
   async branchFromVersion(docId: string, versionId: string, name: string): Promise<BranchFromVersionResponse> {
     const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/versions/${encodeURIComponent(versionId)}/branch`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name }),
     });
     return requireJsonResponse<BranchFromVersionResponse>(response, 'request');
@@ -172,10 +275,76 @@ export class MarklabWebApi {
       `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/restore`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ versionId }),
       },
     );
     return requireJsonResponse<RestoreVersionResponse>(response, 'request');
+  }
+
+  async createAgentToken(
+    docId: string,
+    branchId: string,
+    input: { name: string; canWrite: boolean },
+  ): Promise<CreatedAgentToken> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/agent-tokens`,
+      {
+        method: 'POST',
+        headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: input.name, canWrite: input.canWrite }),
+      },
+    );
+    return requireJsonResponse<CreatedAgentToken>(response, 'create_agent_token');
+  }
+
+  async listAgentTokens(docId: string, branchId: string): Promise<AgentTokensResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/agent-tokens`,
+      { headers: this.adminHeaders() },
+    );
+    return requireJsonResponse<AgentTokensResponse>(response, 'list_agent_tokens');
+  }
+
+  async revokeAgentToken(tokenId: string): Promise<void> {
+    const response = await fetch(`${this.apiUrl}/api/agent-tokens/${encodeURIComponent(tokenId)}`, {
+      method: 'DELETE',
+      headers: this.adminHeaders(),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`revoke_agent_token_failed:${response.status}:${body}`);
+    }
+  }
+
+  async createShareLink(docId: string, branchId: string, input: { role: ShareLinkRole }): Promise<CreatedShareLink> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/share-links`,
+      {
+        method: 'POST',
+        headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ role: input.role }),
+      },
+    );
+    return requireJsonResponse<CreatedShareLink>(response, 'create_share_link');
+  }
+
+  async listShareLinks(docId: string, branchId: string): Promise<ShareLinksResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/share-links`,
+      { headers: this.adminHeaders() },
+    );
+    return requireJsonResponse<ShareLinksResponse>(response, 'list_share_links');
+  }
+
+  async revokeShareLink(linkId: string): Promise<void> {
+    const response = await fetch(`${this.apiUrl}/api/share-links/${encodeURIComponent(linkId)}`, {
+      method: 'DELETE',
+      headers: this.adminHeaders(),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`revoke_share_link_failed:${response.status}:${body}`);
+    }
   }
 }
