@@ -22,11 +22,13 @@
 - `edit_doc` rejects ambiguous string.
 - Branch from version creates isolated branch state.
 - Human Milkdown edits refresh `current_markdown/current_hash` before an agent `read_doc`.
+- `read_doc` flushes live state and creates/selects a matching autosave version when the flushed mirror hash differs from branch head.
 - Human mirror refresh uses Milkdown serializer output plus canonical formatting, not Prettier-only formatting of stale strings.
 - AI write/edit updates live editor state before mirror/version persistence.
 - AI write/edit uses the minimal transaction live writer and does not perform mirror-only or wholesale live-document replacement.
-- Unit tests must prove `applyMarkdownToBranchState` persists the live writer's serialized Markdown, not the requested target Markdown, and performs no mirror/version writes when the live writer fails.
+- Unit tests must prove `applyMarkdownToBranchState` persists the live writer's serialized Markdown and returned non-empty encoded Yjs state, not the requested target Markdown, and performs no mirror/version writes when the live writer fails or returns invalid Yjs bytes.
 - HTTP e2e tests must prove stale full writes and unavailable live writers do not call or bypass the minimal transaction writer.
+- Export tests must prove dirty but serializable live state becomes a matching system version before export, while impossible post-flush hash disagreement returns `export_version_mismatch`.
 - CLI tests verify simple online command semantics: `read_doc` returns canonical Markdown, `edit_doc` submits one exact replacement, `write_doc` submits full target Markdown with base version/hash, and no default snapshot workflow is required.
 - Save-policy tests verify manual saves, autosave throttling, and pre-agent checkpoint creation when a dirty human mirror is not represented by the branch head version.
 

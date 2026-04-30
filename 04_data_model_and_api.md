@@ -134,7 +134,7 @@ export interface EditDocRequest {
 }
 ```
 
-`ReadDocResponse.hash` is the current canonical mirror hash returned to agents as `baseHash`. `ReadDocResponse.versionId` is the branch head version used as `baseVersionId`. If a branch has flushed human edits that have not yet become an immutable version, the mirror hash can differ from the head version snapshot hash; the pre-agent checkpoint policy records that human state before the agent version is created.
+`ReadDocResponse.hash` is the current canonical mirror hash returned to agents as `baseHash`. `ReadDocResponse.versionId` is the branch head version used as `baseVersionId`. Before returning, `read_doc` flushes live Milkdown/Yjs state through the canonical serializer path; if the flushed mirror hash differs from the branch head version hash, it creates or selects a matching system autosave version so the returned `versionId` and `hash` describe the same Markdown body.
 
 `write_doc` uses `baseVersionId` and `baseHash` as hard stale-write guards against the current branch head and current canonical mirror. `edit_doc` is a Claude-like exact string replacement against the current canonical Markdown; `observedVersionId` is optional audit context and is not a stale guard by default.
 
@@ -260,7 +260,7 @@ HTTP status: `409`.
 
 > **Context note:** Earlier route sketches parsed `baseVersionId` but only checked `baseHash`. The corrected contract treats the version id as part of the full-write guard so agents receive precise conflict information.
 
-An accepted `write_doc` is full-document at the API boundary only. Internally it must run through the minimal transaction live writer: parse the target canonical Markdown, compare it to the current Yjs-bound ProseMirror document, apply only changed ranges through transactions/Yjs updates, serialize the live document back to canonical Markdown, and then update `current_markdown`, `current_hash`, and the branch head version.
+An accepted `write_doc` is full-document at the API boundary only. Internally it must run through the minimal transaction live writer: parse the target canonical Markdown, compare it to the current Yjs-bound ProseMirror document, apply only changed ranges through transactions/Yjs updates, serialize the live document back to canonical Markdown, and then update `yjs_state`, `current_markdown`, `current_hash`, and the branch head version in one transaction.
 
 ### Local edit
 
@@ -331,6 +331,8 @@ Response:
 
 - Content-Type: `text/markdown; charset=utf-8`
 - Content-Disposition filename uses export metadata format.
+
+Before export, the branch is flushed through the same Milkdown serializer path used by `read_doc`. The response filename must use a version/hash that match the exported body; if the post-flush mirror and branch head version still disagree, return `409 export_version_mismatch` instead of producing a misleading versioned filename.
 
 ### Branch from version
 

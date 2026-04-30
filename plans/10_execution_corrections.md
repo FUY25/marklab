@@ -52,6 +52,9 @@ The following corrections should be applied while executing the plans.
 20. `doc-read.ts` is now created in `plans/04_import_export_plan.md` as a shared canonical branch read service. `plans/06_ai_write_api_plan.md` uses that existing service instead of creating it later, so import/export does not depend on the AI plan.
 21. `plans/05_version_branch_plan.md` now includes version list/show and branch-from-version HTTP routes. This closes the gap where the CLI plan required `versions list/show` commands but no API route plan exposed those operations.
 22. `LiveMarkdownWriter` imports in `plans/06_ai_write_api_plan.md` now point at `services/live-writer`, where the type is defined, rather than `services/editor-state`.
+23. `LiveMarkdownWriter.applyMarkdownTransaction()` must return a valid non-empty encoded `yjsState` with `serializedMarkdown`, and `applyMarkdownToBranchState()` must persist that Yjs state transactionally with the canonical mirror and immutable version snapshot. Empty or invalid writer state is a fail-closed `503 invalid_live_yjs_state`, not a mirror-only fallback.
+24. Export must not produce a versioned filename unless the flushed mirror hash matches the branch head version hash. Normal dirty live state should be handled by the flush path creating or selecting a matching system version before export/read returns; `export_version_mismatch` is reserved for impossible or externally inconsistent post-flush state.
+25. `plans/06_2_live_writer_transformer_integration_plan.md` sits between Plan 6 and Plan 7. It converts the Plan 4/5/6 fail-closed seams into a real headless Milkdown transformer, concrete Postgres live writer, and read/export flush behavior. Plan 7 must not start until Plan 6.2's deployment gate passes.
 
 ## Safe First Slice
 

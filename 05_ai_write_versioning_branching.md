@@ -105,8 +105,8 @@ current canonical Markdown
   -> compare target doc with current live Yjs-bound ProseMirror doc
   -> apply only changed ranges via ProseMirror transactions/Yjs updates
   -> serialize the resulting live doc back to canonical Markdown
-  -> update mirror/hash
-  -> create version
+  -> return valid encoded Yjs state
+  -> update yjs_state/mirror/hash and create version in one transaction
 ```
 
 This is a live editor writer, not a mirror-only writer. Whole-document live replacement is not acceptable for MVP because it can disrupt collaboration state and hides whether the transaction path works.
@@ -114,6 +114,8 @@ This is a live editor writer, not a mirror-only writer. Whole-document live repl
 > **Context note:** The rejected shortcut was to update only `document_branch_states.current_markdown/current_hash` and leave live Yjs/ProseMirror state untouched. That shortcut can make online editors stale or let later collaboration persistence overwrite agent changes. The corrected path updates live branch state first and treats the canonical mirror as derived state.
 
 The minimal transaction writer does not need to preserve cursor position or support selection-aware AI. Its responsibility is to keep the Yjs-bound editor document, canonical mirror, hash, and version head consistent after accepted writes.
+
+If the writer cannot return valid non-empty encoded Yjs state, the operation fails closed. The API must not create a version or update the mirror from Markdown alone.
 
 ## Version creation rules
 
@@ -140,6 +142,7 @@ Yjs persistence:
 canonical mirror:
   update current_markdown/current_hash on a 1-2s debounce after human edits
   flush on blur, tab hide, manual save, export, and agent read/write boundaries
+  export/read boundaries create or select a matching system version when the flushed hash differs from branch head
 
 manual save:
   create a version immediately if current_hash differs from the head version hash

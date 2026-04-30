@@ -125,11 +125,13 @@ target canonical Markdown
   -> compare target doc to current doc
   -> dispatch ProseMirror transactions for only the changed ranges
   -> let Yjs publish/persist those updates
-  -> serialize the resulting live doc back to canonical Markdown
-  -> update current_markdown/current_hash/head version from serialized live doc
+  -> return serialized Markdown plus valid encoded Yjs state
+  -> update yjs_state/current_markdown/current_hash/head version transactionally
 ```
 
 This keeps online editors on the same state path as human collaboration. The diffing granularity only needs to be reliable enough for changed block/range transactions in MVP; it does not need cursor preservation or selection-aware AI behavior.
+
+Any successful writer must return a non-empty encoded Yjs state for the live document it serialized. If the writer is not configured, cannot serialize, or returns invalid Yjs bytes, the API must fail closed instead of updating only the Markdown mirror.
 
 If a branch's live Yjs document is empty but `current_markdown` is non-empty, the writer must first seed the live Yjs/ProseMirror document from `current_markdown` through the same Milkdown parser/Yjs path, then apply the target diff. This guards imports and branch-from-version flows where no browser has opened the branch yet.
 
@@ -166,6 +168,8 @@ source Markdown/version snapshot
 ```
 
 The preferred implementation is a headless Milkdown transformer service that produces valid Yjs state during import and branch creation. If MVP execution cannot make that transformer reliable immediately, the live writer must include an explicit seed-if-empty fallback before applying AI writes. Relying on the first browser editor opening `applyTemplate(initialMarkdown)` is not sufficient because agents may write before any human opens the branch.
+
+Before `read_doc` and export cross the API boundary, pending live editor state must be flushed through the same serializer path. If the flushed canonical hash differs from the branch head version hash, the flush path creates or selects a matching system version so callers receive a version/hash pair that actually represents the Markdown body.
 
 ## API topology
 
