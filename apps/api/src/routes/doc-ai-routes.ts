@@ -35,6 +35,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave');
       res.json(await readBranchState(pool, docId, branchId));
@@ -48,6 +49,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
     const branchId = requiredParam(req, 'branchId');
 
     try {
+      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
       const body = writeSchema.parse(req.body);
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);
@@ -88,6 +90,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
       const body = editSchema.parse(req.body);
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);

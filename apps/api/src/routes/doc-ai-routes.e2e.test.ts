@@ -4,12 +4,13 @@ import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
-import { createHttpApp } from '../http/app';
+import { createHttpApp, type HttpRequestAuth } from '../http/app';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createPostgresLiveMarkdownWriter } from '../services/postgres-live-writer';
 import { toRoomName } from '../collab/persistence';
+import { verifyAdminToken, verifyDocumentAccess } from '../services/access-control';
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -19,6 +20,19 @@ interface FakePoolOptions {
   headHash?: string;
   versionIds?: string[];
   yjsState?: Uint8Array;
+  agentTokens?: Array<{
+    tokenHash: string;
+    docId: string;
+    branchId: string | null;
+    canRead: boolean;
+    canWrite: boolean;
+  }>;
+  shareLinks?: Array<{
+    tokenHash: string;
+    docId: string;
+    branchId: string | null;
+    role: 'view' | 'edit';
+  }>;
 }
 
 interface CapturedQuery {
@@ -51,6 +65,35 @@ function createFakePool(options: FakePoolOptions = {}) {
     params?: readonly unknown[],
   ): Promise<DbQueryResult<Row>> => {
     queries.push(params === undefined ? { sql } : { sql, params });
+
+    if (sql.includes('from agent_tokens')) {
+      const [tokenHash, docId, branchId] = params ?? [];
+      return {
+        rows: (options.agentTokens ?? [])
+          .filter((row) => row.tokenHash === tokenHash && row.docId === docId && (row.branchId === branchId || row.branchId === null))
+          .map((row) => ({
+            can_read: row.canRead,
+            can_write: row.canWrite,
+            expires_at: null,
+            revoked_at: null,
+          })) as Row[],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from share_links')) {
+      const [tokenHash, docId, branchId] = params ?? [];
+      return {
+        rows: (options.shareLinks ?? [])
+          .filter((row) => row.tokenHash === tokenHash && row.docId === docId && (row.branchId === branchId || row.branchId === null))
+          .map((row) => ({
+            role: row.role,
+            expires_at: null,
+            revoked_at: null,
+          })) as Row[],
+        rowCount: 1,
+      };
+    }
 
     if (sql.includes('from document_branches b') && sql.includes('document_branch_states')) {
       return {
@@ -204,6 +247,24 @@ function createValidYjsState(): Uint8Array {
   const update = Y.encodeStateAsUpdate(doc);
   doc.destroy();
   return update;
+}
+
+function requestToken(req: Parameters<HttpRequestAuth['requireDocumentAccess']>[0]): string | undefined {
+  const queryToken = req.query.token;
+  if (typeof queryToken === 'string' && queryToken) return queryToken;
+  const match = /^Bearer\s+(.+)$/iu.exec(req.header('authorization') ?? '');
+  return match?.[1];
+}
+
+function createRequiredAuth(pool: DbPool): HttpRequestAuth {
+  return {
+    async requireAdminAccess(req) {
+      verifyAdminToken(requestToken(req), sha256Hex('admin-secret'));
+    },
+    async requireDocumentAccess(req, docId, branchId, operation) {
+      await verifyDocumentAccess(pool, requestToken(req), docId, branchId, operation);
+    },
+  };
 }
 
 describe('doc AI routes minimal transaction e2e', () => {
@@ -649,5 +710,75 @@ describe('doc AI routes minimal transaction e2e', () => {
       null,
       'edit',
     ]);
+  });
+
+  it('rejects read_doc without a document token when auth is required', async () => {
+    const { pool } = createFakePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+
+    await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(403, { error: 'forbidden' });
+  });
+
+  it('rejects write_doc with a read-only share link when auth is required', async () => {
+    const shareToken = 'ml_share_readonly';
+    const { pool, queries } = createFakePool({
+      shareLinks: [
+        {
+          tokenHash: sha256Hex(shareToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'view',
+        },
+      ],
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .set('Authorization', `Bearer ${shareToken}`)
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(403, { error: 'forbidden' });
+
+    expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
+  it('allows write_doc with a write-capable agent token when auth is required', async () => {
+    const agentToken = 'ml_agent_write';
+    const { pool } = createFakePool({
+      agentTokens: [
+        {
+          tokenHash: sha256Hex(agentToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          canRead: true,
+          canWrite: true,
+        },
+      ],
+    });
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Agent result\n',
+      yjsState: createValidYjsState(),
+      previousHash: 'sha256:current',
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .set('Authorization', `Bearer ${agentToken}`)
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Agent target' })
+      .expect(200);
+  });
+
+  it('requires the admin token for create and import when auth is required', async () => {
+    const { pool } = createFakePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+
+    await request(app).post('/api/docs').send({ title: 'Locked' }).expect(403, { error: 'forbidden' });
+    await request(app)
+      .post('/api/docs/import')
+      .send({ title: 'Locked import', markdown: '# Locked\n' })
+      .expect(403, { error: 'forbidden' });
   });
 });

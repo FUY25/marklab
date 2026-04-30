@@ -1,7 +1,8 @@
 import { Hocuspocus } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
-import { createEmptyYjsState, loadYjsStateWithMetadata, storeYjsState } from './persistence';
+import { verifyDocumentAccess } from '../services/access-control';
+import { createEmptyYjsState, loadYjsStateWithMetadata, parseRoomName, storeYjsState } from './persistence';
 
 interface LoadedDocumentState {
   stateFingerprint: string;
@@ -18,6 +19,7 @@ export interface CollabServerHandle {
 }
 
 export function createCollabServer(pool: DbPool) {
+  const requireAuth = process.env.MARKLAB_REQUIRE_AUTH === 'true';
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
   const activeDocumentByRoomName = new Map<string, Y.Doc>();
 
@@ -79,6 +81,15 @@ export function createCollabServer(pool: DbPool) {
 
   const server = new Hocuspocus({
     name: 'marklab',
+    async onAuthenticate({ documentName, token }: { documentName: string; token: string }) {
+      if (!requireAuth) return;
+      try {
+        const { docId, branchId } = parseRoomName(documentName);
+        await verifyDocumentAccess(pool, token, docId, branchId, 'write');
+      } catch {
+        throw new Error('forbidden');
+      }
+    },
     async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
       const loaded = await loadYjsStateWithMetadata(pool, documentName);
       if (loaded.stateFingerprint !== null) {

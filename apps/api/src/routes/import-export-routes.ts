@@ -38,6 +38,7 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
 
   router.post('/docs', async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await options.auth?.requireAdminAccess(req);
       const body = createSchema.parse(req.body);
       const result = await createDoc({ pool, title: body.title, markdown: '', operation: 'create' });
       res.status(201).json(result);
@@ -48,6 +49,7 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
 
   router.post('/docs/import', async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await options.auth?.requireAdminAccess(req);
       const body = importSchema.parse(req.body);
       const result = await createDoc({ pool, title: body.title, markdown: body.markdown, operation: 'import' });
       res.status(201).json(result);
@@ -61,6 +63,7 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
 
+      await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
 
