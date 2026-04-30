@@ -27,6 +27,39 @@ export function requireLocalHttpUrl(value: string, label: string): URL {
   return url;
 }
 
+export function requireLocalWebsocketUrl(value: string, label: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    throw new Error(`${label} must use ws or wss`);
+  }
+
+  const hostname = normalizeHostname(url.hostname);
+  if (!localHostnames.has(hostname)) {
+    throw new Error(`${label} must point to localhost, 127.0.0.1, or ::1`);
+  }
+
+  return url;
+}
+
+export function rejectManagedUrlOverrides() {
+  if (process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true') return;
+
+  const blockedOverrides = ['MARKLAB_E2E_WEB_URL', 'MARKLAB_E2E_API_URL', 'MARKLAB_E2E_WS_URL'].filter(
+    (name) => process.env[name],
+  );
+  if (blockedOverrides.length > 0) {
+    throw new Error(
+      `${blockedOverrides.join(', ')} ${blockedOverrides.length === 1 ? 'is' : 'are'} only allowed when MARKLAB_E2E_ALLOW_EXISTING_API=true`,
+    );
+  }
+}
+
 function requireTestDatabaseUrl(): string {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) throw new Error('TEST_DATABASE_URL is required for remote document browser tests');
@@ -58,9 +91,13 @@ function requireTestDatabaseUrl(): string {
 }
 
 export async function setupRemoteApi() {
+  rejectManagedUrlOverrides();
+
   if (process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true') {
     const apiUrl = process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011';
+    const websocketUrl = process.env.MARKLAB_E2E_WS_URL;
     requireLocalHttpUrl(apiUrl, 'MARKLAB_E2E_API_URL');
+    if (websocketUrl) requireLocalWebsocketUrl(websocketUrl, 'MARKLAB_E2E_WS_URL');
     return;
   }
 

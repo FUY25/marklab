@@ -1,10 +1,16 @@
 import { expect, test } from '@playwright/test';
 import type { APIRequestContext, APIResponse, BrowserContext } from '@playwright/test';
-import { requireLocalHttpUrl, setupRemoteApi } from './setup-remote-api';
+import {
+  rejectManagedUrlOverrides,
+  requireLocalHttpUrl,
+  requireLocalWebsocketUrl,
+  setupRemoteApi,
+} from './setup-remote-api';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-const webUrl = process.env.MARKLAB_E2E_WEB_URL ?? 'http://127.0.0.1:5175';
-const apiUrl = process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011';
+const allowExistingApi = process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true';
+const webUrl = allowExistingApi ? process.env.MARKLAB_E2E_WEB_URL ?? 'http://127.0.0.1:5175' : 'http://127.0.0.1:5175';
+const apiUrl = allowExistingApi ? process.env.MARKLAB_E2E_API_URL ?? 'http://127.0.0.1:3011' : 'http://127.0.0.1:3011';
 
 interface ImportedDocument {
   docId: string;
@@ -18,8 +24,12 @@ interface ReadDocument {
 }
 
 function requireRemoteApiReadiness() {
-  if (process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true') {
+  rejectManagedUrlOverrides();
+
+  if (allowExistingApi) {
     requireLocalHttpUrl(apiUrl, 'MARKLAB_E2E_API_URL');
+    requireLocalHttpUrl(webUrl, 'MARKLAB_E2E_WEB_URL');
+    if (process.env.MARKLAB_E2E_WS_URL) requireLocalWebsocketUrl(process.env.MARKLAB_E2E_WS_URL, 'MARKLAB_E2E_WS_URL');
     return;
   }
 

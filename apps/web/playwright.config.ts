@@ -1,15 +1,26 @@
 import { defineConfig } from '@playwright/test';
+import {
+  rejectManagedUrlOverrides,
+  requireLocalHttpUrl,
+  requireLocalWebsocketUrl,
+} from './tests/setup-remote-api';
 
 const port = 5175;
 const baseURL = `http://127.0.0.1:${port}`;
 const apiPort = 3011;
 const defaultApiUrl = `http://127.0.0.1:${apiPort}`;
 const allowExistingApi = process.env.MARKLAB_E2E_ALLOW_EXISTING_API === 'true';
+rejectManagedUrlOverrides();
 const shouldStartApi = Boolean(process.env.TEST_DATABASE_URL) && !allowExistingApi;
 const usesRemoteE2E = shouldStartApi || allowExistingApi;
 const apiUrl = shouldStartApi ? defaultApiUrl : process.env.MARKLAB_E2E_API_URL ?? defaultApiUrl;
 const websocketUrl =
   process.env.MARKLAB_E2E_WS_URL ?? `${apiUrl.replace(/^http/u, 'ws').replace(/\/+$/u, '')}/collab`;
+
+if (allowExistingApi) {
+  requireLocalHttpUrl(apiUrl, 'MARKLAB_E2E_API_URL');
+  requireLocalWebsocketUrl(websocketUrl, 'MARKLAB_E2E_WS_URL');
+}
 
 export default defineConfig({
   testDir: './tests',
