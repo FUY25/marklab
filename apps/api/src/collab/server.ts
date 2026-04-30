@@ -8,6 +8,10 @@ interface LoadedDocumentState {
   yjsState: Uint8Array | null;
 }
 
+interface StoreDocumentStateOptions {
+  failOnPersistFailure?: boolean;
+}
+
 export interface CollabServerHandle {
   server: Hocuspocus;
   flushDocument(roomName: string): Promise<void>;
@@ -27,7 +31,23 @@ export function createCollabServer(pool: DbPool) {
     };
   }
 
-  async function storeDocumentState(documentName: string, document: Y.Doc): Promise<void> {
+  function handleStoreFailure(document: Y.Doc, refreshed: LoadedDocumentState | null, options: StoreDocumentStateOptions): void {
+    if (refreshed) {
+      loadedStateByDocument.set(document, refreshed);
+    } else {
+      loadedStateByDocument.delete(document);
+    }
+
+    if (options.failOnPersistFailure) {
+      throw new Error('active_collab_flush_failed');
+    }
+  }
+
+  async function storeDocumentState(
+    documentName: string,
+    document: Y.Doc,
+    options: StoreDocumentStateOptions = {},
+  ): Promise<void> {
     const update = Y.encodeStateAsUpdate(document);
     const loaded = loadedStateByDocument.get(document);
     const stored = await storeYjsState(pool, documentName, update, loaded?.stateFingerprint ?? null, loaded?.yjsState ?? null);
@@ -41,7 +61,7 @@ export function createCollabServer(pool: DbPool) {
 
     const refreshed = await refreshDocumentState(documentName, document);
     if (!refreshed) {
-      loadedStateByDocument.delete(document);
+      handleStoreFailure(document, null, options);
       return;
     }
 
@@ -53,7 +73,7 @@ export function createCollabServer(pool: DbPool) {
         yjsState: mergedUpdate,
       });
     } else {
-      loadedStateByDocument.set(document, refreshed);
+      handleStoreFailure(document, refreshed, options);
     }
   }
 
@@ -74,6 +94,11 @@ export function createCollabServer(pool: DbPool) {
       activeDocumentByRoomName.set(documentName, document);
       await storeDocumentState(documentName, document);
     },
+    async afterUnloadDocument({ documentName }: { documentName: string }) {
+      const document = activeDocumentByRoomName.get(documentName);
+      if (document) loadedStateByDocument.delete(document);
+      activeDocumentByRoomName.delete(documentName);
+    },
   });
 
   return {
@@ -81,7 +106,7 @@ export function createCollabServer(pool: DbPool) {
     async flushDocument(roomName: string) {
       const document = activeDocumentByRoomName.get(roomName);
       if (!document) return;
-      await storeDocumentState(roomName, document);
+      await storeDocumentState(roomName, document, { failOnPersistFailure: true });
     },
   } satisfies CollabServerHandle;
 }

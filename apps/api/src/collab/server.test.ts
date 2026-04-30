@@ -9,6 +9,7 @@ interface TestableHocuspocus {
   configuration: {
     onLoadDocument(payload: { documentName: string; document: Y.Doc }): Promise<Uint8Array | null>;
     onStoreDocument(payload: { documentName: string; document: Y.Doc }): Promise<void>;
+    afterUnloadDocument(payload: { documentName: string }): Promise<void>;
   };
   destroy?(): Promise<void> | void;
 }
@@ -43,7 +44,7 @@ function textFromState(state: Uint8Array): string {
   return text;
 }
 
-function createPersistencePool(initialState: Uint8Array) {
+function createPersistencePool(initialState: Uint8Array, options: { failStoreAttempts?: number } = {}) {
   let persistedState = initialState;
   let stateFingerprint = encodeYjsStateFingerprint(initialState);
   let storeAttemptCount = 0;
@@ -61,6 +62,10 @@ function createPersistencePool(initialState: Uint8Array) {
 
     if (sql.includes('update document_branch_states')) {
       storeAttemptCount += 1;
+      if (storeAttemptCount <= (options.failStoreAttempts ?? 0)) {
+        return { rows: [], rowCount: 0 } as DbQueryResult<Row>;
+      }
+
       const expectedFingerprint = params?.[2];
       const nextFingerprint = params?.[3];
       const expectedState = params?.[4];
@@ -126,6 +131,30 @@ describe('createCollabServer persistence hooks', () => {
     }
   });
 
+  it('forgets an active document after Hocuspocus unload so later flushes are no-ops', async () => {
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('prosemirror').insert(document.getText('prosemirror').length, ' active');
+
+      await collab.server.configuration.afterUnloadDocument({ documentName: roomName });
+      await collab.flushDocument(roomName);
+
+      expect(store.getStoreAttemptCount()).toBe(0);
+      expect(textFromState(store.getPersistedState())).toBe('loaded');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
   it('retries an active flush after refreshing stale persistence metadata', async () => {
     const initialState = createState('loaded');
     const apiState = updateState(initialState, (text) => text.insert(text.length, ' api'));
@@ -147,6 +176,29 @@ describe('createCollabServer persistence hooks', () => {
       expect(store.getStoreAttemptCount()).toBe(2);
       expect(textFromState(store.getPersistedState())).toContain('api');
       expect(textFromState(store.getPersistedState())).toContain('human');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('fails closed when an explicit active flush cannot persist after one retry', async () => {
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState, { failStoreAttempts: 2 });
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('prosemirror').insert(document.getText('prosemirror').length, ' active');
+
+      await expect(collab.flushDocument(roomName)).rejects.toThrow('active_collab_flush_failed');
+
+      expect(store.getStoreAttemptCount()).toBe(2);
+      expect(textFromState(store.getPersistedState())).toBe('loaded');
     } finally {
       document.destroy();
       await collab.server.destroy?.();
