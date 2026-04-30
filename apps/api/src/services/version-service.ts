@@ -1,5 +1,6 @@
 import type { DbExecutor, DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
+import { initializeBranchEditorState } from './milkdown-transformer';
 
 export type VersionActorType = 'agent' | 'user' | 'system';
 export type VersionOperation = 'create' | 'import' | 'autosave' | 'manual_save' | 'write' | 'edit' | 'rollback' | 'branch';
@@ -85,4 +86,128 @@ export async function createVersion(input: CreateVersionInput): Promise<CreateVe
       operation: input.operation,
     }),
   );
+}
+
+function toIsoString(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+export async function listVersions(pool: DbExecutor, docId: string, branchId: string) {
+  const result = await pool.query<{
+    id: string;
+    parent_version_id: string | null;
+    version_number: number;
+    hash: string;
+    actor_type: VersionActorType;
+    actor_id: string | null;
+    operation: VersionOperation;
+    created_at: Date | string;
+  }>(
+    `select id, parent_version_id, version_number, hash, actor_type, actor_id, operation, created_at
+       from document_versions
+      where doc_id = $1 and branch_id = $2
+      order by version_number desc`,
+    [docId, branchId],
+  );
+
+  return result.rows.map((row) => ({
+    versionId: row.id,
+    parentVersionId: row.parent_version_id,
+    versionNumber: row.version_number,
+    hash: row.hash,
+    actorType: row.actor_type,
+    actorId: row.actor_id,
+    operation: row.operation,
+    createdAt: toIsoString(row.created_at),
+  }));
+}
+
+export async function showVersion(pool: DbExecutor, docId: string, versionId: string) {
+  const result = await pool.query<{
+    id: string;
+    branch_id: string;
+    parent_version_id: string | null;
+    version_number: number;
+    markdown_snapshot: string;
+    hash: string;
+    actor_type: VersionActorType;
+    actor_id: string | null;
+    operation: VersionOperation;
+    created_at: Date | string;
+  }>(
+    `select id, branch_id, parent_version_id, version_number, markdown_snapshot, hash, actor_type, actor_id, operation, created_at
+       from document_versions
+      where doc_id = $1 and id = $2`,
+    [docId, versionId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('version_not_found');
+
+  return {
+    versionId: row.id,
+    branchId: row.branch_id,
+    parentVersionId: row.parent_version_id,
+    versionNumber: row.version_number,
+    markdown: row.markdown_snapshot,
+    hash: row.hash,
+    actorType: row.actor_type,
+    actorId: row.actor_id,
+    operation: row.operation,
+    createdAt: toIsoString(row.created_at),
+  };
+}
+
+export async function branchFromVersion(
+  pool: DbPool,
+  docId: string,
+  sourceVersionId: string,
+  branchName: string,
+  branchSlug: string,
+) {
+  return withTransaction(pool, async (client) => {
+    const source = await client.query<{ markdown_snapshot: string; hash: string }>(
+      `select markdown_snapshot, hash
+         from document_versions
+        where id = $1 and doc_id = $2`,
+      [sourceVersionId, docId],
+    );
+    const sourceRow = source.rows[0];
+    if (!sourceRow) throw new Error('source_version_not_found');
+
+    const branch = await client.query<{ id: string }>(
+      `insert into document_branches (doc_id, name, slug, created_from_version_id)
+       values ($1, $2, $3, $4)
+       returning id`,
+      [docId, branchName, branchSlug, sourceVersionId],
+    );
+    const branchId = branch.rows[0]?.id;
+    if (!branchId) throw new Error('document_branch_insert_failed');
+
+    const initialized = await initializeBranchEditorState(sourceRow.markdown_snapshot);
+
+    await client.query(
+      `insert into document_branch_states (branch_id, yjs_state, current_markdown, current_hash)
+       values ($1, $2, $3, $4)`,
+      [branchId, Buffer.from(initialized.yjsState), initialized.markdown, initialized.hash],
+    );
+
+    const version = await client.query<{ id: string }>(
+      `insert into document_versions
+        (doc_id, branch_id, parent_version_id, version_number, markdown_snapshot, hash, actor_type, operation)
+       values ($1, $2, $3, 1, $4, $5, 'system', 'branch')
+       returning id`,
+      [docId, branchId, sourceVersionId, initialized.markdown, initialized.hash],
+    );
+    const versionId = version.rows[0]?.id;
+    if (!versionId) throw new Error('document_version_insert_failed');
+
+    await client.query(
+      `update document_branches
+          set head_version_id = $2
+        where id = $1`,
+      [branchId, versionId],
+    );
+
+    return { branchId, versionId };
+  });
 }
