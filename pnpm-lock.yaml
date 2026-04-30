@@ -136,12 +136,18 @@ importers:
       '@playwright/test':
         specifier: ^1.50.0
         version: 1.59.1
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.0
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.14
       '@types/react-dom':
         specifier: ^19.0.0
         version: 19.2.3(@types/react@19.2.14)
+      pg:
+        specifier: ^8.13.0
+        version: 8.20.0
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

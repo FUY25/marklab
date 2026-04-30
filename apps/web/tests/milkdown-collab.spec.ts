@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 
 test('renders the Crepe editor shell without TopBar and keeps editing chrome', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?local=one');
 
   const editor = page.getByTestId('milkdown-editor');
   await expect(editor.locator('.milkdown')).toBeVisible();
@@ -14,7 +14,7 @@ test('renders the Crepe editor shell without TopBar and keeps editing chrome', a
 });
 
 test('shows the floating toolbar for selected prose and applies formatting', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?local=one');
 
   const editor = page.getByTestId('milkdown-editor');
   const paragraph = editor.locator('.ProseMirror p').first();
@@ -32,7 +32,7 @@ test('shows the floating toolbar for selected prose and applies formatting', asy
 });
 
 test('opens slash menu, hides image insertion, and inserts a table block', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?local=one');
 
   const editor = page.getByTestId('milkdown-editor');
   await editor.locator('.ProseMirror').click();
@@ -52,7 +52,7 @@ test('opens slash menu, hides image insertion, and inserts a table block', async
 });
 
 test('inserts a CodeMirror-backed code block from slash commands', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?local=one');
 
   const editor = page.getByTestId('milkdown-editor');
   await editor.locator('.ProseMirror').click();
