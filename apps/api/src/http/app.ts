@@ -123,8 +123,8 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
-  app.use(express.json({ limit: '2mb' }));
   app.use(createCorsMiddleware());
+  app.use(express.json({ limit: '2mb' }));
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({ ok: true });

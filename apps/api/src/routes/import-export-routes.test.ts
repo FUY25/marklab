@@ -43,6 +43,20 @@ function findBranchStateInsert(queries: CapturedQuery[]): CapturedQuery | undefi
 }
 
 describe('import/export routes with real Milkdown transformer', () => {
+  it('adds CORS headers when JSON parsing fails before route handling', async () => {
+    const { pool } = createDocWritePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    const response = await request(app)
+      .post('/api/docs')
+      .set('Origin', 'http://127.0.0.1:5173')
+      .set('Content-Type', 'application/json')
+      .send('{"title":')
+      .expect(500);
+
+    expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5173');
+  });
+
   it('creates a blank doc with initialized branch state and version metadata', async () => {
     const { pool, queries } = createDocWritePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());

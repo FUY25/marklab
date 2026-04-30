@@ -1,4 +1,6 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import {
   rejectManagedUrlOverrides,
   requireLocalHttpUrl,
@@ -35,6 +37,12 @@ function extractDocumentIds(url: string): { docId: string; branchId: string } {
   };
 }
 
+async function expectRecentDocument(page: Page, title: string, branchId: string) {
+  const recentDocuments = page.getByRole('region', { name: 'Recent documents' });
+  await expect(recentDocuments).toContainText(title);
+  await expect(recentDocuments).toContainText(branchId);
+}
+
 test('creates imports opens and exports cloud Markdown documents', async ({ page }) => {
   requireRemoteApiReadiness();
   await setupRemoteApi();
@@ -50,6 +58,8 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   const blankDocument = extractDocumentIds(page.url());
 
   await page.goto(webUrl);
+  await expectRecentDocument(page, 'Lifecycle Blank', blankDocument.branchId);
+
   await page.getByLabel('Document title').fill('Lifecycle Import');
   await page.getByLabel('Import Markdown').setInputFiles({
     name: 'lifecycle-import.md',
@@ -69,6 +79,22 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   expect(download.suggestedFilename()).toMatch(
     /^lifecycle-import__EXPORT__doc-[a-z0-9]+__branch-main__v\d{4}__\d{8}-\d{6}Z__sha-[a-f0-9]{8}__check-cloud-before-use\.md$/u,
   );
+  const downloadPath = await download.path();
+  if (!downloadPath) throw new Error('download path unavailable');
+  const exportedMarkdown = await readFile(downloadPath, 'utf8');
+  expect(exportedMarkdown).toContain('# Imported Lifecycle');
+  expect(exportedMarkdown).toContain('Imported body from fixture.');
+
+  await page.goto(webUrl);
+  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
+
+  await page.evaluate(() => localStorage.clear());
+  await page.goto(
+    `${webUrl}/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,
+  );
+  await expect(page.getByTestId('remote-document-id')).toHaveText(importedDocument.docId);
+  await page.goto(webUrl);
+  await expectRecentDocument(page, importedDocument.docId, importedDocument.branchId);
 
   await page.goto(webUrl);
   await page.getByLabel('Document id').fill(blankDocument.docId);
@@ -79,5 +105,7 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
     `/docs/${encodeURIComponent(blankDocument.docId)}/branches/${encodeURIComponent(blankDocument.branchId)}`,
   );
   await expect(page.getByTestId('remote-document-id')).toHaveText(blankDocument.docId);
+  await page.goto(webUrl);
+  await expectRecentDocument(page, blankDocument.docId, blankDocument.branchId);
   expect(importedDocument.docId).not.toEqual(blankDocument.docId);
 });

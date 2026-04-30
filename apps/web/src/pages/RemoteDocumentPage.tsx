@@ -5,6 +5,7 @@ import { MilkdownEditor } from '../components/MilkdownEditor';
 import { readWebConfig } from '../config';
 import { createEditorCollab } from '../lib/editor-collab';
 import { buildBranchRoomName } from '../lib/remote-room';
+import { loadRecentDocuments, rememberRecentDocument } from '../lib/recent-documents';
 
 interface RemoteDocumentPageProps {
   docId: string;
@@ -18,6 +19,11 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
   const roomName = useMemo(() => buildBranchRoomName(docId, branchId), [branchId, docId]);
   const [collab, setCollab] = useState<EditorCollab | null>(null);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const existingRecent = loadRecentDocuments().find((document) => document.docId === docId && document.branchId === branchId);
+    rememberRecentDocument({ docId, branchId, title: existingRecent?.title ?? docId });
+  }, [branchId, docId]);
 
   useEffect(() => {
     setConnectionMessage(null);
