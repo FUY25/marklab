@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import * as Y from 'yjs';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
@@ -9,7 +10,7 @@ interface CapturedQuery {
   params?: readonly unknown[];
 }
 
-function createFailIfQueriedPool() {
+function createDocWritePool() {
   const queries: CapturedQuery[] = [];
 
   const query: DbPool['query'] = async <Row = unknown>(
@@ -17,7 +18,11 @@ function createFailIfQueriedPool() {
     params?: readonly unknown[],
   ): Promise<DbQueryResult<Row>> => {
     queries.push(params === undefined ? { sql } : { sql, params });
-    return { rows: [], rowCount: 0 };
+
+    if (sql.includes('insert into documents')) return { rows: [{ id: 'doc_001' } as Row], rowCount: 1 };
+    if (sql.includes('insert into document_branches')) return { rows: [{ id: 'br_main' } as Row], rowCount: 1 };
+    if (sql.includes('insert into document_versions')) return { rows: [{ id: 'ver_001' } as Row], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
   };
 
   const client: DbTransactionClient = {
@@ -33,37 +38,53 @@ function createFailIfQueriedPool() {
   return { pool, queries };
 }
 
-describe('import/export routes with unavailable Milkdown transformer', () => {
-  it('exposes create blank doc but fails closed before writing mirror state', async () => {
-    const { pool, queries } = createFailIfQueriedPool();
+function findBranchStateInsert(queries: CapturedQuery[]): CapturedQuery | undefined {
+  return queries.find((query) => query.sql.includes('insert into document_branch_states'));
+}
+
+describe('import/export routes with real Milkdown transformer', () => {
+  it('creates a blank doc with initialized branch state and version metadata', async () => {
+    const { pool, queries } = createDocWritePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
-    const response = await request(app).post('/api/docs').send({ title: 'Blank doc' }).expect(503);
+    const response = await request(app).post('/api/docs').send({ title: 'Blank doc' }).expect(201);
 
-    expect(response.body).toEqual({ error: 'milkdown_transformer_not_configured' });
-    expect(queries).toEqual([]);
+    expect(response.body).toMatchObject({
+      docId: 'doc_001',
+      branchId: 'br_main',
+      versionId: 'ver_001',
+    });
+    expect(response.body.hash).toMatch(/^sha256:/u);
+
+    const branchStateInsert = findBranchStateInsert(queries);
+    const yjsState = branchStateInsert?.params?.[1];
+    expect(yjsState).toBeInstanceOf(Buffer);
+    expect((yjsState as Buffer).byteLength).toBeGreaterThan(0);
   });
 
-  it('exposes import doc but fails closed before storing Markdown beside empty Yjs state', async () => {
-    const { pool, queries } = createFailIfQueriedPool();
+  it('imports markdown with decodable non-empty Yjs branch state', async () => {
+    const { pool, queries } = createDocWritePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app)
       .post('/api/docs/import')
       .send({ title: 'Imported doc', markdown: '# Imported\n\nBody\n' })
-      .expect(503);
+      .expect(201);
 
-    expect(response.body).toEqual({ error: 'milkdown_transformer_not_configured' });
-    expect(queries).toEqual([]);
-  });
+    expect(response.body).toMatchObject({
+      docId: 'doc_001',
+      branchId: 'br_main',
+      versionId: 'ver_001',
+    });
+    expect(response.body.hash).toMatch(/^sha256:/u);
 
-  it('flushes the live Markdown mirror before export reads branch state', async () => {
-    const { pool, queries } = createFailIfQueriedPool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const branchStateInsert = findBranchStateInsert(queries);
+    const yjsState = branchStateInsert?.params?.[1];
+    expect(yjsState).toBeInstanceOf(Buffer);
 
-    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(503);
-
-    expect(response.body).toEqual({ error: 'milkdown_transformer_not_configured' });
-    expect(queries).toEqual([]);
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, yjsState as Buffer);
+    expect(doc.getXmlFragment('prosemirror').length).toBeGreaterThan(0);
+    doc.destroy();
   });
 });

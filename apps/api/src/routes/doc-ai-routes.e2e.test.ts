@@ -5,8 +5,10 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp } from '../http/app';
+import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
+import { createPostgresLiveMarkdownWriter } from '../services/postgres-live-writer';
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -15,6 +17,7 @@ interface FakePoolOptions {
   currentVersionNumber?: number;
   headHash?: string;
   versionIds?: string[];
+  yjsState?: Uint8Array;
 }
 
 interface CapturedQuery {
@@ -24,13 +27,22 @@ interface CapturedQuery {
 
 function createFakePool(options: FakePoolOptions = {}) {
   const queries: CapturedQuery[] = [];
-  const currentMarkdown = options.currentMarkdown ?? '# Doc\n\nOld paragraph.\n';
-  const currentHash = options.currentHash ?? 'sha256:current';
-  const currentVersionId = options.currentVersionId ?? 'ver_001';
-  const currentVersionNumber = options.currentVersionNumber ?? 1;
-  const headHash = options.headHash ?? currentHash;
+  let currentMarkdown = options.currentMarkdown ?? '# Doc\n\nOld paragraph.\n';
+  let currentHash = options.currentHash ?? 'sha256:current';
+  let currentVersionId = options.currentVersionId ?? 'ver_001';
+  let currentVersionNumber = options.currentVersionNumber ?? 1;
+  let headHash = options.headHash ?? currentHash;
+  let yjsState = options.yjsState ?? createValidYjsState();
   const versionIds = [...(options.versionIds ?? ['ver_002', 'ver_003'])];
   let nextVersionNumber = currentVersionNumber + 1;
+  let pendingVersion:
+    | {
+        id: string;
+        versionNumber: number;
+        markdown: string;
+        hash: string;
+      }
+    | undefined;
 
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
@@ -42,9 +54,11 @@ function createFakePool(options: FakePoolOptions = {}) {
       return {
         rows: [
           {
+            yjs_state: Buffer.from(yjsState),
             current_markdown: currentMarkdown,
             current_hash: currentHash,
             head_version_id: currentVersionId,
+            head_version_number: currentVersionNumber,
             head_hash: headHash,
           } as Row,
         ],
@@ -68,12 +82,42 @@ function createFakePool(options: FakePoolOptions = {}) {
       };
     }
 
+    if (sql.includes('update document_branch_states')) {
+      if (params?.[2] instanceof Buffer) {
+        yjsState = new Uint8Array(params[2]);
+        currentMarkdown = String(params[3]);
+        currentHash = String(params[4]);
+      } else {
+        currentMarkdown = String(params?.[1]);
+        currentHash = String(params?.[2]);
+        yjsState = params?.[3] instanceof Buffer ? new Uint8Array(params[3]) : yjsState;
+      }
+      return { rows: [], rowCount: 1 };
+    }
+
     if (sql.includes('coalesce(max(version_number)')) {
       return { rows: [{ next_version_number: nextVersionNumber++ } as Row], rowCount: 1 };
     }
 
     if (sql.includes('insert into document_versions')) {
-      return { rows: [{ id: versionIds.shift() ?? 'ver_next' } as Row], rowCount: 1 };
+      const id = versionIds.shift() ?? 'ver_next';
+      pendingVersion = {
+        id,
+        versionNumber: Number(params?.[3] ?? currentVersionNumber + 1),
+        markdown: String(params?.[4] ?? currentMarkdown),
+        hash: String(params?.[5] ?? currentHash),
+      };
+      return { rows: [{ id } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('update document_branches') && pendingVersion && params?.[1] === pendingVersion.id) {
+      currentVersionId = pendingVersion.id;
+      currentVersionNumber = pendingVersion.versionNumber;
+      currentMarkdown = pendingVersion.markdown;
+      currentHash = pendingVersion.hash;
+      headHash = pendingVersion.hash;
+      pendingVersion = undefined;
+      return { rows: [], rowCount: 1 };
     }
 
     return { rows: [], rowCount: 1 };
@@ -121,6 +165,28 @@ function createValidYjsState(): Uint8Array {
 }
 
 describe('doc AI routes minimal transaction e2e', () => {
+  it('flushes live state and creates an autosave version before read_doc returns version and hash', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('# Human live edit\n');
+    const { pool } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: 'sha256:old',
+      yjsState: seeded.yjsState,
+      versionIds: ['ver_002'],
+    });
+    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
+
+    expect(response.body.versionId).toBe('ver_002');
+    expect(response.body.versionNumber).toBe(2);
+    expect(response.body.hash).toBe(seeded.hash);
+    expect(response.body.markdown).toBe(seeded.markdown);
+  });
+
   it('persists the live transaction serialization rather than the requested full-write markdown', async () => {
     const { pool, queries } = createFakePool();
     const liveSerializedMarkdown = '## Live serialized\n\n|A|B|\n|-|-|\n|1|2|\n';

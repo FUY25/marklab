@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
+import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 
 vi.mock('../services/milkdown-transformer', () => ({
   flushBranchMarkdownMirror: vi.fn(async () => undefined),
@@ -16,6 +17,9 @@ interface CapturedQuery {
 interface ExportPoolOptions {
   currentHash: string;
   versionHash: string;
+  versionId?: string;
+  versionNumber?: number;
+  currentMarkdown?: string;
 }
 
 function createExportPool(options: ExportPoolOptions) {
@@ -33,10 +37,10 @@ function createExportPool(options: ExportPoolOptions) {
           {
             doc_id: 'doc_001',
             branch_id: 'br_main',
-            version_id: 'ver_007',
-            version_number: 7,
+            version_id: options.versionId ?? 'ver_007',
+            version_number: options.versionNumber ?? 7,
             current_hash: options.currentHash,
-            current_markdown: '# Exported\n',
+            current_markdown: options.currentMarkdown ?? '# Exported\n',
           } as Row,
         ],
         rowCount: 1,
@@ -77,28 +81,50 @@ describe('export route version metadata consistency', () => {
     vi.clearAllMocks();
   });
 
-  it('rejects export when the flushed mirror hash does not match the branch head version hash', async () => {
-    const { pool } = createExportPool({ currentHash: 'sha256:fresh', versionHash: 'sha256:old' });
+  it('rejects export when post-flush branch state does not match flushed version metadata', async () => {
+    vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
+      branchId: 'br_main',
+      markdown: '# Exported\n',
+      hash: 'sha256:fresh',
+      versionId: 'ver_011',
+      versionNumber: 11,
+      createdVersion: true,
+    });
+    const { pool } = createExportPool({ currentHash: 'sha256:old', versionHash: 'sha256:old' });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(409);
 
     expect(response.body).toEqual({
       error: 'export_version_mismatch',
-      currentHash: 'sha256:fresh',
-      versionHash: 'sha256:old',
+      currentHash: 'sha256:old',
+      versionHash: 'sha256:fresh',
     });
   });
 
-  it('exports markdown when the flushed mirror hash matches the branch head version hash', async () => {
-    const { pool } = createExportPool({ currentHash: 'sha256:fresh', versionHash: 'sha256:fresh' });
+  it('exports with the flushed version metadata when flush creates a matching manual_save version', async () => {
+    vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
+      branchId: 'br_main',
+      markdown: '# Exported\n',
+      hash: 'sha256:fresh',
+      versionId: 'ver_011',
+      versionNumber: 11,
+      createdVersion: true,
+    });
+    const { pool } = createExportPool({
+      currentHash: 'sha256:fresh',
+      versionHash: 'sha256:fresh',
+      versionId: 'ver_011',
+      versionNumber: 11,
+    });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
 
+    expect(vi.mocked(flushBranchMarkdownMirror)).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'manual_save');
     expect(response.text).toBe('# Exported\n');
     expect(response.headers['content-type']).toContain('text/markdown');
-    expect(response.headers['content-disposition']).toContain('__v0007__');
+    expect(response.headers['content-disposition']).toContain('__v0011__');
     expect(response.headers['content-disposition']).toContain('__sha-fresh__');
   });
 });

@@ -59,7 +59,7 @@ export function createImportExportRoutes(pool: DbPool) {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
 
-      await flushBranchMarkdownMirror(pool, docId, branchId);
+      const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
       const state = await readBranchState(pool, docId, branchId);
 
       const metadata = await pool.query<{ title: string; branch_slug: string; version_hash: string }>(
@@ -72,17 +72,20 @@ export function createImportExportRoutes(pool: DbPool) {
       );
       const metadataRow = metadata.rows[0];
       if (!metadataRow) throw new Error('branch_not_found');
-      if (metadataRow.version_hash !== state.hash) {
-        throw new ExportVersionMismatchError(state.hash, metadataRow.version_hash);
+      if (state.versionId !== flushed.versionId || state.hash !== flushed.hash) {
+        throw new ExportVersionMismatchError(state.hash, flushed.hash);
+      }
+      if (metadataRow.version_hash !== flushed.hash) {
+        throw new ExportVersionMismatchError(metadataRow.version_hash, flushed.hash);
       }
 
       const filename = buildExportFilename({
         title: metadataRow.title,
         docId: state.docId,
         branchSlug: metadataRow.branch_slug,
-        versionNumber: state.versionNumber,
+        versionNumber: flushed.versionNumber,
         exportedAt: new Date(),
-        hash: state.hash,
+        hash: flushed.hash,
       });
 
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');

@@ -5,6 +5,7 @@ import { readBranchState } from '../services/doc-read';
 import { applyEditToMarkdown, assertCanWrite, EditConflictError } from '../services/doc-write';
 import { applyMarkdownToBranchState } from '../services/editor-state';
 import type { LiveMarkdownOperation, LiveMarkdownWriter } from '../services/live-writer';
+import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 
 const writeSchema = z.object({
   baseVersionId: z.string().min(1),
@@ -32,6 +33,7 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter) 
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave');
       res.json(await readBranchState(pool, docId, branchId));
     } catch (error) {
       next(error);

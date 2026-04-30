@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
+import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import type { LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 
@@ -11,6 +12,8 @@ interface FakePoolOptions {
   currentHash?: string;
   currentVersionId?: string;
   currentVersionNumber?: number;
+  headHash?: string;
+  yjsState?: Uint8Array;
 }
 
 function createFakePool(options: FakePoolOptions = {}) {
@@ -19,6 +22,8 @@ function createFakePool(options: FakePoolOptions = {}) {
   const currentHash = options.currentHash ?? 'sha256:current';
   const currentVersionId = options.currentVersionId ?? 'ver_001';
   const currentVersionNumber = options.currentVersionNumber ?? 1;
+  const headHash = options.headHash ?? currentHash;
+  const yjsState = options.yjsState ?? createValidYjsState();
 
   const query: DbPool['query'] = async <Row = unknown>(sql: string): Promise<DbQueryResult<Row>> => {
     queries.push(sql);
@@ -27,10 +32,12 @@ function createFakePool(options: FakePoolOptions = {}) {
       return {
         rows: [
           {
+            yjs_state: Buffer.from(yjsState),
             current_markdown: currentMarkdown,
             current_hash: currentHash,
             head_version_id: currentVersionId,
-            head_hash: currentHash,
+            head_version_number: currentVersionNumber,
+            head_hash: headHash,
           } as Row,
         ],
         rowCount: 1,
@@ -99,7 +106,14 @@ function createValidYjsState(): Uint8Array {
 
 describe('doc AI routes', () => {
   it('reads canonical branch state', async () => {
-    const { pool } = createFakePool();
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('# Doc\n\nOld paragraph.\n');
+    const { pool } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+    });
     const app = createHttpApp(pool, createEchoLiveWriter());
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
@@ -108,7 +122,7 @@ describe('doc AI routes', () => {
       docId: 'doc_001',
       branchId: 'br_main',
       versionId: 'ver_001',
-      hash: 'sha256:current',
+      hash: seeded.hash,
     });
   });
 
