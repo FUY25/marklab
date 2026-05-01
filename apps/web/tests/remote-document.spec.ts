@@ -113,6 +113,17 @@ test('keeps two remote browser windows and API writes synchronized without refre
     await expect(editorB).toContainText('Remote E2E');
 
     await editorA.click();
+    await expect(pageB.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);
+    await expect(pageB.locator('.ProseMirror-yjs-cursor div')).toHaveCount(0);
+    await expect(pageB.locator('.ProseMirror-yjs-cursor')).not.toContainText('Human Writer');
+    const pageACursorColor = await pageB.locator('.ProseMirror-yjs-cursor').evaluate((element) => getComputedStyle(element).borderColor);
+
+    await editorB.click();
+    await expect(pageA.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);
+    const pageBCursorColor = await pageA.locator('.ProseMirror-yjs-cursor').evaluate((element) => getComputedStyle(element).borderColor);
+    expect(pageBCursorColor).not.toBe(pageACursorColor);
+
+    await editorA.click();
     await pageA.keyboard.press(`${modifier}+End`);
     await pageA.keyboard.press('Enter');
     await pageA.keyboard.type('Browser A edit.');

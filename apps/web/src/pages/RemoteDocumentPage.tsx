@@ -3,6 +3,7 @@ import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
 import { BranchSwitcher } from '../components/BranchSwitcher';
 import { DocumentToolbar } from '../components/DocumentToolbar';
 import { MilkdownEditor } from '../components/MilkdownEditor';
+import { ReadOnlyMarkdownView } from '../components/ReadOnlyMarkdownView';
 import { ShareAccessPanel } from '../components/ShareAccessPanel';
 import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { readWebConfig } from '../config';
@@ -98,7 +99,7 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
         websocketUrl: config.websocketUrl,
         roomName,
         ...(collabToken ? { token: collabToken } : {}),
-        user: { name: 'Human Writer', color: '#2563eb' },
+        user: { name: 'Human Writer' },
       });
     } catch {
       setConnectionMessage('Connection lost');
@@ -148,14 +149,12 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
       {connectionMessage ? <div role="alert">{connectionMessage}</div> : null}
       <section className="remote-document-layout" aria-label="Document editor and history">
         <div className="remote-editor-workspace">
-          {isReadOnly ? (
-            <article className="read-only-document" data-testid="read-only-document" aria-label="Read-only Markdown">
-              <div className="read-only-heading">
-                <p className="workspace-kicker">Read-only</p>
-                <h2>Markdown</h2>
-              </div>
-              <pre>{readOnlyDocument?.markdown ?? 'Loading document...'}</pre>
-            </article>
+          {isReadOnly && readOnlyDocument ? (
+            <ReadOnlyMarkdownView markdown={readOnlyDocument.markdown} />
+          ) : isReadOnly ? (
+            <div className="read-only-document read-only-document-loading" data-testid="read-only-document" role="status">
+              Loading document...
+            </div>
           ) : accessMode === 'checking' ? (
             <div className="read-only-document" data-testid="document-access-check" role="status">
               <div className="read-only-heading">

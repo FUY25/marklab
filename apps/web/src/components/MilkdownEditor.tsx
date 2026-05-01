@@ -5,6 +5,10 @@ import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import type { Doc } from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 
+interface RemoteAwarenessUser {
+  color?: string;
+}
+
 export interface MilkdownEditorProps {
   initialMarkdown: string;
   ydoc: Doc;
@@ -13,6 +17,28 @@ export interface MilkdownEditorProps {
   testId?: string;
   applyInitialTemplate?: boolean;
   onMarkdownChange?: (markdown: string, previousMarkdown: string) => void;
+}
+
+function normalizeRemoteColor(color: string | undefined): string {
+  return /^#[0-9a-fA-F]{6}$/u.test(color ?? '') ? color! : '#2563eb';
+}
+
+function buildRemoteCursor(user: RemoteAwarenessUser) {
+  const color = normalizeRemoteColor(user.color);
+  const cursor = document.createElement('span');
+  cursor.classList.add('ProseMirror-yjs-cursor', 'marklab-collab-cursor');
+  cursor.style.borderColor = color;
+  cursor.style.setProperty('--marklab-collab-color', color);
+  cursor.setAttribute('aria-hidden', 'true');
+  return cursor;
+}
+
+function buildRemoteSelection(user: RemoteAwarenessUser) {
+  const color = normalizeRemoteColor(user.color);
+  return {
+    class: 'ProseMirror-yjs-selection marklab-collab-selection',
+    style: `background-color: ${color}33`,
+  };
 }
 
 export function MilkdownEditor({
@@ -80,6 +106,13 @@ export function MilkdownEditor({
         const service = ctx
           .get(collabServiceCtx)
           .bindDoc(ydoc);
+
+        service.setOptions({
+          yCursorOpts: {
+            cursorBuilder: buildRemoteCursor,
+            selectionBuilder: buildRemoteSelection,
+          },
+        });
 
         if (applyInitialTemplate) service.applyTemplate(initialMarkdown);
 

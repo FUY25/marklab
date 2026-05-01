@@ -113,6 +113,34 @@ async function createReadOnlyAgentToken(page: Page): Promise<string> {
   return (await rawToken.textContent())?.trim() ?? '';
 }
 
+async function expectRenderedReadOnlyDocument(page: Page) {
+  const readOnlyDocument = page.getByTestId('read-only-document');
+  const readOnlySurface = readOnlyDocument.locator('.ProseMirror');
+
+  await expect(readOnlyDocument).toContainText('Access UI');
+  await expect(readOnlySurface).toBeVisible();
+  await expect(readOnlySurface).toHaveAttribute('contenteditable', 'false');
+  await expect(readOnlySurface.locator('h1')).toContainText('Access UI');
+  await expect(readOnlySurface).not.toContainText('# Access UI');
+  await expect(readOnlyDocument.locator('pre')).toHaveCount(0);
+
+  const selectedText = await readOnlySurface.locator('h1').evaluate((heading) => {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(heading);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return selection?.toString() ?? '';
+  });
+  expect(selectedText).toContain('Access');
+
+  await readOnlySurface.click();
+  await page.keyboard.press(`${modifier}+End`);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Read-only edit attempt.');
+  await expect(readOnlySurface).not.toContainText('Read-only edit attempt.');
+}
+
 test('manages share links and agent tokens under required auth', async ({ browser, page, request }) => {
   requireRemoteApiReadiness();
   await setupRemoteApi();
@@ -160,9 +188,8 @@ test('manages share links and agent tokens under required auth', async ({ browse
     viewContext = await browser.newContext();
     const viewPage = await viewContext.newPage();
     await viewPage.goto(viewShareUrl);
-    await expect(viewPage.getByTestId('read-only-document')).toContainText('Access UI');
+    await expectRenderedReadOnlyDocument(viewPage);
     await expect(viewPage.getByTestId('milkdown-editor')).toHaveCount(0);
-    await expect(viewPage.locator('.ProseMirror')).toHaveCount(0);
     await expect(viewPage.getByTestId('share-access-panel')).toHaveCount(0);
     await expect(viewPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
     await expect(viewPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);
@@ -182,9 +209,8 @@ test('manages share links and agent tokens under required auth', async ({ browse
     await readOnlyAgentPage.goto(
       `${webUrl}${documentPath(doc)}?token=${encodeURIComponent(agentToken)}&mode=edit`,
     );
-    await expect(readOnlyAgentPage.getByTestId('read-only-document')).toContainText('Access UI');
+    await expectRenderedReadOnlyDocument(readOnlyAgentPage);
     await expect(readOnlyAgentPage.getByTestId('milkdown-editor')).toHaveCount(0);
-    await expect(readOnlyAgentPage.locator('.ProseMirror')).toHaveCount(0);
     await expect(readOnlyAgentPage.getByTestId('share-access-panel')).toHaveCount(0);
     await expect(readOnlyAgentPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
     await expect(readOnlyAgentPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);

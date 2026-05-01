@@ -895,8 +895,18 @@ button:disabled {
   min-width: 0;
   min-height: 520px;
   background: #ffffff;
+  user-select: text;
+}
+
+.read-only-document-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--workspace-muted);
   border: 1px solid var(--workspace-border);
   border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 .read-only-heading {
@@ -928,6 +938,23 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.read-only-document > .milkdown {
+  min-height: inherit;
+  --crepe-color-background: #ffffff;
+  --crepe-color-surface: #ffffff;
+  --crepe-font-default: Inter, Arial, Helvetica, sans-serif;
+  --crepe-font-title: Rubik, Arial, Helvetica, sans-serif;
+  --crepe-font-code: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+}
+
+.read-only-document .ProseMirror {
+  min-height: 430px;
+  padding: 96px 0 64px;
+  cursor: text;
+  outline: none;
+  user-select: text;
+}
+
 .milkdown-editor {
   min-height: 520px;
   background: #ffffff;
@@ -946,6 +973,35 @@ button:disabled {
   min-height: 430px;
   padding: 96px 0 64px;
   outline: none;
+}
+
+.marklab-collab-cursor {
+  position: relative;
+  display: inline;
+  border-left: 2px solid var(--marklab-collab-color, #2563eb);
+  border-right: 0;
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+}
+
+.marklab-collab-cursor::after {
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  background: var(--marklab-collab-color, #2563eb);
+  border-radius: 999px;
+  content: "";
+}
+
+.marklab-collab-cursor > div {
+  display: none;
+}
+
+.marklab-collab-selection {
+  border-radius: 2px;
 }
 
 .collab-grid {
