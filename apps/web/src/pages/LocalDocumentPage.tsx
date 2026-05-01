@@ -1,0 +1,326 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
+import { X } from 'lucide-react';
+import { DocumentActionRail, type DocumentDrawerKind } from '../components/DocumentActionRail';
+import { MilkdownEditor } from '../components/MilkdownEditor';
+import { readWebConfig } from '../config';
+import {
+  MarklabWebApi,
+  type LocalDocumentResponse,
+  type LocalVersionDetail,
+  type LocalVersionSummary,
+} from '../lib/api-client';
+import { createEditorCollab } from '../lib/editor-collab';
+
+type EditorCollab = ReturnType<typeof createEditorCollab>;
+
+interface LocalVersionsDrawerProps {
+  api: MarklabWebApi;
+  open: boolean;
+  onClose: () => void;
+  onStatusChange: (status: string, kind: 'status' | 'alert') => void;
+}
+
+function readableError(error: unknown, fallback: string): string {
+  console.error(fallback, error);
+  return fallback;
+}
+
+function formatVersionTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(value));
+}
+
+function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersionsDrawerProps) {
+  const [versions, setVersions] = useState<LocalVersionSummary[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<LocalVersionDetail | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedVersion = versions.find((version) => version.versionId === selectedVersionId) ?? null;
+
+  const refreshVersions = useCallback(async () => {
+    const response = await api.listLocalVersions();
+    setVersions(response.versions);
+    setSelectedVersionId((current) => current ?? response.versions[0]?.versionId ?? null);
+  }, [api]);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    void refreshVersions().catch((refreshError: unknown) => {
+      setError(readableError(refreshError, 'Unable to load versions.'));
+    });
+  }, [open, refreshVersions]);
+
+  useEffect(() => {
+    if (!open || !selectedVersionId) {
+      setPreview(null);
+      return;
+    }
+
+    let isActive = true;
+    setError(null);
+    void api
+      .showLocalVersion(selectedVersionId)
+      .then((version) => {
+        if (isActive) setPreview(version);
+      })
+      .catch((previewError: unknown) => {
+        if (isActive) setError(readableError(previewError, 'Unable to load version preview.'));
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [api, open, selectedVersionId]);
+
+  async function handleManualSave() {
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.manualSaveLocalVersion();
+      await refreshVersions();
+      onStatusChange(saved.created ? `Saved snapshot v${saved.versionNumber}` : 'No changes to snapshot', 'status');
+    } catch (saveError) {
+      const message = readableError(saveError, 'Unable to save snapshot.');
+      setError(message);
+      onStatusChange(message, 'alert');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRestore() {
+    if (!selectedVersionId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const restored = await api.restoreLocalVersion(selectedVersionId);
+      await refreshVersions();
+      onStatusChange(`Restored snapshot v${restored.versionNumber}`, 'status');
+    } catch (restoreError) {
+      const message = readableError(restoreError, 'Unable to restore snapshot.');
+      setError(message);
+      onStatusChange(message, 'alert');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="document-drawer-layer">
+      <aside className="document-drawer" aria-label="Local versions">
+        <header className="document-drawer-header">
+          <h2>Versions</h2>
+          <button type="button" className="document-drawer-close" aria-label="Close versions" onClick={onClose}>
+            <X className="document-drawer-close-icon" aria-hidden="true" />
+          </button>
+        </header>
+        <div className="document-drawer-body">
+          <section className="document-drawer-section">
+            <div className="document-drawer-action-row">
+              <button type="button" onClick={() => void handleManualSave()} disabled={busy}>
+                Save snapshot
+              </button>
+              <button type="button" onClick={() => void handleRestore()} disabled={busy || !selectedVersion}>
+                Restore
+              </button>
+            </div>
+            {error ? (
+              <p className="document-drawer-status" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="document-drawer-section">
+            {versions.length > 0 ? (
+              <ul className="versions-drawer-list">
+                {versions.map((version) => {
+                  const isActive = version.versionId === selectedVersionId;
+                  return (
+                    <li key={version.versionId}>
+                      <button
+                        type="button"
+                        className={isActive ? 'versions-drawer-row versions-drawer-row-active' : 'versions-drawer-row'}
+                        onClick={() => setSelectedVersionId(version.versionId)}
+                      >
+                        <span className="versions-drawer-row-main">
+                          <strong>v{version.versionNumber}</strong>
+                          <span>{version.operation.replace('_', ' ')}</span>
+                        </span>
+                        <span className="versions-drawer-row-meta">
+                          <time dateTime={version.createdAt}>{formatVersionTime(version.createdAt)}</time>
+                          <code>{version.hash.slice(0, 8)}</code>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="versions-drawer-empty">No snapshots yet.</p>
+            )}
+          </section>
+
+          {preview ? (
+            <section className="document-drawer-section">
+              <pre className="versions-drawer-preview">{preview.markdown}</pre>
+            </section>
+          ) : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+export function LocalDocumentPage() {
+  const config = useMemo(() => readWebConfig(), []);
+  const api = useMemo(() => new MarklabWebApi(), []);
+  const [document, setDocument] = useState<LocalDocumentResponse | null>(null);
+  const [collab, setCollab] = useState<EditorCollab | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<DocumentDrawerKind | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [statusKind, setStatusKind] = useState<'status' | 'alert'>('status');
+  const flushTimerRef = useRef<number | null>(null);
+
+  const setSaveStatus = useCallback((nextStatus: string, nextKind: 'status' | 'alert' = 'status') => {
+    setStatus(nextStatus);
+    setStatusKind(nextKind);
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    void api
+      .getLocalDocument()
+      .then((localDocument) => {
+        if (isActive) setDocument(localDocument);
+      })
+      .catch((error: unknown) => {
+        if (isActive) setSaveStatus(readableError(error, 'Open a Markdown file with marklab open README.md.'), 'alert');
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [api, setSaveStatus]);
+
+  useEffect(() => {
+    if (!document) return undefined;
+
+    let nextCollab: EditorCollab;
+    try {
+      nextCollab = createEditorCollab({
+        websocketUrl: config.websocketUrl,
+        roomName: document.roomName,
+        user: { name: 'Local writer' },
+      });
+    } catch (error) {
+      setSaveStatus(readableError(error, 'Connection lost'), 'alert');
+      return undefined;
+    }
+
+    const handleStatus = ({ status: connectionStatus }: onStatusParameters) => {
+      if (connectionStatus === WebSocketStatus.Disconnected) {
+        setSaveStatus('Connection lost', 'alert');
+      }
+    };
+    const handleDisconnect = () => {
+      setSaveStatus('Connection lost', 'alert');
+    };
+    const handleAuthenticated = () => {
+      setSaveStatus(document.conflict ?? 'Connected to local file', document.conflict ? 'alert' : 'status');
+    };
+
+    nextCollab.provider.on('status', handleStatus);
+    nextCollab.provider.on('disconnect', handleDisconnect);
+    nextCollab.provider.on('authenticationFailed', handleDisconnect);
+    nextCollab.provider.on('authenticated', handleAuthenticated);
+    setCollab(nextCollab);
+
+    return () => {
+      nextCollab.provider.off('status', handleStatus);
+      nextCollab.provider.off('disconnect', handleDisconnect);
+      nextCollab.provider.off('authenticationFailed', handleDisconnect);
+      nextCollab.provider.off('authenticated', handleAuthenticated);
+      setCollab(null);
+      nextCollab.destroy();
+    };
+  }, [config.websocketUrl, document, setSaveStatus]);
+
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
+    };
+  }, []);
+
+  const handleMarkdownChange = useCallback(
+    (markdown: string, previousMarkdown: string) => {
+      if (markdown === previousMarkdown) return;
+      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
+      setSaveStatus('Writing to file');
+      flushTimerRef.current = window.setTimeout(() => {
+        flushTimerRef.current = null;
+        void api
+          .flushLocalDocument()
+          .then((nextDocument) => {
+            setDocument(nextDocument);
+            setSaveStatus(nextDocument.conflict ?? 'Saved to file', nextDocument.conflict ? 'alert' : 'status');
+          })
+          .catch((error: unknown) => {
+            setSaveStatus(readableError(error, 'Unable to write file.'), 'alert');
+          });
+      }, 500);
+    },
+    [api, setSaveStatus],
+  );
+
+  return (
+    <main className="remote-document-shell" data-testid="local-document-page">
+      <section className="remote-document-canvas" aria-label="Local Markdown editor">
+        {collab ? (
+          <MilkdownEditor
+            initialMarkdown=""
+            ydoc={collab.ydoc}
+            awareness={collab.awareness}
+            applyInitialTemplate={false}
+            testId="milkdown-editor"
+            onMarkdownChange={handleMarkdownChange}
+          />
+        ) : (
+          <div className="read-only-document read-only-document-loading" role="status">
+            {statusKind === 'alert' && status ? status : 'Loading local file...'}
+          </div>
+        )}
+      </section>
+
+      <DocumentActionRail
+        hidden={!document}
+        activeDrawer={activeDrawer}
+        availableDrawers={['versions']}
+        onToggleDrawer={(drawer) => setActiveDrawer((current) => (current === drawer ? null : drawer))}
+      />
+
+      <LocalVersionsDrawer
+        api={api}
+        open={activeDrawer === 'versions'}
+        onClose={() => setActiveDrawer(null)}
+        onStatusChange={setSaveStatus}
+      />
+
+      {status ? (
+        <div className="remote-save-status" role={statusKind}>
+          {status}
+        </div>
+      ) : null}
+    </main>
+  );
+}

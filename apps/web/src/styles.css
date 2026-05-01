@@ -134,6 +134,40 @@ button:disabled {
   font-weight: 720;
 }
 
+.local-launch-panel {
+  display: grid;
+  gap: 12px;
+  color: var(--workspace-muted);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.local-launch-panel p {
+  margin: 0;
+}
+
+.local-launch-panel pre {
+  width: max-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+}
+
+.local-launch-panel code {
+  font-family:
+    'JetBrains Mono',
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 14px;
+}
+
 .home-action-rail {
   position: fixed;
   top: 72px;

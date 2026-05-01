@@ -4,6 +4,7 @@ import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
+import { createLocalFileRoutes } from '../routes/local-file-routes';
 import { createVersionRoutes } from '../routes/version-routes';
 import {
   isAdminToken,
@@ -13,12 +14,14 @@ import {
   type VerifiedDocumentAccess,
 } from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
+import type { LocalFileService } from '../local/local-file-service';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
   applyCollabDocumentState?: (roomName: string, yjsState: Uint8Array) => Promise<void>;
   closeCollabDocumentConnections?: (roomName: string) => void;
   auth?: HttpRequestAuth;
+  localFileService?: LocalFileService;
 }
 
 export interface HttpRequestAuth {
@@ -34,8 +37,14 @@ export interface HttpRequestAuth {
 const defaultCorsOrigins = new Set([
   'http://127.0.0.1:5173',
   'http://localhost:5173',
+  'http://127.0.0.1:5174',
+  'http://localhost:5174',
   'http://127.0.0.1:5175',
   'http://localhost:5175',
+  'http://127.0.0.1:5176',
+  'http://localhost:5176',
+  'http://127.0.0.1:5177',
+  'http://localhost:5177',
 ]);
 const corsMethods = 'GET, POST, DELETE, OPTIONS';
 const corsHeaders = 'content-type, authorization';
@@ -194,6 +203,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'local_version_not_found') {
+    res.status(404).json({ error: 'local_version_not_found' });
+    return;
+  }
+
   if (error instanceof Error && error.message.startsWith('missing_route_param:')) {
     res.status(400).json({ error: 'invalid_route' });
     return;
@@ -215,6 +229,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   app.use('/api', createAccessRoutes(pool, routeOptions));
   app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
   app.use('/api', createImportExportRoutes(pool, routeOptions));
+  app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
   app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   app.use(errorHandler);
 

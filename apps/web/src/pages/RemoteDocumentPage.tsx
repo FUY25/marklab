@@ -6,7 +6,7 @@ import { ReadOnlyMarkdownView } from '../components/ReadOnlyMarkdownView';
 import { ShareDrawer } from '../components/ShareDrawer';
 import { VersionsDrawer } from '../components/VersionsDrawer';
 import { readWebConfig } from '../config';
-import { type BranchSummaryResponse, type CreatedDocument, MarklabWebApi, type ReadDocumentResponse } from '../lib/api-client';
+import { type BranchSummaryResponse, MarklabWebApi, type ReadDocumentResponse } from '../lib/api-client';
 import {
   readOrCreateAccessClientId,
   readStoredCollaboratorName,
@@ -16,7 +16,6 @@ import { createEditorCollab } from '../lib/editor-collab';
 import { buildBranchRoomName } from '../lib/remote-room';
 import { loadRecentDocuments, rememberRecentDocument } from '../lib/recent-documents';
 import { readSessionAdminToken } from '../lib/session-auth';
-import { buildDocumentPath } from '../routes';
 
 interface RemoteDocumentPageProps {
   docId: string;
@@ -49,15 +48,6 @@ function collaboratorScope(docId: string, access: BranchSummaryResponse['access'
 
 function ownerGuestName(): string {
   return 'Guest';
-}
-
-function rememberAndOpen(document: CreatedDocument, title: string) {
-  rememberRecentDocument({
-    docId: document.docId,
-    branchId: document.branchId,
-    title,
-  });
-  window.location.assign(buildDocumentPath(document.docId, document.branchId));
 }
 
 interface CollaborationNameDialogProps {
@@ -338,36 +328,6 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
     setSaveStatusKind(kind);
   }, []);
 
-  const handleCreateDocument = useCallback(async () => {
-    const title = 'Untitled document';
-    setSaveStatusKind('status');
-    setSaveStatus('Creating document');
-    try {
-      const document = await api.createBlankDoc(title);
-      rememberAndOpen(document, title);
-    } catch (error) {
-      setSaveStatusKind('alert');
-      setSaveStatus(readableError(error, 'Unable to create document.'));
-    }
-  }, [api]);
-
-  const handleImportMarkdown = useCallback(
-    async (file: File) => {
-      const title = file.name.replace(/\.md$/iu, '').trim() || 'Imported document';
-      setSaveStatusKind('status');
-      setSaveStatus('Importing Markdown');
-      try {
-        const markdown = await file.text();
-        const document = await api.importMarkdown(title, markdown);
-        rememberAndOpen(document, title);
-      } catch (error) {
-        setSaveStatusKind('alert');
-        setSaveStatus(readableError(error, 'Unable to import Markdown.'));
-      }
-    },
-    [api],
-  );
-
   const handleMarkdownChange = useCallback(
     (markdown: string, previousMarkdown: string) => {
       if (markdown === previousMarkdown || accessMode !== 'editable') return;
@@ -427,8 +387,6 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
         hidden={!canShowActions}
         activeDrawer={activeDrawer}
         onToggleDrawer={(drawer) => setActiveDrawer((current) => (current === drawer ? null : drawer))}
-        onCreateDocument={documentToken ? undefined : () => void handleCreateDocument()}
-        onImportMarkdown={documentToken ? undefined : (file) => void handleImportMarkdown(file)}
       />
 
       {canShowActions ? (

@@ -6,6 +6,7 @@ type DocumentDrawerKind = 'versions' | 'share';
 interface DocumentActionRailProps {
   activeDrawer: DocumentDrawerKind | null;
   onToggleDrawer: (drawer: DocumentDrawerKind) => void;
+  availableDrawers?: DocumentDrawerKind[] | undefined;
   onCreateDocument?: (() => void) | undefined;
   onImportMarkdown?: ((file: File) => void) | undefined;
   hidden?: boolean;
@@ -24,12 +25,16 @@ const actions: Array<{
 export function DocumentActionRail({
   activeDrawer,
   onToggleDrawer,
+  availableDrawers,
   onCreateDocument,
   onImportMarkdown,
   hidden = false,
   disabled = false,
 }: DocumentActionRailProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const visibleActions = availableDrawers
+    ? actions.filter((action) => availableDrawers.includes(action.id))
+    : actions;
 
   if (hidden) return null;
 
@@ -80,7 +85,7 @@ export function DocumentActionRail({
           />
         </>
       ) : null}
-      {actions.map((action) => {
+      {visibleActions.map((action) => {
         const isActive = activeDrawer === action.id;
         const { Icon } = action;
         return (

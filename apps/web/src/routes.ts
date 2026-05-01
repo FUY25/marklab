@@ -1,5 +1,6 @@
 export type AppRoute =
   | { kind: 'remote-document'; docId: string; branchId: string }
+  | { kind: 'local-document' }
   | { kind: 'local-single' }
   | { kind: 'local-two' }
   | { kind: 'home' };
@@ -36,6 +37,8 @@ export function parseAppRoute(location: Pick<Location, 'pathname' | 'search'>): 
   const queryBranchId = params.get('branchId');
   if (queryDocId && queryBranchId) return { kind: 'remote-document', docId: queryDocId, branchId: queryBranchId };
 
+  if (pathParts.length === 1 && pathParts[0] === 'local') return { kind: 'local-document' };
+
   if (params.get('local') === 'one') return { kind: 'local-single' };
 
   if (params.get('collab') === 'two') return { kind: 'local-two' };
@@ -45,4 +48,8 @@ export function parseAppRoute(location: Pick<Location, 'pathname' | 'search'>): 
 
 export function buildDocumentPath(docId: string, branchId: string): string {
   return `/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}`;
+}
+
+export function buildLocalDocumentPath(): string {
+  return '/local';
 }

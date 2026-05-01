@@ -70,6 +70,33 @@ export interface ManualSaveVersionResponse {
   hash: string;
 }
 
+export interface LocalDocumentResponse {
+  localDocId: string;
+  displayName: string;
+  absolutePath: string;
+  roomName: string;
+  hash: string;
+  conflict: string | null;
+}
+
+export type LocalVersionOperation = 'open' | 'manual_save' | 'rollback';
+
+export interface LocalVersionSummary {
+  versionId: string;
+  versionNumber: number;
+  operation: LocalVersionOperation;
+  hash: string;
+  createdAt: string;
+}
+
+export interface LocalVersionDetail extends LocalVersionSummary {
+  markdown: string;
+}
+
+export interface LocalVersionsResponse {
+  versions: LocalVersionSummary[];
+}
+
 export interface ReadDocumentResponse {
   versionId: string;
   hash: string;
@@ -386,6 +413,46 @@ export class MarklabWebApi {
       },
     );
     return requireJsonResponse<ManualSaveVersionResponse>(response, 'autosave');
+  }
+
+  async getLocalDocument(): Promise<LocalDocumentResponse> {
+    const response = await fetch(`${this.apiUrl}/api/local/document`);
+    return requireJsonResponse<LocalDocumentResponse>(response, 'local_document');
+  }
+
+  async flushLocalDocument(): Promise<LocalDocumentResponse> {
+    const response = await fetch(`${this.apiUrl}/api/local/flush`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return requireJsonResponse<LocalDocumentResponse>(response, 'local_flush');
+  }
+
+  async listLocalVersions(): Promise<LocalVersionsResponse> {
+    const response = await fetch(`${this.apiUrl}/api/local/versions`);
+    return requireJsonResponse<LocalVersionsResponse>(response, 'local_versions');
+  }
+
+  async showLocalVersion(versionId: string): Promise<LocalVersionDetail> {
+    const response = await fetch(`${this.apiUrl}/api/local/versions/${encodeURIComponent(versionId)}`);
+    return requireJsonResponse<LocalVersionDetail>(response, 'local_version');
+  }
+
+  async manualSaveLocalVersion(): Promise<ManualSaveVersionResponse> {
+    const response = await fetch(`${this.apiUrl}/api/local/versions/manual-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return requireJsonResponse<ManualSaveVersionResponse>(response, 'local_manual_save');
+  }
+
+  async restoreLocalVersion(versionId: string): Promise<RestoreVersionResponse> {
+    const response = await fetch(`${this.apiUrl}/api/local/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versionId }),
+    });
+    return requireJsonResponse<RestoreVersionResponse>(response, 'local_restore');
   }
 
   async createAccessGrant(

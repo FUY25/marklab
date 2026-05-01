@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { MilkdownEditor } from './components/MilkdownEditor';
 import { HomePage } from './pages/HomePage';
+import { LocalDocumentPage } from './pages/LocalDocumentPage';
 import { RemoteDocumentPage } from './pages/RemoteDocumentPage';
 import { parseAppRoute } from './routes';
 
@@ -43,6 +44,8 @@ export function App() {
   if (route.kind === 'remote-document') {
     return <RemoteDocumentPage docId={route.docId} branchId={route.branchId} />;
   }
+
+  if (route.kind === 'local-document') return <LocalDocumentPage />;
 
   if (route.kind === 'local-two') return <TwoEditorCollabHarness />;
 

@@ -21,12 +21,38 @@ export interface CollabServerHandle {
   closeDocumentConnections(roomName: string): void;
 }
 
-export function createCollabServer(pool: DbPool) {
+export interface CollabRoomStore {
+  canHandleRoom(roomName: string): boolean;
+  loadRoomState(roomName: string): Promise<LoadedDocumentState | null>;
+  storeRoomState(
+    roomName: string,
+    yjsState: Uint8Array,
+    expectedStateFingerprint: string | null,
+  ): Promise<{ stored: boolean; stateFingerprint?: string }>;
+}
+
+export interface CreateCollabServerOptions {
+  localStore?: CollabRoomStore;
+}
+
+export function createCollabServer(pool: DbPool, options: CreateCollabServerOptions = {}) {
   const requireAuth = process.env.MARKLAB_REQUIRE_AUTH === 'true';
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
   const activeDocumentByRoomName = new Map<string, Y.Doc>();
+  const localStore = options.localStore;
+
+  function localStoreForRoom(documentName: string): CollabRoomStore | null {
+    return localStore?.canHandleRoom(documentName) ? localStore : null;
+  }
 
   async function refreshDocumentState(documentName: string, document: Y.Doc): Promise<LoadedDocumentState | null> {
+    const local = localStoreForRoom(documentName);
+    if (local) {
+      const loaded = await local.loadRoomState(documentName);
+      if (loaded?.yjsState) Y.applyUpdate(document, loaded.yjsState);
+      return loaded;
+    }
+
     const loaded = await loadYjsStateWithMetadata(pool, documentName);
     if (loaded.stateFingerprint === null) return null;
     if (loaded.yjsState) Y.applyUpdate(document, loaded.yjsState);
@@ -55,6 +81,21 @@ export function createCollabServer(pool: DbPool) {
   ): Promise<void> {
     const update = Y.encodeStateAsUpdate(document);
     const loaded = loadedStateByDocument.get(document);
+    const local = localStoreForRoom(documentName);
+    if (local) {
+      const stored = await local.storeRoomState(documentName, update, loaded?.stateFingerprint ?? null);
+      if (stored.stored && stored.stateFingerprint !== undefined) {
+        loadedStateByDocument.set(document, {
+          stateFingerprint: stored.stateFingerprint,
+          yjsState: update,
+        });
+        return;
+      }
+
+      handleStoreFailure(document, loaded ?? null, options);
+      return;
+    }
+
     const stored = await storeYjsState(pool, documentName, update, loaded?.stateFingerprint ?? null, loaded?.yjsState ?? null);
     if (stored.stored && stored.stateFingerprint !== undefined) {
       loadedStateByDocument.set(document, {
@@ -85,6 +126,7 @@ export function createCollabServer(pool: DbPool) {
   const server = new Hocuspocus({
     name: 'marklab',
     async onAuthenticate({ documentName, token }: { documentName: string; token: string }) {
+      if (localStoreForRoom(documentName)) return;
       if (!requireAuth) return;
       try {
         if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
@@ -95,6 +137,19 @@ export function createCollabServer(pool: DbPool) {
       }
     },
     async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
+      const local = localStoreForRoom(documentName);
+      if (local) {
+        const loaded = await local.loadRoomState(documentName);
+        if (loaded) {
+          loadedStateByDocument.set(document, {
+            stateFingerprint: loaded.stateFingerprint,
+            yjsState: loaded.yjsState,
+          });
+        }
+        activeDocumentByRoomName.set(documentName, document);
+        return loaded?.yjsState ?? createEmptyYjsState();
+      }
+
       const loaded = await loadYjsStateWithMetadata(pool, documentName);
       if (loaded.stateFingerprint !== null) {
         loadedStateByDocument.set(document, {
