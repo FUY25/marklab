@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
@@ -496,6 +496,79 @@ describe('createCollabServer persistence hooks', () => {
         }),
       ).rejects.toThrow('forbidden');
     } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('requires the local daemon token before joining a local file room', async () => {
+    const initialState = createState('local');
+    const store = createPersistencePool(initialState);
+    const localStore = {
+      canHandleRoom: (roomName: string) => roomName === 'local:file:abc123',
+      loadRoomState: vi.fn(async () => ({
+        yjsState: initialState,
+        stateFingerprint: encodeYjsStateFingerprint(initialState),
+      })),
+      storeRoomState: vi.fn(async () => ({ stored: true, stateFingerprint: encodeYjsStateFingerprint(initialState) })),
+    };
+    const collab = createCollabServer(store.pool, {
+      localStore,
+      localDaemonToken: 'local-secret',
+      localOnly: true,
+    }) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: 'local:file:abc123',
+          token: '',
+        }),
+      ).rejects.toThrow('forbidden');
+
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: 'local:file:abc123',
+          token: 'local-secret',
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('rejects every non-local room when running as a local file daemon', async () => {
+    const initialState = createState('local');
+    const store = createPersistencePool(initialState);
+    const localStore = {
+      canHandleRoom: (roomName: string) => roomName === 'local:file:abc123',
+      loadRoomState: vi.fn(async () => ({
+        yjsState: initialState,
+        stateFingerprint: encodeYjsStateFingerprint(initialState),
+      })),
+      storeRoomState: vi.fn(async () => ({ stored: true, stateFingerprint: encodeYjsStateFingerprint(initialState) })),
+    };
+    const collab = createCollabServer(store.pool, {
+      localStore,
+      localDaemonToken: 'local-secret',
+      localOnly: true,
+    }) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: 'local-secret',
+        }),
+      ).rejects.toThrow('forbidden');
+      await expect(
+        collab.server.configuration.onLoadDocument({
+          documentName: toRoomName('doc_001', 'br_main'),
+          document,
+        }),
+      ).rejects.toThrow('forbidden');
+    } finally {
+      document.destroy();
       await collab.server.destroy?.();
     }
   });

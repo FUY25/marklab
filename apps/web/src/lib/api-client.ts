@@ -77,9 +77,10 @@ export interface LocalDocumentResponse {
   roomName: string;
   hash: string;
   conflict: string | null;
+  historyLoadError: string | null;
 }
 
-export type LocalVersionOperation = 'open' | 'manual_save' | 'rollback';
+export type LocalVersionOperation = 'open' | 'manual_save' | 'pre_restore' | 'rollback' | 'conflict_recovery';
 
 export interface LocalVersionSummary {
   versionId: string;
@@ -223,6 +224,7 @@ export interface MarklabWebApiOptions {
   apiUrl?: string;
   adminToken?: string | null;
   documentToken?: string | null;
+  localDaemonToken?: string | null;
 }
 
 function trimQuotes(value: string): string {
@@ -262,6 +264,26 @@ function currentUrlDocumentToken(): string | null {
   return token && token.trim() ? token : null;
 }
 
+const localDaemonTokenKey = 'marklab.localDaemonToken.v1';
+
+function currentUrlLocalDaemonToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  if (!hash) return null;
+  const params = new URLSearchParams(hash);
+  const token = params.get('token') ?? params.get('localToken') ?? params.get('localDaemonToken');
+  if (!token?.trim()) return null;
+
+  window.sessionStorage.setItem(localDaemonTokenKey, token);
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  return token;
+}
+
+export function readLocalDaemonToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return currentUrlLocalDaemonToken() ?? window.sessionStorage.getItem(localDaemonTokenKey);
+}
+
 function withBearerToken(headers: HeadersInit, token: string | null): HeadersInit {
   if (!token) return headers;
   return { ...headers, Authorization: `Bearer ${token}` };
@@ -271,12 +293,14 @@ export class MarklabWebApi {
   private readonly apiUrl: string;
   private readonly adminToken: string | null | undefined;
   private readonly documentToken: string | null | undefined;
+  private readonly localDaemonToken: string | null | undefined;
 
   constructor(input: string | MarklabWebApiOptions = {}) {
     const options = typeof input === 'string' ? { apiUrl: input } : input;
     this.apiUrl = options.apiUrl ?? readWebConfig().apiUrl;
     this.adminToken = options.adminToken;
     this.documentToken = options.documentToken;
+    this.localDaemonToken = options.localDaemonToken;
   }
 
   private resolvedAdminToken(): string | null {
@@ -294,6 +318,15 @@ export class MarklabWebApi {
 
   private documentHeaders(headers: HeadersInit = {}): HeadersInit {
     return withBearerToken(headers, this.resolvedDocumentToken());
+  }
+
+  private resolvedLocalDaemonToken(): string | null {
+    if (this.localDaemonToken !== undefined) return this.localDaemonToken;
+    return readLocalDaemonToken();
+  }
+
+  private localHeaders(headers: HeadersInit = {}): HeadersInit {
+    return withBearerToken(headers, this.resolvedLocalDaemonToken());
   }
 
   async createBlankDoc(title: string): Promise<CreatedDocument> {
@@ -416,32 +449,34 @@ export class MarklabWebApi {
   }
 
   async getLocalDocument(): Promise<LocalDocumentResponse> {
-    const response = await fetch(`${this.apiUrl}/api/local/document`);
+    const response = await fetch(`${this.apiUrl}/api/local/document`, { headers: this.localHeaders() });
     return requireJsonResponse<LocalDocumentResponse>(response, 'local_document');
   }
 
   async flushLocalDocument(): Promise<LocalDocumentResponse> {
     const response = await fetch(`${this.apiUrl}/api/local/flush`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.localHeaders({ 'Content-Type': 'application/json' }),
     });
     return requireJsonResponse<LocalDocumentResponse>(response, 'local_flush');
   }
 
   async listLocalVersions(): Promise<LocalVersionsResponse> {
-    const response = await fetch(`${this.apiUrl}/api/local/versions`);
+    const response = await fetch(`${this.apiUrl}/api/local/versions`, { headers: this.localHeaders() });
     return requireJsonResponse<LocalVersionsResponse>(response, 'local_versions');
   }
 
   async showLocalVersion(versionId: string): Promise<LocalVersionDetail> {
-    const response = await fetch(`${this.apiUrl}/api/local/versions/${encodeURIComponent(versionId)}`);
+    const response = await fetch(`${this.apiUrl}/api/local/versions/${encodeURIComponent(versionId)}`, {
+      headers: this.localHeaders(),
+    });
     return requireJsonResponse<LocalVersionDetail>(response, 'local_version');
   }
 
   async manualSaveLocalVersion(): Promise<ManualSaveVersionResponse> {
     const response = await fetch(`${this.apiUrl}/api/local/versions/manual-save`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.localHeaders({ 'Content-Type': 'application/json' }),
     });
     return requireJsonResponse<ManualSaveVersionResponse>(response, 'local_manual_save');
   }
@@ -449,7 +484,7 @@ export class MarklabWebApi {
   async restoreLocalVersion(versionId: string): Promise<RestoreVersionResponse> {
     const response = await fetch(`${this.apiUrl}/api/local/restore`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.localHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ versionId }),
     });
     return requireJsonResponse<RestoreVersionResponse>(response, 'local_restore');

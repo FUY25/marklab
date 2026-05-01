@@ -4,8 +4,14 @@ import { dirname, basename, resolve, join } from 'node:path';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
+import {
+  createJsonLocalMetadataStore,
+  type LocalMetadataStore,
+  type StoredLocalVersion,
+  type StoredLocalVersionOperation,
+} from './local-metadata-store';
 
-export type LocalVersionOperation = 'open' | 'manual_save' | 'rollback';
+export type LocalVersionOperation = StoredLocalVersionOperation;
 
 export interface LocalFileDocumentSummary {
   localDocId: string;
@@ -14,6 +20,7 @@ export interface LocalFileDocumentSummary {
   roomName: string;
   hash: string;
   conflict: string | null;
+  historyLoadError: string | null;
 }
 
 export interface LocalVersionSummary {
@@ -82,10 +89,15 @@ export interface LocalFileService extends LocalRoomStore {
   getSummary(): LocalFileDocumentSummary;
   listVersions(): LocalVersionSummary[];
   getVersion(versionId: string): LocalVersionDetail;
-  createManualVersion(): LocalManualSaveResult;
+  createManualVersion(): Promise<LocalManualSaveResult>;
   restoreVersion(versionId: string): Promise<LocalRestoreResult>;
   startWatcher(callbacks: LocalWatcherCallbacks): void;
   stopWatcher(): void;
+}
+
+export interface LocalFileServiceOptions {
+  metadataStore?: LocalMetadataStore;
+  metadataPath?: string;
 }
 
 const runtime = createHeadlessMilkdownRuntime();
@@ -109,6 +121,14 @@ async function writeMarkdownFileAtomically(absolutePath: string, markdown: strin
   await rename(temporaryPath, absolutePath);
 }
 
+function encodeBase64(value: Uint8Array): string {
+  return Buffer.from(value).toString('base64');
+}
+
+function decodeBase64(value: string): Uint8Array {
+  return new Uint8Array(Buffer.from(value, 'base64'));
+}
+
 function toVersionSummary(version: LocalVersionRecord): LocalVersionSummary {
   return {
     versionId: version.versionId,
@@ -120,6 +140,13 @@ function toVersionSummary(version: LocalVersionRecord): LocalVersionSummary {
 }
 
 export async function createLocalFileService(inputPath: string): Promise<LocalFileService> {
+  return createLocalFileServiceWithOptions(inputPath);
+}
+
+export async function createLocalFileServiceWithOptions(
+  inputPath: string,
+  options: LocalFileServiceOptions = {},
+): Promise<LocalFileService> {
   const absolutePath = resolve(inputPath);
   if (!existsSync(absolutePath)) {
     await mkdir(dirname(absolutePath), { recursive: true });
@@ -135,6 +162,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
   const initialDiskMarkdown = await readMarkdownFile(absolutePath);
   const initialized = await runtime.initializeFromMarkdown(initialDiskMarkdown);
   if (initialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+  const metadataStore = options.metadataStore ?? createJsonLocalMetadataStore(options.metadataPath);
 
   let currentYjsState = initialized.yjsState;
   let currentMarkdown = initialized.markdown;
@@ -142,29 +170,61 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
   let currentStateFingerprint = encodeYjsStateFingerprint(initialized.yjsState);
   let lastDiskHash = rawMarkdownHash(initialDiskMarkdown);
   let conflict: string | null = null;
+  let historyLoadError: string | null = null;
+  let lastConflictRecoveryHash: string | null = null;
   let watcher: FSWatcher | null = null;
   let watcherTimer: NodeJS.Timeout | null = null;
   let isHandlingWatcherEvent = false;
   let shouldHandleWatcherAgain = false;
 
-  const versions: LocalVersionRecord[] = [
-    {
-      versionId: `${localDocId}-v1`,
-      versionNumber: 1,
-      operation: 'open',
-      markdown: currentMarkdown,
-      yjsState: currentYjsState,
-      hash: currentHash,
-      createdAt: new Date().toISOString(),
-    },
-  ];
+  let versions: LocalVersionRecord[] = [];
+  try {
+    await metadataStore.loadDocument(absolutePath);
+    const storedVersions = await metadataStore.listVersions(localDocId);
+    versions = storedVersions.map((version) => ({
+      versionId: version.versionId,
+      versionNumber: version.versionNumber,
+      operation: version.operation,
+      markdown: version.markdownSnapshot,
+      yjsState: decodeBase64(version.yjsStateBase64),
+      hash: version.hash,
+      createdAt: version.createdAt,
+    }));
+    historyLoadError = metadataStore.getLastLoadError?.() ?? null;
+  } catch {
+    versions = [];
+    historyLoadError = 'corrupt_metadata';
+  }
 
   function assertRoom(room: string): void {
     if (room !== roomName) throw new Error('local_room_not_found');
   }
 
-  function createVersion(operation: LocalVersionOperation, markdown: string, yjsState: Uint8Array, hash: string): LocalVersionRecord {
-    const versionNumber = versions.length + 1;
+  function nextVersionNumber(): number {
+    return Math.max(0, ...versions.map((version) => version.versionNumber)) + 1;
+  }
+
+  async function persistCurrentDocument(): Promise<void> {
+    await metadataStore.saveDocument({
+      schemaVersion: 1,
+      localDocId,
+      absolutePath,
+      displayName,
+      roomName,
+      lastDiskHash,
+      currentHash,
+      currentYjsStateBase64: encodeBase64(currentYjsState),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async function createVersion(
+    operation: LocalVersionOperation,
+    markdown: string,
+    yjsState: Uint8Array,
+    hash: string,
+  ): Promise<LocalVersionRecord> {
+    const versionNumber = nextVersionNumber();
     const version: LocalVersionRecord = {
       versionId: `${localDocId}-v${versionNumber}`,
       versionNumber,
@@ -175,7 +235,35 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
       createdAt: new Date().toISOString(),
     };
     versions.push(version);
+    await metadataStore.appendVersion({
+      schemaVersion: 1,
+      versionId: version.versionId,
+      localDocId,
+      versionNumber,
+      operation,
+      markdownSnapshot: markdown,
+      yjsStateBase64: encodeBase64(yjsState),
+      hash,
+      createdAt: version.createdAt,
+    } satisfies StoredLocalVersion);
     return version;
+  }
+
+  async function ensureInitialVersion(): Promise<void> {
+    if (versions.length > 0) return;
+    await createVersion('open', currentMarkdown, currentYjsState, currentHash);
+  }
+
+  async function createConflictRecoverySnapshot(): Promise<void> {
+    if (lastConflictRecoveryHash === currentHash) return;
+    const latest = versions.at(-1);
+    if (latest?.operation === 'conflict_recovery' && latest.hash === currentHash) {
+      lastConflictRecoveryHash = currentHash;
+      return;
+    }
+
+    await createVersion('conflict_recovery', currentMarkdown, currentYjsState, currentHash);
+    lastConflictRecoveryHash = currentHash;
   }
 
   async function applySerializedRoomState(yjsState: Uint8Array): Promise<void> {
@@ -186,6 +274,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
       currentYjsState = serialized.yjsState;
       currentMarkdown = serialized.markdown;
       currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
+      await persistCurrentDocument();
       return;
     }
 
@@ -197,6 +286,8 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
       currentHash = serialized.hash;
       currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
       conflict = 'File changed outside MarkLab. Review needed.';
+      await createConflictRecoverySnapshot();
+      await persistCurrentDocument();
       return;
     }
 
@@ -207,6 +298,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
     currentHash = serialized.hash;
     currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
     conflict = null;
+    await persistCurrentDocument();
   }
 
   async function applyExternalDiskMarkdown(markdown: string): Promise<Uint8Array | null> {
@@ -227,6 +319,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
     currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
     lastDiskHash = diskHash;
     conflict = null;
+    await persistCurrentDocument();
     return applied.yjsState;
   }
 
@@ -243,6 +336,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
         const markdown = await readMarkdownFile(absolutePath);
         if (rawMarkdownHash(markdown) === lastDiskHash) continue;
         await callbacks.flushRoom(roomName);
+        if (conflict) return;
         const latestMarkdown = await readMarkdownFile(absolutePath);
         const yjsState = await applyExternalDiskMarkdown(latestMarkdown);
         if (yjsState) await callbacks.applyRoomState(roomName, yjsState);
@@ -251,6 +345,9 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
       isHandlingWatcherEvent = false;
     }
   }
+
+  await ensureInitialVersion();
+  await persistCurrentDocument();
 
   return {
     roomName,
@@ -280,6 +377,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
         roomName,
         hash: currentHash,
         conflict,
+        historyLoadError,
       };
     },
     listVersions() {
@@ -293,7 +391,7 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
         markdown: version.markdown,
       };
     },
-    createManualVersion() {
+    async createManualVersion() {
       const latest = versions.at(-1);
       if (latest?.hash === currentHash) {
         return {
@@ -304,7 +402,8 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
         };
       }
 
-      const version = createVersion('manual_save', currentMarkdown, currentYjsState, currentHash);
+      const version = await createVersion('manual_save', currentMarkdown, currentYjsState, currentHash);
+      await persistCurrentDocument();
       return {
         created: true,
         versionId: version.versionId,
@@ -315,6 +414,16 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
     async restoreVersion(versionId) {
       const source = versions.find((candidate) => candidate.versionId === versionId);
       if (!source) throw new Error('local_version_not_found');
+      const diskMarkdown = await readMarkdownFile(absolutePath);
+      const diskHash = rawMarkdownHash(diskMarkdown);
+      if (currentHash !== source.hash) {
+        await createVersion('pre_restore', currentMarkdown, currentYjsState, currentHash);
+      }
+      if (diskHash !== source.hash && diskHash !== currentHash) {
+        const diskState = await runtime.initializeFromMarkdown(diskMarkdown);
+        if (diskState.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+        await createVersion('pre_restore', diskMarkdown, diskState.yjsState, diskHash);
+      }
 
       const applied = await runtime.applyChangedRanges({
         branchId: localDocId,
@@ -331,8 +440,10 @@ export async function createLocalFileService(inputPath: string): Promise<LocalFi
       currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
       lastDiskHash = rawMarkdownHash(applied.serializedMarkdown);
       conflict = null;
+      lastConflictRecoveryHash = null;
 
-      const version = createVersion('rollback', currentMarkdown, currentYjsState, currentHash);
+      const version = await createVersion('rollback', currentMarkdown, currentYjsState, currentHash);
+      await persistCurrentDocument();
       return {
         versionId: version.versionId,
         versionNumber: version.versionNumber,

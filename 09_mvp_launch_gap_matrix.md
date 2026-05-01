@@ -1,3 +1,5 @@
+# Historical cloud-first reference. Superseded by plans/01 through plans/06 local-first product plans.
+
 # MVP Launch Gap Matrix
 
 This document maps product-launch needs to implementation plans. It is the high-level checklist for deciding whether a gap belongs before MVP launch or after MVP.

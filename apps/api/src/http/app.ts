@@ -22,6 +22,8 @@ export interface HttpAppOptions {
   closeCollabDocumentConnections?: (roomName: string) => void;
   auth?: HttpRequestAuth;
   localFileService?: LocalFileService;
+  localDaemonToken?: string;
+  localMode?: boolean;
 }
 
 export interface HttpRequestAuth {
@@ -219,6 +221,7 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
   const routeOptions = { ...options, auth: options.auth ?? createRequestAuth(pool) };
+  const localMode = options.localMode ?? Boolean(options.localFileService);
   app.use(createCorsMiddleware());
   app.use(express.json({ limit: '2mb' }));
 
@@ -226,11 +229,16 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     res.json({ ok: true });
   });
 
-  app.use('/api', createAccessRoutes(pool, routeOptions));
-  app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
-  app.use('/api', createImportExportRoutes(pool, routeOptions));
-  app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
-  app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
+  if (localMode) {
+    app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+  } else {
+    app.use('/api', createAccessRoutes(pool, routeOptions));
+    app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
+    app.use('/api', createImportExportRoutes(pool, routeOptions));
+    app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+    app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
+  }
+
   app.use(errorHandler);
 
   return app;

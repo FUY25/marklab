@@ -33,6 +33,8 @@ export interface CollabRoomStore {
 
 export interface CreateCollabServerOptions {
   localStore?: CollabRoomStore;
+  localDaemonToken?: string;
+  localOnly?: boolean;
 }
 
 export function createCollabServer(pool: DbPool, options: CreateCollabServerOptions = {}) {
@@ -40,9 +42,18 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
   const activeDocumentByRoomName = new Map<string, Y.Doc>();
   const localStore = options.localStore;
+  const localOnly = options.localOnly ?? Boolean(localStore);
 
   function localStoreForRoom(documentName: string): CollabRoomStore | null {
     return localStore?.canHandleRoom(documentName) ? localStore : null;
+  }
+
+  function assertLocalRoomAllowed(documentName: string): void {
+    if (localOnly && !localStoreForRoom(documentName)) throw new Error('forbidden');
+  }
+
+  function assertLocalToken(token: string | undefined): void {
+    if (!options.localDaemonToken || token !== options.localDaemonToken) throw new Error('forbidden');
   }
 
   async function refreshDocumentState(documentName: string, document: Y.Doc): Promise<LoadedDocumentState | null> {
@@ -126,7 +137,11 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
   const server = new Hocuspocus({
     name: 'marklab',
     async onAuthenticate({ documentName, token }: { documentName: string; token: string }) {
-      if (localStoreForRoom(documentName)) return;
+      if (localStoreForRoom(documentName)) {
+        assertLocalToken(token);
+        return;
+      }
+      assertLocalRoomAllowed(documentName);
       if (!requireAuth) return;
       try {
         if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
@@ -149,6 +164,7 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
         activeDocumentByRoomName.set(documentName, document);
         return loaded?.yjsState ?? createEmptyYjsState();
       }
+      assertLocalRoomAllowed(documentName);
 
       const loaded = await loadYjsStateWithMetadata(pool, documentName);
       if (loaded.stateFingerprint !== null) {
@@ -161,6 +177,7 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
       return loaded.yjsState ?? createEmptyYjsState();
     },
     async onStoreDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
+      assertLocalRoomAllowed(documentName);
       activeDocumentByRoomName.set(documentName, document);
       await storeDocumentState(documentName, document);
     },

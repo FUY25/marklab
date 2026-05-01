@@ -1,77 +1,77 @@
-# MarkLab MVP Spec — Milkdown-first Revision
+# `marklab open README.md`
 
-This package freezes the current MVP direction after the editor decision changed to **Milkdown-first**.
+MarkLab is a local-first Markdown collaboration tool. The local `.md` file is canonical, and the browser editor is a live view/editor over that file.
 
-## One-line product definition
+AI agents work the same way as any other local tool: they edit the Markdown file on disk. MarkLab watches the file, syncs browser edits back to disk, and keeps local snapshots for recovery. Old cloud mutation endpoints are historical reference material, not the current local-first workflow.
 
-A cloud Markdown document where humans collaborate in a polished WYSIWYG editor while AI agents read and write the same document through canonical raw Markdown, with safe writes, automatic version snapshots, branchable history, rollback, and export to local `.md` files.
+## Start
 
-## Frozen MVP decisions
+From this repo:
 
-- **Editor:** Milkdown-first. Human UI is a WYSIWYG Markdown editor powered by Milkdown/ProseMirror/Yjs.
-- **AI interface:** AI reads and writes canonical Markdown, not ProseMirror JSON.
-- **Write tools:** Match Claude Code’s core mental model: `read`, guarded full-document `write`, and exact-string `edit`. No separate `insert` or public `multi_edit` tool in MVP; insertion is expressed as `edit(oldString, newString)` when it is a single exact replacement, while multi-region changes use `write`.
-- **Source/Split:** Not required as editable modes in MVP. A read-only Markdown preview/debug panel may exist. Do not build two simultaneously editable editors over different document models.
-- **Local sync:** Not in MVP. Local files are import/export artifacts only.
-- **Export metadata:** Put metadata in the filename, not in the Markdown body by default.
-- **AI review:** Done by the model and agent runtime before tool invocation. Small low-risk exact edits can call `edit`; meaningful or broad changes should be explained in chat before guarded `write`. MarkLab does not need server-side preview/change-set persistence or default local proposal snapshots in MVP.
-- **Agent integration:** CLI + MarkLab skill first. MCP is optional later and should wrap the stable workflow rather than define it.
-- **Version history:** Back end stores a version DAG/branch model. Front end starts with a simple branch/history UI.
-- **Deployment:** Needs a persistent WebSocket-capable backend. Cloudflare is optional infrastructure, not the core product host.
+```bash
+npx -y pnpm@10.0.0 marklab open README.md
+```
 
-## Files in this package
+That starts a loopback-only local daemon, opens the browser editor, and keeps `README.md` synchronized with browser edits and external editor saves.
 
-- `00_scope_and_decisions.md` — final product decisions and exclusions.
-- `01_product_requirements.md` — MVP user journeys and functional requirements.
-- `02_architecture_milkdown_first.md` — Milkdown/Yjs/Hocuspocus architecture.
-- `03_canonical_markdown_contract.md` — canonical Markdown, formatter, import/export rules.
-- `04_data_model_and_api.md` — database model and API contracts.
-- `05_ai_write_versioning_branching.md` — safe write/edit semantics and version DAG.
-- `06_testing_strategy.md` — tests, fixtures, and acceptance criteria.
-- `07_risks_and_attention.md` — engineering risks and mitigation.
-- `08_references.md` — sources and public docs used.
-- `09_mvp_launch_gap_matrix.md` — remaining launch gaps mapped to owning plans.
-- `plans/` — implementation plans split by subsystem.
-- `fixtures/` — Markdown fixture suite for round-trip and export tests.
-- `resource/milkdown/` — local Milkdown source clone used to verify current editor/collab APIs.
+Foreground mode stays attached to the terminal:
 
-## Plan corrections
+```bash
+marklab open README.md
+```
 
-The first pass of the plans was reviewed against the local Milkdown clone and current package metadata. Corrections are recorded inline near each affected section and summarized in `plans/10_execution_corrections.md`.
+Closing that terminal stops the local daemon.
 
-Key correction themes:
+Background mode keeps the daemon running after the launch command returns:
 
-- Seed collaborative Milkdown documents through the Milkdown/Yjs document model instead of assuming `defaultValueCtx` or a Markdown mirror initializes shared state.
-- Treat Milkdown parser/serializer output as the semantic authority for import, export, mirror refresh, version snapshots, and AI live writes. Prettier remains a final formatting stabilizer, not the source of truth.
-- Never update `current_markdown/current_hash` without updating live Yjs/ProseMirror state first.
-- Store valid encoded Yjs updates, not empty byte buffers.
-- Use one checked-out Postgres client per transaction.
-- Include the MVP storage for agent tokens and share links in the initial schema.
+```bash
+marklab open README.md --background
+marklab status
+marklab stop README.md
+marklab stop --all
+```
 
-## Recommended implementation order
+Background daemons are recorded in the user app-support directory. A second background open for the same canonical file reuses the existing daemon instead of starting a competing watcher.
 
-1. Foundation repo and shared types.
-2. Milkdown round-trip/collab spike.
-3. Hocuspocus persistence and editor shell.
-4. Canonical Markdown import/export.
-5. Version DAG service and branch primitives.
-6. AI read/write/edit API using the live-state writer and version service.
-6.2. Concrete Milkdown transformer, live writer, and export/read version consistency.
-6.3. Web remote document mode and browser E2E for real backend documents.
-6.4. Web document lifecycle UI for create, import, open, and export.
-6.5. Web version history, branch, and restore UI.
-6.6. Basic access control, share links, and agent tokens.
-7. MarkLab CLI + agent skill integration.
-8. Deployment baseline.
-8.1. Deployment hardening, smoke tests, and runbook.
-11. MVP launch readiness gate.
+## Local URL And Relay URL
 
-MCP can be added after the CLI/skill workflow is proven. It should be a thin adapter over the same API/CLI semantics.
+`marklab open` prints a local browser URL such as:
 
-This order keeps each subsystem testable on its own. Do not start with GitHub sync, local watch sync, or complex permissions.
+```text
+http://127.0.0.1:5175/local#token=...
+```
 
-> **Context note:** The original order placed the AI API before versioning. The corrected AI API creates immutable versions on every accepted write/edit, so the version service must exist before the write/edit routes are completed.
+That URL is private to the local daemon. It contains daemon access in the fragment so the browser can read and edit the opened file through loopback-only APIs. Do not share it.
 
-> **Context note:** Plan 6 leaves fail-closed seams for the Milkdown transformer and live writer so the API contract can land safely. Plan 6.2 must be executed before Plan 7 because CLI/agent commands need successful import/export/read/write/edit against real Yjs/ProseMirror state and version-consistent exports.
+Relay URLs are a later product surface for sharing. A relay URL is the shareable collaboration address; it does not make the local browser URL public. See [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md).
 
-> **Context note:** Plan 7 does not create the browser product surface. Real two-window cloud document sync, browser import/export controls, version/branch UI, and API-originated writes visible in the editor are covered by Plans 6.3 through 6.6 and must be completed before CLI/agent testing is treated as full product testing.
+## Current Product Model
+
+- The local Markdown file is the source of truth.
+- Browser edits are serialized through the Milkdown/Yjs runtime and written back to the file.
+- External saves from VS Code, Typora, Vim, Codex, Claude Code, or another local tool update the browser without refresh.
+- Two local browser windows connected to the same daemon converge through the one local room.
+- Manual snapshots and restore are local safety tools.
+- If disk and browser edits conflict, Plan 01 protects both sides and shows: `File changed outside MarkLab. Review needed.`
+
+## Active Local-First Plans
+
+The active execution plans are:
+
+- [Plan 01: Local File Sync MVP](plans/01_local_file_sync_mvp_plan.md)
+- [Plan 02: Local Collaboration Relay MVP](plans/02_local_collaboration_relay_mvp_plan.md)
+- [Plan 03: Reconnect Conflict Review](plans/03_reconnect_conflict_review_plan.md)
+- [Plan 04: Hosted Relay Production And Distribution](plans/04_hosted_relay_production_and_distribution_plan.md)
+- [Plan 05: AI Agent Operating Layer](plans/05_ai_agent_operating_layer_plan.md)
+- [Plan 06: Legacy Cloud AI Write Cleanup](plans/06_legacy_cloud_ai_write_cleanup_plan.md)
+
+Product journey docs:
+
+- [Local-First User Journeys](docs/product/local-first-user-journeys.md)
+- [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
+
+## Historical Reference
+
+Root files named `00_*.md` through `09_*.md` and the files under `plans/Archive/cloud-first-reference/` are historical cloud-first reference material. They are retained because they explain prior Milkdown/Yjs decisions, but they are superseded by Plans 01 through 06 for current implementation work.
+
+Do not revive cloud document dashboards, hosted mutation workflows, sidebars, workspace managers, or production relay behavior while executing Plan 01.

@@ -1,3 +1,5 @@
+# Historical cloud-first reference. Superseded by plans/01 through plans/06 local-first product plans.
+
 # Risks and Attention Points
 
 ## Risk 1: Milkdown round-trip changes Markdown formatting

@@ -6,6 +6,7 @@ import { MilkdownEditor } from '../components/MilkdownEditor';
 import { readWebConfig } from '../config';
 import {
   MarklabWebApi,
+  readLocalDaemonToken,
   type LocalDocumentResponse,
   type LocalVersionDetail,
   type LocalVersionSummary,
@@ -13,6 +14,11 @@ import {
 import { createEditorCollab } from '../lib/editor-collab';
 
 type EditorCollab = ReturnType<typeof createEditorCollab>;
+
+interface LocalDocumentIssue {
+  conflict: string | null;
+  historyLoadError: string | null;
+}
 
 interface LocalVersionsDrawerProps {
   api: MarklabWebApi;
@@ -33,6 +39,21 @@ function formatVersionTime(value: string): string {
     month: 'short',
     day: 'numeric',
   }).format(new Date(value));
+}
+
+function localDocumentIssue(document: LocalDocumentResponse): LocalDocumentIssue {
+  return {
+    conflict: document.conflict,
+    historyLoadError: document.historyLoadError,
+  };
+}
+
+function isSameDocumentIssue(current: LocalDocumentIssue, next: LocalDocumentIssue): boolean {
+  return current.conflict === next.conflict && current.historyLoadError === next.historyLoadError;
+}
+
+function hasSameCollabIdentity(current: LocalDocumentResponse | null, next: LocalDocumentResponse): boolean {
+  return current?.localDocId === next.localDocId && current.roomName === next.roomName;
 }
 
 function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersionsDrawerProps) {
@@ -86,6 +107,7 @@ function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersio
     try {
       const saved = await api.manualSaveLocalVersion();
       await refreshVersions();
+      setSelectedVersionId(saved.versionId);
       onStatusChange(saved.created ? `Saved snapshot v${saved.versionNumber}` : 'No changes to snapshot', 'status');
     } catch (saveError) {
       const message = readableError(saveError, 'Unable to save snapshot.');
@@ -184,17 +206,45 @@ function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersio
 
 export function LocalDocumentPage() {
   const config = useMemo(() => readWebConfig(), []);
-  const api = useMemo(() => new MarklabWebApi(), []);
+  const [localDaemonToken, setLocalDaemonToken] = useState<string | null>(() => readLocalDaemonToken());
+  const api = useMemo(() => new MarklabWebApi({ localDaemonToken }), [localDaemonToken]);
   const [document, setDocument] = useState<LocalDocumentResponse | null>(null);
+  const [documentIssue, setDocumentIssue] = useState<LocalDocumentIssue>({ conflict: null, historyLoadError: null });
   const [collab, setCollab] = useState<EditorCollab | null>(null);
   const [activeDrawer, setActiveDrawer] = useState<DocumentDrawerKind | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'status' | 'alert'>('status');
   const flushTimerRef = useRef<number | null>(null);
+  const documentIssueRef = useRef<LocalDocumentIssue>({ conflict: null, historyLoadError: null });
+  const localDocId = document?.localDocId ?? null;
+  const roomName = document?.roomName ?? null;
+
+  useEffect(() => {
+    const refreshLocalDaemonToken = () => {
+      const nextToken = readLocalDaemonToken();
+      setLocalDaemonToken((currentToken) => (currentToken === nextToken ? currentToken : nextToken));
+    };
+
+    window.addEventListener('hashchange', refreshLocalDaemonToken);
+    window.addEventListener('popstate', refreshLocalDaemonToken);
+    return () => {
+      window.removeEventListener('hashchange', refreshLocalDaemonToken);
+      window.removeEventListener('popstate', refreshLocalDaemonToken);
+    };
+  }, []);
 
   const setSaveStatus = useCallback((nextStatus: string, nextKind: 'status' | 'alert' = 'status') => {
     setStatus(nextStatus);
     setStatusKind(nextKind);
+  }, []);
+
+  const applyLocalDocumentState = useCallback((nextDocument: LocalDocumentResponse) => {
+    const nextIssue = localDocumentIssue(nextDocument);
+    documentIssueRef.current = nextIssue;
+    setDocumentIssue((currentIssue) => (isSameDocumentIssue(currentIssue, nextIssue) ? currentIssue : nextIssue));
+    setDocument((currentDocument) =>
+      hasSameCollabIdentity(currentDocument, nextDocument) ? currentDocument : nextDocument,
+    );
   }, []);
 
   useEffect(() => {
@@ -202,7 +252,7 @@ export function LocalDocumentPage() {
     void api
       .getLocalDocument()
       .then((localDocument) => {
-        if (isActive) setDocument(localDocument);
+        if (isActive) applyLocalDocumentState(localDocument);
       })
       .catch((error: unknown) => {
         if (isActive) setSaveStatus(readableError(error, 'Open a Markdown file with marklab open README.md.'), 'alert');
@@ -211,16 +261,27 @@ export function LocalDocumentPage() {
     return () => {
       isActive = false;
     };
-  }, [api, setSaveStatus]);
+  }, [api, applyLocalDocumentState, setSaveStatus]);
 
   useEffect(() => {
-    if (!document) return undefined;
+    if (documentIssue.conflict) {
+      setSaveStatus(documentIssue.conflict, 'alert');
+      return;
+    }
+    if (documentIssue.historyLoadError) {
+      setSaveStatus('Local history could not be loaded.', 'alert');
+    }
+  }, [documentIssue, setSaveStatus]);
+
+  useEffect(() => {
+    if (!roomName) return undefined;
 
     let nextCollab: EditorCollab;
     try {
       nextCollab = createEditorCollab({
         websocketUrl: config.websocketUrl,
-        roomName: document.roomName,
+        roomName,
+        ...(localDaemonToken ? { token: localDaemonToken } : {}),
         user: { name: 'Local writer' },
       });
     } catch (error) {
@@ -237,7 +298,16 @@ export function LocalDocumentPage() {
       setSaveStatus('Connection lost', 'alert');
     };
     const handleAuthenticated = () => {
-      setSaveStatus(document.conflict ?? 'Connected to local file', document.conflict ? 'alert' : 'status');
+      const currentIssue = documentIssueRef.current;
+      if (currentIssue.conflict) {
+        setSaveStatus(currentIssue.conflict, 'alert');
+        return;
+      }
+      if (currentIssue.historyLoadError) {
+        setSaveStatus('Local history could not be loaded.', 'alert');
+        return;
+      }
+      setSaveStatus('Connected to local file', 'status');
     };
 
     nextCollab.provider.on('status', handleStatus);
@@ -254,7 +324,28 @@ export function LocalDocumentPage() {
       setCollab(null);
       nextCollab.destroy();
     };
-  }, [config.websocketUrl, document, setSaveStatus]);
+  }, [config.websocketUrl, localDaemonToken, localDocId, roomName, setSaveStatus]);
+
+  useEffect(() => {
+    if (!localDocId) return undefined;
+
+    let isActive = true;
+    const pollDocumentState = () => {
+      void api
+        .getLocalDocument()
+        .then((nextDocument) => {
+          if (!isActive) return;
+          applyLocalDocumentState(nextDocument);
+        })
+        .catch(() => undefined);
+    };
+
+    const interval = window.setInterval(pollDocumentState, 1500);
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [api, applyLocalDocumentState, localDocId]);
 
   useEffect(() => {
     return () => {
@@ -272,7 +363,7 @@ export function LocalDocumentPage() {
         void api
           .flushLocalDocument()
           .then((nextDocument) => {
-            setDocument(nextDocument);
+            applyLocalDocumentState(nextDocument);
             setSaveStatus(nextDocument.conflict ?? 'Saved to file', nextDocument.conflict ? 'alert' : 'status');
           })
           .catch((error: unknown) => {
@@ -280,7 +371,7 @@ export function LocalDocumentPage() {
           });
       }, 500);
     },
-    [api, setSaveStatus],
+    [api, applyLocalDocumentState, setSaveStatus],
   );
 
   return (
