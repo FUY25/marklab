@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import http from 'node:http';
+import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs } from './marklab.mjs';
+import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs, safeRelayJoinFilename } from './marklab.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -27,6 +29,44 @@ async function freePort() {
   const port = address.port;
   await new Promise((resolveClose) => server.close(resolveClose));
   return port;
+}
+
+async function startRelayAccessServer(access) {
+  const server = http.createServer((req, res) => {
+    if (req.url?.startsWith('/api/relay/rooms/room_1/access')) {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        relayRoomId: 'room_1',
+        grantId: 'grant_1',
+        role: access.canWrite ? 'edit' : 'view',
+        canRead: true,
+        canWrite: access.canWrite,
+        hostOnline: access.hostOnline,
+        hostSessionId: access.hostOnline ? 'host_1' : null,
+        sharedRevision: 1,
+        lastSharedHash: 'sha256:shared',
+        yjsStateBase64: null,
+        markdown: access.markdown ?? '# Shared\n',
+        stale: !access.hostOnline,
+        suggestedFilename: 'README.md',
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') reject(new Error('missing_test_port'));
+      else resolve(address.port);
+    });
+  });
+  return {
+    apiUrl: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+  };
 }
 
 function runCli(args, env, timeoutMs = 90000) {
@@ -56,6 +96,51 @@ function runCli(args, env, timeoutMs = 90000) {
     });
     child.once('exit', (code, signal) => {
       clearTimeout(timer);
+      resolveRun({ code, signal, stdout, stderr });
+    });
+  });
+}
+
+function runCliUntilOutput(args, env, pattern, timeoutMs = 90000) {
+  const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  let matched = false;
+
+  return new Promise((resolveRun, rejectRun) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      rejectRun(new Error(`marklab ${args.join(' ')} timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+    }, timeoutMs);
+
+    function maybeResolve() {
+      if (matched) return;
+      if (!pattern.test(stdout)) return;
+      matched = true;
+      child.kill('SIGTERM');
+    }
+
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+      maybeResolve();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      rejectRun(error);
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      if (!matched) {
+        rejectRun(new Error(`marklab ${args.join(' ')} exited before expected output\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+        return;
+      }
       resolveRun({ code, signal, stdout, stderr });
     });
   });
@@ -91,6 +176,121 @@ describe('marklab CLI', () => {
       file: null,
       all: true,
     });
+    expect(parseCliArgs(['share', 'README.md'])).toEqual({
+      command: 'share',
+      file: 'README.md',
+    });
+    expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir'])).toEqual({
+      command: 'join',
+      link: 'https://example.test/relay/room_1?token=secret',
+      file: null,
+      dir: './docs',
+      name: 'shared.md',
+      createDir: true,
+      replace: false,
+      review: false,
+      cancel: false,
+    });
+    expect(parseCliArgs(['share-state', 'README.md', '--json'])).toEqual({
+      command: 'share-state',
+      file: 'README.md',
+      json: true,
+    });
+    expect(parseCliArgs(['create-link', 'README.md', '--role', 'view'])).toEqual({
+      command: 'create-link',
+      file: 'README.md',
+      role: 'view',
+    });
+    expect(parseCliArgs(['revoke-link', 'README.md', 'grant_1'])).toEqual({
+      command: 'revoke-link',
+      file: 'README.md',
+      grantId: 'grant_1',
+    });
+  });
+
+  it('normalizes local mirror filenames and rejects path traversal names', () => {
+    expect(safeRelayJoinFilename('shared-notes')).toBe('shared-notes.md');
+    expect(safeRelayJoinFilename('README.md')).toBe('README.md');
+    expect(() => safeRelayJoinFilename('../README.md')).toThrow('--name must be a Markdown filename');
+    expect(() => safeRelayJoinFilename('nested/README.md')).toThrow('--name must be a Markdown filename');
+  });
+
+  it('rejects host-offline join before creating directories or files', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-join-offline-'));
+    const targetDirectory = join(directory, 'docs');
+    const existingTarget = join(directory, 'existing.md');
+    await writeFile(existingTarget, '# Existing offline\n', 'utf8');
+    const relay = await startRelayAccessServer({ canWrite: true, hostOnline: false });
+    const link = `http://127.0.0.1:5175/relay/room_1?token=secret&apiUrl=${encodeURIComponent(relay.apiUrl)}`;
+
+    try {
+      const result = await runCli(['join', link, '--dir', targetDirectory, '--name', 'README.md', '--create-dir'], {
+        MARKLAB_NO_OPEN: 'true',
+      }, 30000);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Host offline. Ask the host to open MarkLab again.');
+      expect(existsSync(targetDirectory)).toBe(false);
+
+      const existingResult = await runCli(['join', link, existingTarget], { MARKLAB_NO_OPEN: 'true' }, 30000);
+      expect(existingResult.code).toBe(1);
+      expect(existingResult.stderr).toContain('Host offline. Ask the host to open MarkLab again.');
+      await expect(readFile(existingTarget, 'utf8')).resolves.toBe('# Existing offline\n');
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it('rejects view links and non-empty target review/cancel before mutating bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-join-safety-'));
+    const target = join(directory, 'README.md');
+    await writeFile(target, '# Existing\n', 'utf8');
+
+    const viewRelay = await startRelayAccessServer({ canWrite: false, hostOnline: true });
+    const viewLink = `http://127.0.0.1:5175/relay/room_1?token=view&apiUrl=${encodeURIComponent(viewRelay.apiUrl)}`;
+    try {
+      const result = await runCli(['join', viewLink, target], { MARKLAB_NO_OPEN: 'true' }, 30000);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('View links cannot start a local mirror.');
+      await expect(readFile(target, 'utf8')).resolves.toBe('# Existing\n');
+    } finally {
+      await viewRelay.close();
+    }
+
+    const editRelay = await startRelayAccessServer({ canWrite: true, hostOnline: true, markdown: '# Shared\n' });
+    const editLink = `http://127.0.0.1:5175/relay/room_1?token=edit&apiUrl=${encodeURIComponent(editRelay.apiUrl)}`;
+    try {
+      const cancelled = await runCli(['join', editLink, target, '--cancel'], { MARKLAB_NO_OPEN: 'true' }, 30000);
+      expectCliOk(cancelled);
+      expect(cancelled.stdout).toContain('Join cancelled. No file was changed.');
+      await expect(readFile(target, 'utf8')).resolves.toBe('# Existing\n');
+
+      const review = await runCli(['join', editLink, target, '--review'], { MARKLAB_NO_OPEN: 'true' }, 30000);
+      expect(review.code).toBe(1);
+      expect(review.stderr).toContain('Review conflict is deferred to Plan 3.');
+      await expect(readFile(target, 'utf8')).resolves.toBe('# Existing\n');
+
+      const blockingServer = await listenOnLoopback(0);
+      const blockingAddress = blockingServer.address();
+      if (!blockingAddress || typeof blockingAddress === 'string') throw new Error('missing_test_port');
+      try {
+        const replaced = await runCli(
+          ['join', editLink, target, '--replace'],
+          {
+            MARKLAB_NO_OPEN: 'true',
+            MARKLAB_API_PORT: String(blockingAddress.port),
+            MARKLAB_WEB_PORT: String(await freePort()),
+          },
+          30000,
+        );
+        expect(replaced.code).toBe(1);
+        expect(replaced.stderr).toContain(`MARKLAB_API_PORT=${blockingAddress.port} is already in use`);
+        await expect(readFile(target, 'utf8')).resolves.toBe('# Shared\n');
+      } finally {
+        await new Promise((resolveClose) => blockingServer.close(resolveClose));
+      }
+    } finally {
+      await editRelay.close();
+    }
   });
 
   it('puts the local daemon token in the local browser URL fragment', () => {
@@ -123,6 +323,28 @@ describe('marklab CLI', () => {
     ).rejects.toThrow('MARKLAB_API_PORT and MARKLAB_WEB_PORT must be different');
   });
 
+  it('starts foreground share and prints a one-time edit relay URL', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-share-'));
+    const markdownPath = join(directory, 'README.md');
+    await writeFile(markdownPath, '# Share\n\nInitial body.\n', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+
+    const result = await runCliUntilOutput(
+      ['share', markdownPath],
+      {
+        MARKLAB_APP_SUPPORT_DIR: join(directory, 'app-support'),
+        MARKLAB_NO_OPEN: 'true',
+        MARKLAB_API_PORT: String(await freePort()),
+        MARKLAB_WEB_PORT: String(await freePort()),
+      },
+      /Edit link: http:\/\/127\.0\.0\.1:\d+\/relay\//u,
+      120000,
+    );
+
+    expect(result.stdout).toContain(`Sharing ${canonicalMarkdownPath}`);
+    expect(result.stdout).toContain('mode=edit');
+  }, 130000);
+
   it('opens and stops a real background daemon for one local Markdown file', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-bg-'));
     const appSupportDirectory = join(directory, 'app-support');
@@ -135,6 +357,7 @@ describe('marklab CLI', () => {
       MARKLAB_NO_OPEN: 'true',
       MARKLAB_API_PORT: String(await freePort()),
       MARKLAB_WEB_PORT: String(await freePort()),
+      DATABASE_URL: 'postgres://ambient-env-should-not-affect-local-daemon',
     };
 
     try {
@@ -159,6 +382,27 @@ describe('marklab CLI', () => {
       await expect(documentResponse.json()).resolves.toMatchObject({
         absolutePath: canonicalMarkdownPath,
       });
+
+      const createdLink = await runCli(['create-link', markdownPath, '--role', 'view'], env);
+      expectCliOk(createdLink);
+      expect(createdLink.stdout).toContain('/relay/');
+      expect(createdLink.stdout).toContain('mode=view');
+
+      const shareState = await runCli(['share-state', markdownPath, '--json'], env);
+      expectCliOk(shareState);
+      const parsedShareState = JSON.parse(shareState.stdout);
+      expect(parsedShareState).toMatchObject({
+        localPath: canonicalMarkdownPath,
+        hostOnline: true,
+        links: [expect.objectContaining({ role: 'view', canCopyExistingUrl: false })],
+      });
+      expect(shareState.stdout).not.toContain('ml_relay_');
+      expect(shareState.stdout).not.toContain('token_hash');
+
+      const grantId = parsedShareState.links[0].grantId;
+      const revoked = await runCli(['revoke-link', markdownPath, grantId], env);
+      expectCliOk(revoked);
+      expect(revoked.stdout).toContain(`Revoked ${grantId}`);
 
       const stopped = await runCli(['stop', markdownPath], env);
       expectCliOk(stopped);

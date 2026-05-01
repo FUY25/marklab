@@ -9,6 +9,10 @@ const restoreLocalVersionSchema = z.object({
   versionId: z.string().min(1),
 });
 
+const createLocalRelayGrantSchema = z.object({
+  role: z.enum(['view', 'edit']),
+});
+
 function sendLocalFileMissing(res: Response): void {
   res.status(404).json({ error: 'local_file_not_configured' });
 }
@@ -142,6 +146,58 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
         versionNumber: restored.versionNumber,
         hash: restored.hash,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/local/share-state', async (_req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
+
+    try {
+      if (!options.localRelayHost) {
+        res.json({
+          localPath: service.getSummary().absolutePath,
+          relayRoomId: null,
+          hostOnline: false,
+          hostSessionId: null,
+          links: [],
+          sessions: [],
+        });
+        return;
+      }
+      res.json(await options.localRelayHost.shareState());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/local/access-grants', async (req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
+
+    try {
+      if (!options.localRelayHost) throw new Error('relay_service_not_configured');
+      const body = createLocalRelayGrantSchema.parse(req.body);
+      const grant = await options.localRelayHost.createLink(body.role);
+      res.status(201).json(grant);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/local/access-grants/:grantId', async (req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
+
+    try {
+      if (!options.localRelayHost) throw new Error('relay_service_not_configured');
+      const grantId = req.params.grantId;
+      if (typeof grantId !== 'string' || !grantId) throw new Error('missing_route_param:grantId');
+      await options.localRelayHost.revokeLink(grantId);
+      options.relayServer?.disconnectGrant(grantId);
+      res.status(204).end();
     } catch (error) {
       next(error);
     }

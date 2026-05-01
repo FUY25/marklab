@@ -1,5 +1,6 @@
 export type AppRoute =
   | { kind: 'remote-document'; docId: string; branchId: string }
+  | { kind: 'relay-document'; relayRoomId: string }
   | { kind: 'local-document' }
   | { kind: 'local-single' }
   | { kind: 'local-two' }
@@ -16,6 +17,11 @@ function decodePathPart(value: string): string | null {
 export function parseAppRoute(location: Pick<Location, 'pathname' | 'search'>): AppRoute {
   const pathParts = location.pathname.split('/').filter(Boolean);
   const [docsSegment, docIdSegment, branchesSegment, branchIdSegment] = pathParts;
+  if (pathParts.length === 2 && pathParts[0] === 'relay') {
+    const relayRoomId = decodePathPart(pathParts[1] ?? '');
+    if (relayRoomId) return { kind: 'relay-document', relayRoomId };
+  }
+
   const docId = docIdSegment ? decodePathPart(docIdSegment) : null;
   const branchId = branchIdSegment ? decodePathPart(branchIdSegment) : null;
   if (
@@ -52,4 +58,8 @@ export function buildDocumentPath(docId: string, branchId: string): string {
 
 export function buildLocalDocumentPath(): string {
   return '/local';
+}
+
+export function buildRelayDocumentPath(relayRoomId: string): string {
+  return `/relay/${encodeURIComponent(relayRoomId)}`;
 }

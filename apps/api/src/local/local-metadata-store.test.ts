@@ -78,6 +78,37 @@ describe('JsonLocalMetadataStore', () => {
     expect(JSON.parse(raw).versions).toHaveLength(1);
   });
 
+  it('persists local relay join state without token material', async () => {
+    const metadataPath = await createMetadataPath();
+    const store = createJsonLocalMetadataStore(metadataPath);
+
+    await store.saveRelayJoin({
+      schemaVersion: 1,
+      relayRoomId: 'relay_room_1',
+      grantId: 'grant_1',
+      sessionId: 'session_1',
+      localDocId: 'doc_local',
+      absolutePath: '/tmp/local.md',
+      lastAcceptedLocalHash: 'sha256:local',
+      lastAcceptedSharedHash: 'sha256:shared',
+      lastAcceptedSharedRevision: 4,
+      lastHostSessionId: 'host_1',
+      disconnectedCleanly: true,
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    });
+
+    const reloaded = createJsonLocalMetadataStore(metadataPath);
+    await expect(reloaded.loadRelayJoin('/tmp/local.md')).resolves.toMatchObject({
+      relayRoomId: 'relay_room_1',
+      grantId: 'grant_1',
+      lastAcceptedSharedRevision: 4,
+    });
+
+    const raw = await readFile(metadataPath, 'utf8');
+    expect(raw).not.toContain('ml_relay_');
+    expect(raw).not.toContain('token_hash');
+  });
+
   it('preserves updates from two store instances writing the same metadata path concurrently', async () => {
     const metadataPath = await createMetadataPath();
     const firstStore = createJsonLocalMetadataStore(metadataPath);

@@ -139,11 +139,13 @@ export type ShareLinkRole = AccessGrantRole;
 
 export interface AccessSessionSummary {
   sessionId: string;
-  clientKind: AccessClientKind;
+  clientKind: AccessClientKind | 'daemon';
   displayName: string;
   color: string;
   lastBranchId: string | null;
   lastSeenAt: string | null;
+  grantId?: string | null;
+  role?: 'host' | AccessGrantRole;
 }
 
 export interface AccessGrantSummary {
@@ -168,9 +170,78 @@ export interface CreatedAccessGrant {
 
 export interface AccessGrantsResponse {
   grants: AccessGrantSummary[];
+  sessions?: AccessSessionSummary[];
 }
 
 export type AccessClientKind = 'browser' | 'agent' | 'api';
+export type RelayClientKind = 'browser' | 'daemon' | 'agent';
+
+export interface RelayAccessResponse {
+  relayRoomId: string;
+  grantId: string;
+  role: AccessGrantRole;
+  canRead: boolean;
+  canWrite: boolean;
+  hostOnline: boolean;
+  hostSessionId: string | null;
+  sharedRevision: number;
+  lastSharedHash: string | null;
+  yjsStateBase64: string | null;
+  markdown: string;
+  cacheUpdatedAt: string;
+  ephemeralCacheExpiresAt: string;
+  stale: boolean;
+  suggestedFilename: string;
+}
+
+export interface CreatedRelaySession {
+  grantId: string;
+  sessionId: string;
+  displayName: string;
+  color: string;
+  role: AccessGrantRole;
+  canRead: boolean;
+  canWrite: boolean;
+}
+
+export interface RelayShareState {
+  localPath: string | null;
+  relayRoomId: string | null;
+  hostOnline: boolean;
+  hostSessionId: string | null;
+  sharedRevision: number | null;
+  lastSharedHash: string | null;
+  links: Array<{
+    grantId: string;
+    relayRoomId: string;
+    role: AccessGrantRole;
+    label: string | null;
+    canCopyExistingUrl: boolean;
+    revokedAt: string | null;
+    expiresAt: string | null;
+    createdAt: string;
+    activeSessionCount: number;
+    lastCopiedAt: string | null;
+  }>;
+  sessions: Array<{
+    sessionId: string;
+    grantId: string | null;
+    clientKind: RelayClientKind;
+    displayName: string;
+    role: 'host' | AccessGrantRole;
+    lastSeenAt: string;
+  }>;
+}
+
+export interface CreatedRelayAccessGrant {
+  grantId: string;
+  relayRoomId: string;
+  role: AccessGrantRole;
+  token: string;
+  url: string;
+  expiresAt: string | null;
+  createdAt: string;
+}
 
 export interface CreatedAccessSession {
   grantId: string;
@@ -488,6 +559,50 @@ export class MarklabWebApi {
       body: JSON.stringify({ versionId }),
     });
     return requireJsonResponse<RestoreVersionResponse>(response, 'local_restore');
+  }
+
+  async getLocalShareState(): Promise<RelayShareState> {
+    const response = await fetch(`${this.apiUrl}/api/local/share-state`, { headers: this.localHeaders() });
+    return requireJsonResponse<RelayShareState>(response, 'local_share_state');
+  }
+
+  async createLocalRelayAccessGrant(input: { role: AccessGrantRole }): Promise<CreatedRelayAccessGrant> {
+    const response = await fetch(`${this.apiUrl}/api/local/access-grants`, {
+      method: 'POST',
+      headers: this.localHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ role: input.role }),
+    });
+    return requireJsonResponse<CreatedRelayAccessGrant>(response, 'create_local_relay_access_grant');
+  }
+
+  async revokeLocalRelayAccessGrant(grantId: string): Promise<void> {
+    const response = await fetch(`${this.apiUrl}/api/local/access-grants/${encodeURIComponent(grantId)}`, {
+      method: 'DELETE',
+      headers: this.localHeaders(),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`revoke_local_relay_access_grant_failed:${response.status}:${body}`);
+    }
+  }
+
+  async getRelayAccess(relayRoomId: string, token: string): Promise<RelayAccessResponse> {
+    const url = new URL(`${this.apiUrl}/api/relay/rooms/${encodeURIComponent(relayRoomId)}/access`);
+    url.searchParams.set('token', token);
+    const response = await fetch(url.toString());
+    return requireJsonResponse<RelayAccessResponse>(response, 'relay_access');
+  }
+
+  async createRelaySession(
+    relayRoomId: string,
+    input: { token: string; clientId: string; clientKind: RelayClientKind; displayName: string },
+  ): Promise<CreatedRelaySession> {
+    const response = await fetch(`${this.apiUrl}/api/relay/rooms/${encodeURIComponent(relayRoomId)}/access-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return requireJsonResponse<CreatedRelaySession>(response, 'relay_session');
   }
 
   async createAccessGrant(

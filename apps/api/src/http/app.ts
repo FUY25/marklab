@@ -5,6 +5,7 @@ import { createAccessRoutes } from '../routes/access-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createLocalFileRoutes } from '../routes/local-file-routes';
+import { createRelayRoutes } from '../routes/relay-routes';
 import { createVersionRoutes } from '../routes/version-routes';
 import {
   isAdminToken,
@@ -15,6 +16,9 @@ import {
 } from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 import type { LocalFileService } from '../local/local-file-service';
+import type { LocalRelayHostController } from '../local/local-relay-client';
+import type { RelayRoomService } from '../relay/relay-room-service';
+import type { RelayServerHandle } from '../relay/relay-server';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
@@ -24,6 +28,9 @@ export interface HttpAppOptions {
   localFileService?: LocalFileService;
   localDaemonToken?: string;
   localMode?: boolean;
+  relayService?: RelayRoomService;
+  relayServer?: RelayServerHandle;
+  localRelayHost?: LocalRelayHostController;
 }
 
 export interface HttpRequestAuth {
@@ -101,6 +108,10 @@ function createCorsMiddleware() {
 
 function authRequired(): boolean {
   return process.env.MARKLAB_REQUIRE_AUTH === 'true';
+}
+
+function legacyHostedDocAiEnabled(): boolean {
+  return process.env.MARKLAB_ENABLE_LEGACY_DOC_AI === 'true';
 }
 
 function bearerToken(req: Request): string | undefined {
@@ -210,6 +221,41 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'relay_service_not_configured') {
+    res.status(503).json({ error: 'relay_service_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'relay_management_token_not_configured') {
+    res.status(503).json({ error: 'relay_management_token_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'relay_room_not_found') {
+    res.status(404).json({ error: 'relay_room_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'relay_access_grant_not_found') {
+    res.status(404).json({ error: 'relay_access_grant_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'relay_shared_state_not_accepted') {
+    res.status(409).json({ error: 'relay_shared_state_not_accepted' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'relay_sync_paused') {
+    res.status(409).json({ error: 'relay_sync_paused' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'local_state_changed') {
+    res.status(409).json({ error: 'local_state_changed' });
+    return;
+  }
+
   if (error instanceof Error && error.message.startsWith('missing_route_param:')) {
     res.status(400).json({ error: 'invalid_route' });
     return;
@@ -221,6 +267,9 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
   const routeOptions = { ...options, auth: options.auth ?? createRequestAuth(pool) };
+  const relayRouteOptions: Parameters<typeof createRelayRoutes>[0] = {};
+  if (options.relayService) relayRouteOptions.relayService = options.relayService;
+  if (options.relayServer) relayRouteOptions.relayServer = options.relayServer;
   const localMode = options.localMode ?? Boolean(options.localFileService);
   app.use(createCorsMiddleware());
   app.use(express.json({ limit: '2mb' }));
@@ -231,11 +280,13 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
 
   if (localMode) {
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+    app.use('/api', createRelayRoutes(relayRouteOptions));
   } else {
     app.use('/api', createAccessRoutes(pool, routeOptions));
-    app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
+    if (legacyHostedDocAiEnabled()) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
     app.use('/api', createImportExportRoutes(pool, routeOptions));
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+    app.use('/api', createRelayRoutes(relayRouteOptions));
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }
 

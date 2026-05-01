@@ -4,6 +4,7 @@ import { Awareness } from 'y-protocols/awareness';
 import { MilkdownEditor } from './components/MilkdownEditor';
 import { HomePage } from './pages/HomePage';
 import { LocalDocumentPage } from './pages/LocalDocumentPage';
+import { RelayDocumentPage } from './pages/RelayDocumentPage';
 import { RemoteDocumentPage } from './pages/RemoteDocumentPage';
 import { parseAppRoute } from './routes';
 
@@ -43,6 +44,10 @@ export function App() {
 
   if (route.kind === 'remote-document') {
     return <RemoteDocumentPage docId={route.docId} branchId={route.branchId} />;
+  }
+
+  if (route.kind === 'relay-document') {
+    return <RelayDocumentPage relayRoomId={route.relayRoomId} />;
   }
 
   if (route.kind === 'local-document') return <LocalDocumentPage />;

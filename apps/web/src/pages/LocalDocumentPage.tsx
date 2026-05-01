@@ -3,6 +3,7 @@ import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
 import { X } from 'lucide-react';
 import { DocumentActionRail, type DocumentDrawerKind } from '../components/DocumentActionRail';
 import { MilkdownEditor } from '../components/MilkdownEditor';
+import { ShareDrawer, type AccessGrantApi, type AccessGrantsResponse } from '../components/ShareDrawer';
 import { readWebConfig } from '../config';
 import {
   MarklabWebApi,
@@ -218,6 +219,66 @@ export function LocalDocumentPage() {
   const documentIssueRef = useRef<LocalDocumentIssue>({ conflict: null, historyLoadError: null });
   const localDocId = document?.localDocId ?? null;
   const roomName = document?.roomName ?? null;
+  const localRelayAccessApi = useMemo<AccessGrantApi>(() => {
+    function toAccessGrantsResponse(state: Awaited<ReturnType<MarklabWebApi['getLocalShareState']>>): AccessGrantsResponse {
+      return {
+        grants: state.links
+          .filter((link) => !link.revokedAt)
+          .map((link) => ({
+            grantId: link.grantId,
+            role: link.role,
+            branchId: state.relayRoomId ?? 'relay',
+            branchName: link.role === 'edit' ? 'Relay edit link' : 'Relay view link',
+            expiresAt: link.expiresAt,
+            revokedAt: link.revokedAt,
+            createdAt: link.createdAt,
+            sessions: state.sessions
+              .filter((session) => session.grantId === link.grantId)
+              .map((session) => ({
+                sessionId: session.sessionId,
+                clientKind: session.clientKind === 'daemon' ? 'daemon' : session.clientKind === 'agent' ? 'agent' : 'browser',
+                displayName: session.displayName,
+                color: '#64748b',
+                lastBranchId: null,
+                lastSeenAt: session.lastSeenAt,
+                grantId: session.grantId,
+                role: session.role,
+              })),
+          })),
+        sessions: state.sessions.map((session) => ({
+          sessionId: session.sessionId,
+          clientKind: session.clientKind === 'daemon' ? 'daemon' : session.clientKind === 'agent' ? 'agent' : 'browser',
+          displayName: session.displayName,
+          color: '#64748b',
+          lastBranchId: null,
+          lastSeenAt: session.lastSeenAt,
+          grantId: session.grantId,
+          role: session.role,
+        })),
+      };
+    }
+
+    return {
+      async createAccessGrant(_docId, _branchId, input) {
+        const created = await api.createLocalRelayAccessGrant({ role: input.role });
+        return {
+          grantId: created.grantId,
+          branchId: created.relayRoomId,
+          token: created.token,
+          role: created.role,
+          expiresAt: created.expiresAt,
+          createdAt: created.createdAt,
+          url: created.url,
+        };
+      },
+      async listAccessGrants() {
+        return toAccessGrantsResponse(await api.getLocalShareState());
+      },
+      async revokeAccessGrant(grantId) {
+        await api.revokeLocalRelayAccessGrant(grantId);
+      },
+    };
+  }, [api]);
 
   useEffect(() => {
     const refreshLocalDaemonToken = () => {
@@ -377,7 +438,7 @@ export function LocalDocumentPage() {
   return (
     <main className="remote-document-shell" data-testid="local-document-page">
       <section className="remote-document-canvas" aria-label="Local Markdown editor">
-        {collab ? (
+        {collab && !documentIssue.conflict ? (
           <MilkdownEditor
             initialMarkdown=""
             ydoc={collab.ydoc}
@@ -396,7 +457,7 @@ export function LocalDocumentPage() {
       <DocumentActionRail
         hidden={!document}
         activeDrawer={activeDrawer}
-        availableDrawers={['versions']}
+        availableDrawers={['versions', 'share']}
         onToggleDrawer={(drawer) => setActiveDrawer((current) => (current === drawer ? null : drawer))}
       />
 
@@ -406,6 +467,17 @@ export function LocalDocumentPage() {
         onClose={() => setActiveDrawer(null)}
         onStatusChange={setSaveStatus}
       />
+
+      {document ? (
+        <ShareDrawer
+          docId={document.localDocId}
+          branchId={document.roomName}
+          open={activeDrawer === 'share'}
+          onClose={() => setActiveDrawer(null)}
+          onStatusChange={setSaveStatus}
+          accessApi={localRelayAccessApi}
+        />
+      ) : null}
 
       {status ? (
         <div className="remote-save-status" role={statusKind}>

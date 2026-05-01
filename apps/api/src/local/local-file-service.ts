@@ -7,6 +7,7 @@ import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import {
   createJsonLocalMetadataStore,
   type LocalMetadataStore,
+  type StoredLocalRelayJoinState,
   type StoredLocalVersion,
   type StoredLocalVersionOperation,
 } from './local-metadata-store';
@@ -87,6 +88,9 @@ interface LocalVersionRecord {
 export interface LocalFileService extends LocalRoomStore {
   readonly roomName: string;
   getSummary(): LocalFileDocumentSummary;
+  getRelayJoinState(): StoredLocalRelayJoinState | null;
+  saveRelayJoinState(state: StoredLocalRelayJoinState): Promise<void>;
+  pauseForRelayConflict(message: string): Promise<void>;
   listVersions(): LocalVersionSummary[];
   getVersion(versionId: string): LocalVersionDetail;
   createManualVersion(): Promise<LocalManualSaveResult>;
@@ -172,6 +176,7 @@ export async function createLocalFileServiceWithOptions(
   let conflict: string | null = null;
   let historyLoadError: string | null = null;
   let lastConflictRecoveryHash: string | null = null;
+  let relayJoinState: StoredLocalRelayJoinState | null = null;
   let watcher: FSWatcher | null = null;
   let watcherTimer: NodeJS.Timeout | null = null;
   let isHandlingWatcherEvent = false;
@@ -180,6 +185,7 @@ export async function createLocalFileServiceWithOptions(
   let versions: LocalVersionRecord[] = [];
   try {
     await metadataStore.loadDocument(absolutePath);
+    relayJoinState = await metadataStore.loadRelayJoin(absolutePath);
     const storedVersions = await metadataStore.listVersions(localDocId);
     versions = storedVersions.map((version) => ({
       versionId: version.versionId,
@@ -198,6 +204,10 @@ export async function createLocalFileServiceWithOptions(
 
   function assertRoom(room: string): void {
     if (room !== roomName) throw new Error('local_room_not_found');
+  }
+
+  function isRelaySyncPaused(): boolean {
+    return conflict?.startsWith('Relay reconnect conflict') ?? false;
   }
 
   function nextVersionNumber(): number {
@@ -324,6 +334,7 @@ export async function createLocalFileServiceWithOptions(
   }
 
   async function handleWatcherEvent(callbacks: LocalWatcherCallbacks): Promise<void> {
+    if (isRelaySyncPaused()) return;
     if (isHandlingWatcherEvent) {
       shouldHandleWatcherAgain = true;
       return;
@@ -361,8 +372,12 @@ export async function createLocalFileServiceWithOptions(
         stateFingerprint: currentStateFingerprint,
       };
     },
-    async storeRoomState(candidateRoomName, yjsState) {
+    async storeRoomState(candidateRoomName, yjsState, expectedStateFingerprint) {
       assertRoom(candidateRoomName);
+      if (isRelaySyncPaused()) throw new Error('relay_sync_paused');
+      if (expectedStateFingerprint !== null && expectedStateFingerprint !== currentStateFingerprint) {
+        throw new Error('local_state_changed');
+      }
       await applySerializedRoomState(yjsState);
       return {
         stored: true,
@@ -379,6 +394,18 @@ export async function createLocalFileServiceWithOptions(
         conflict,
         historyLoadError,
       };
+    },
+    getRelayJoinState() {
+      return relayJoinState ? { ...relayJoinState } : null;
+    },
+    async saveRelayJoinState(state) {
+      relayJoinState = { ...state };
+      await metadataStore.saveRelayJoin(relayJoinState);
+    },
+    async pauseForRelayConflict(message) {
+      conflict = message;
+      await createConflictRecoverySnapshot();
+      await persistCurrentDocument();
     },
     listVersions() {
       return versions.map(toVersionSummary).reverse();

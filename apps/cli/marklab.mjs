@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   canonicalRealpath,
@@ -27,6 +27,12 @@ const defaultWebPort = 5175;
 export function printUsage() {
   console.log(`Usage:
   marklab open <file.md> [--background]
+  marklab share <file.md>
+  marklab join <edit-link> <file.md>
+  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir]
+  marklab share-state <file.md> [--json]
+  marklab create-link <file.md> --role <view|edit>
+  marklab revoke-link <file.md> <grant-id>
   marklab status
   marklab stop <file.md>
   marklab stop --all`);
@@ -39,10 +45,24 @@ function parseFlagValue(args, name) {
   return value && !value.startsWith('--') ? value : null;
 }
 
+function positionalArgs(args, flagsWithValues = []) {
+  const result = [];
+  const valueFlags = new Set(flagsWithValues);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg.startsWith('--')) {
+      if (valueFlags.has(arg)) index += 1;
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
+}
+
 export function parseCliArgs(argv) {
   const [command, ...rest] = argv;
   if (command === 'open') {
-    const file = rest.find((arg) => !arg.startsWith('--')) ?? null;
+    const file = positionalArgs(rest)[0] ?? null;
     return {
       command,
       file,
@@ -50,8 +70,49 @@ export function parseCliArgs(argv) {
     };
   }
 
+  if (command === 'share') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file };
+  }
+
+  if (command === 'share-state') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file, json: rest.includes('--json') };
+  }
+
+  if (command === 'create-link') {
+    const file = positionalArgs(rest, ['--role'])[0] ?? null;
+    return {
+      command,
+      file,
+      role: parseFlagValue(rest, '--role') ?? 'edit',
+    };
+  }
+
+  if (command === 'revoke-link') {
+    const positional = positionalArgs(rest);
+    const file = positional[0] ?? null;
+    const grantId = positional[1] ?? null;
+    return { command, file, grantId };
+  }
+
+  if (command === 'join') {
+    const positional = positionalArgs(rest, ['--dir', '--name']);
+    return {
+      command,
+      link: positional[0] ?? null,
+      file: positional[1] ?? null,
+      dir: parseFlagValue(rest, '--dir'),
+      name: parseFlagValue(rest, '--name'),
+      createDir: rest.includes('--create-dir'),
+      replace: rest.includes('--replace'),
+      review: rest.includes('--review'),
+      cancel: rest.includes('--cancel'),
+    };
+  }
+
   if (command === 'stop') {
-    const file = rest.find((arg) => !arg.startsWith('--')) ?? null;
+    const file = positionalArgs(rest)[0] ?? null;
     return {
       command,
       file,
@@ -62,7 +123,7 @@ export function parseCliArgs(argv) {
   if (command === 'status') return { command };
 
   if (command === '__serve') {
-    const file = rest.find((arg) => !arg.startsWith('--')) ?? null;
+    const file = positionalArgs(rest, ['--api-port', '--web-port', '--token'])[0] ?? null;
     return {
       command,
       file,
@@ -211,6 +272,20 @@ export function serveLocalFile(input) {
         MARKLAB_LOCAL_METADATA_PATH: metadataPath,
         MARKLAB_WEB_ORIGIN: webUrl,
         MARKLAB_REQUIRE_AUTH: 'false',
+        ...(input.enableRelay !== false ? { MARKLAB_ENABLE_RELAY: 'true' } : {}),
+        MARKLAB_PUBLIC_API_URL: apiUrl,
+        MARKLAB_PUBLIC_WEB_URL: webUrl,
+        MARKLAB_PUBLIC_RELAY_WS_URL: `ws://127.0.0.1:${input.apiPort}/relay`,
+        MARKLAB_RELAY_WS_URL: `ws://127.0.0.1:${input.apiPort}/relay`,
+        ...(input.relayJoin
+          ? {
+              MARKLAB_RELAY_ROOM_ID: input.relayJoin.relayRoomId,
+              MARKLAB_RELAY_TOKEN: input.relayJoin.token,
+              MARKLAB_RELAY_CLIENT_ID: input.relayJoin.clientId,
+              MARKLAB_RELAY_DISPLAY_NAME: input.relayJoin.displayName,
+              MARKLAB_RELAY_WS_URL: input.relayJoin.wsUrl,
+            }
+          : {}),
       },
       stdio,
     ),
@@ -277,6 +352,33 @@ async function openForeground(file) {
   const session = serveLocalFile({ markdownPath, apiPort, webPort, token });
   await session.waitReady();
   console.log(`Opening ${session.localUrl}`);
+  openBrowser(session.localUrl);
+}
+
+async function createLocalRelayLink(apiUrl, token, role) {
+  const response = await fetch(`${apiUrl}/api/local/access-grants`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ role }),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Unable to create relay link: ${body}`);
+  return JSON.parse(body);
+}
+
+async function shareForeground(file) {
+  const markdownPath = await resolveMarkdownFile(file);
+  const { apiPort, webPort } = await chooseLocalPorts();
+  const token = randomBytes(24).toString('base64url');
+  const session = serveLocalFile({ markdownPath, apiPort, webPort, token, enableRelay: true });
+  await session.waitReady();
+  const created = await createLocalRelayLink(session.apiUrl, token, 'edit');
+  console.log(`Sharing ${markdownPath}`);
+  console.log(`Edit link: ${created.url}`);
+  console.log(`Local browser URL: ${session.localUrl}`);
   openBrowser(session.localUrl);
 }
 
@@ -381,6 +483,146 @@ async function printStatus() {
   }
 }
 
+async function requireRunningDaemon(file) {
+  const registryPath = defaultDaemonRegistryPath();
+  const markdownPath = await resolveMarkdownFile(file);
+  const daemon = await findDaemonByRealpath(markdownPath, registryPath);
+  if (!daemon) throw new Error('No running MarkLab daemon found for that file. Start one with marklab share <file.md>.');
+  return daemon;
+}
+
+async function shareStateCommand(input) {
+  const daemon = await requireRunningDaemon(input.file);
+  const response = await fetch(`${daemon.apiUrl}/api/local/share-state`, {
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Unable to read share state: ${body}`);
+  const state = JSON.parse(body);
+  if (input.json) {
+    console.log(JSON.stringify(state, null, 2));
+    return;
+  }
+  console.log(`Relay room: ${state.relayRoomId ?? 'not shared'}`);
+  console.log(`Host: ${state.hostOnline ? 'online' : 'offline'}`);
+  for (const link of state.links) {
+    console.log(`${link.role} ${link.grantId} sessions=${link.activeSessionCount}`);
+  }
+}
+
+async function createLinkCommand(input) {
+  if (input.role !== 'view' && input.role !== 'edit') throw new Error('--role must be view or edit');
+  const daemon = await requireRunningDaemon(input.file);
+  const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, input.role);
+  console.log(created.url);
+}
+
+async function revokeLinkCommand(input) {
+  const daemon = await requireRunningDaemon(input.file);
+  const response = await fetch(`${daemon.apiUrl}/api/local/access-grants/${encodeURIComponent(input.grantId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  });
+  if (!response.ok) throw new Error(`Unable to revoke relay link: ${await response.text()}`);
+  console.log(`Revoked ${input.grantId}`);
+}
+
+function parseRelayLink(link) {
+  let url;
+  try {
+    url = new URL(link);
+  } catch {
+    throw new Error('join requires a valid relay edit link');
+  }
+  const match = /^\/relay\/([^/]+)$/u.exec(url.pathname);
+  if (!match?.[1]) throw new Error('join requires a relay edit link');
+  const token = url.searchParams.get('token');
+  if (!token) throw new Error('join requires a relay token');
+  const apiUrl = url.searchParams.get('apiUrl') ?? `${url.protocol}//${url.hostname}:3011`;
+  return {
+    relayRoomId: decodeURIComponent(match[1]),
+    token,
+    apiUrl,
+  };
+}
+
+export function safeRelayJoinFilename(name) {
+  const candidate = String(name ?? '').trim();
+  if (!candidate) return 'shared-notes.md';
+  if (candidate.includes('/') || candidate.includes('\\') || candidate.split(sep).length > 1) {
+    throw new Error('--name must be a Markdown filename, not a path');
+  }
+  const base = basename(candidate);
+  return base.toLowerCase().endsWith('.md') ? base : `${base}.md`;
+}
+
+async function joinCommand(input) {
+  if (!input.link) throw new Error('join requires an edit link');
+  const link = parseRelayLink(input.link);
+  const accessResponse = await fetch(`${link.apiUrl}/api/relay/rooms/${encodeURIComponent(link.relayRoomId)}/access?token=${encodeURIComponent(link.token)}`);
+  const accessBody = await accessResponse.text();
+  if (!accessResponse.ok) throw new Error(`Unable to validate relay link: ${accessBody}`);
+  const access = JSON.parse(accessBody);
+  if (!access.canWrite) throw new Error('View links cannot start a local mirror. Ask for an edit link.');
+  if (!access.hostOnline) throw new Error('Host offline. Ask the host to open MarkLab again.');
+  if (access.stale) throw new Error('Shared relay state is stale. Ask the host to keep MarkLab open and try again.');
+
+  let target;
+  if (input.dir) {
+    const directory = resolve(input.dir);
+    if (!existsSync(directory)) {
+      if (!input.createDir) throw new Error(`${directory} does not exist. Re-run with --create-dir to create it.`);
+      await import('node:fs/promises').then(({ mkdir }) => mkdir(directory, { recursive: true }));
+    } else {
+      const { stat } = await import('node:fs/promises');
+      const directoryStat = await stat(directory);
+      if (!directoryStat.isDirectory()) throw new Error(`${directory} is not a directory.`);
+    }
+    target = resolve(directory, safeRelayJoinFilename(input.name ?? access.suggestedFilename ?? 'shared-notes.md'));
+  } else if (input.file) {
+    target = resolve(input.file);
+  } else {
+    throw new Error('join requires a target file or --dir');
+  }
+
+  if (existsSync(target)) {
+    const { readFile } = await import('node:fs/promises');
+    const existing = await readFile(target, 'utf8');
+    if (existing.length > 0 && !input.replace) {
+      if (input.cancel) {
+        console.log('Join cancelled. No file was changed.');
+        return;
+      }
+      if (input.review) throw new Error('Review conflict is deferred to Plan 3. No file was changed.');
+      throw new Error('Target file is non-empty. Re-run with --replace to replace it, --review for Plan 3 handoff, or --cancel.');
+    }
+  }
+
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, access.markdown ?? '', 'utf8');
+  const { apiPort, webPort } = await chooseLocalPorts();
+  const localToken = randomBytes(24).toString('base64url');
+  const wsUrl = new URL(input.link).searchParams.get('wsUrl') ?? link.apiUrl.replace(/^http/u, 'ws').replace(/\/$/u, '') + '/relay';
+  const session = serveLocalFile({
+    markdownPath: target,
+    apiPort,
+    webPort,
+    token: localToken,
+    relayJoin: {
+      relayRoomId: link.relayRoomId,
+      token: link.token,
+      clientId: `mirror_${randomBytes(12).toString('base64url')}`,
+      displayName: input.name ?? 'Local mirror',
+      wsUrl,
+    },
+  });
+  await session.waitReady();
+  console.log(`Joined relay room ${link.relayRoomId}`);
+  console.log(`Local mirror file: ${target}`);
+  console.log(`Local browser URL: ${session.localUrl}`);
+}
+
 async function stopCommand(input) {
   const registryPath = defaultDaemonRegistryPath();
   const { daemons } = await cleanupStaleRegistryEntries(registryPath);
@@ -422,6 +664,31 @@ export async function main(argv = process.argv.slice(2)) {
   if (input.command === 'open' && input.file) {
     if (input.background) await openBackground(input.file);
     else await openForeground(input.file);
+    return;
+  }
+
+  if (input.command === 'share' && input.file) {
+    await shareForeground(input.file);
+    return;
+  }
+
+  if (input.command === 'share-state' && input.file) {
+    await shareStateCommand(input);
+    return;
+  }
+
+  if (input.command === 'create-link' && input.file) {
+    await createLinkCommand(input);
+    return;
+  }
+
+  if (input.command === 'revoke-link' && input.file && input.grantId) {
+    await revokeLinkCommand(input);
+    return;
+  }
+
+  if (input.command === 'join') {
+    await joinCommand(input);
     return;
   }
 

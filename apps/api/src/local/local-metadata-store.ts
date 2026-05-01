@@ -34,11 +34,29 @@ export interface StoredLocalVersion {
   createdAt: string;
 }
 
+export interface StoredLocalRelayJoinState {
+  schemaVersion: 1;
+  relayRoomId: string;
+  grantId: string;
+  sessionId: string;
+  localDocId: string;
+  absolutePath: string;
+  lastAcceptedLocalHash: string;
+  lastAcceptedSharedHash: string;
+  lastAcceptedSharedRevision: number;
+  lastHostSessionId: string | null;
+  disconnectedCleanly: boolean;
+  updatedAt: string;
+}
+
 export interface LocalMetadataStore {
   loadDocument(absolutePath: string): Promise<StoredLocalDocument | null>;
   saveDocument(document: StoredLocalDocument): Promise<void>;
   listVersions(localDocId: string): Promise<StoredLocalVersion[]>;
   appendVersion(version: StoredLocalVersion): Promise<void>;
+  loadRelayJoin(absolutePath: string): Promise<StoredLocalRelayJoinState | null>;
+  saveRelayJoin(state: StoredLocalRelayJoinState): Promise<void>;
+  clearRelayJoin(localDocId: string): Promise<void>;
   getLastLoadError?(): string | null;
 }
 
@@ -46,6 +64,7 @@ interface LocalMetadataFile {
   schemaVersion: 1;
   documents: Record<string, StoredLocalDocument>;
   versions: StoredLocalVersion[];
+  relayJoins: Record<string, StoredLocalRelayJoinState>;
 }
 
 const lockRetryIntervalMs = 10;
@@ -56,6 +75,7 @@ function emptyMetadataFile(): LocalMetadataFile {
     schemaVersion: 1,
     documents: {},
     versions: [],
+    relayJoins: {},
   };
 }
 
@@ -72,6 +92,7 @@ function parseMetadataFile(value: unknown): LocalMetadataFile {
     schemaVersion: 1,
     documents: value.documents as Record<string, StoredLocalDocument>,
     versions: value.versions as StoredLocalVersion[],
+    relayJoins: isRecord(value.relayJoins) ? (value.relayJoins as Record<string, StoredLocalRelayJoinState>) : {},
   };
 }
 
@@ -191,6 +212,20 @@ export function createJsonLocalMetadataStore(metadataPath = defaultLocalMetadata
           if (left.localDocId !== right.localDocId) return left.localDocId.localeCompare(right.localDocId);
           return left.versionNumber - right.versionNumber;
         });
+      });
+    },
+    async loadRelayJoin(absolutePath) {
+      const metadata = await readMetadataFile();
+      return Object.values(metadata.relayJoins).find((state) => state.absolutePath === absolutePath) ?? null;
+    },
+    async saveRelayJoin(state) {
+      await updateMetadataFile((metadata) => {
+        metadata.relayJoins[state.localDocId] = state;
+      });
+    },
+    async clearRelayJoin(localDocId) {
+      await updateMetadataFile((metadata) => {
+        delete metadata.relayJoins[localDocId];
       });
     },
     getLastLoadError() {

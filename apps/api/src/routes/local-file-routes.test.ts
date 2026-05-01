@@ -32,6 +32,9 @@ function createFakeLocalFileService(): LocalFileService {
       conflict: null,
       historyLoadError: null,
     }),
+    getRelayJoinState: () => null,
+    saveRelayJoinState: vi.fn(async () => undefined),
+    pauseForRelayConflict: vi.fn(async () => undefined),
     listVersions: () => [],
     getVersion: () => {
       throw new Error('local_version_not_found');
@@ -110,6 +113,19 @@ describe('local file routes', () => {
 
     await request(app).get('/api/docs').expect(404);
     await request(app).post('/api/docs/import').send({ title: 'x', markdown: '# x\n' }).expect(404);
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .send({ baseVersionId: 'v1', baseHash: 'sha256:x', markdown: '# x\n' })
+      .expect(404);
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/edit')
+      .send({ oldString: 'x', newString: 'y', replaceAll: false })
+      .expect(404);
+  });
+
+  it('does not mount hosted AI write routes by default in hosted relay mode', async () => {
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter());
+
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
       .send({ baseVersionId: 'v1', baseHash: 'sha256:x', markdown: '# x\n' })

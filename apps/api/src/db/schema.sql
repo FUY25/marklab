@@ -122,3 +122,47 @@ create index if not exists access_grants_doc_active_idx
 
 create index if not exists access_sessions_grant_seen_idx
   on access_sessions (grant_id, last_seen_at desc);
+
+create table if not exists relay_rooms (
+  id uuid primary key default gen_random_uuid(),
+  host_session_id text,
+  host_auth_token_hash text,
+  state text not null default 'host_offline' check (state in ('starting', 'host_online', 'host_offline', 'ended')),
+  last_ephemeral_yjs_state bytea,
+  last_shared_hash text,
+  shared_revision integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists relay_access_grants (
+  id uuid primary key default gen_random_uuid(),
+  relay_room_id uuid not null references relay_rooms(id) on delete cascade,
+  token_hash text not null unique,
+  role text not null check (role in ('view', 'edit')),
+  expires_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists relay_access_sessions (
+  id uuid primary key default gen_random_uuid(),
+  grant_id uuid references relay_access_grants(id) on delete cascade,
+  client_id text not null,
+  client_kind text not null default 'browser' check (client_kind in ('browser', 'daemon', 'agent')),
+  display_name text not null,
+  color text not null,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists relay_access_grants_room_active_idx
+  on relay_access_grants (relay_room_id, created_at desc)
+  where revoked_at is null;
+
+create index if not exists relay_access_sessions_grant_seen_idx
+  on relay_access_sessions (grant_id, last_seen_at desc);
+
+create unique index if not exists relay_access_sessions_grant_client_idx
+  on relay_access_sessions (grant_id, client_id)
+  where grant_id is not null;

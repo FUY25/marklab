@@ -5,7 +5,7 @@ import { buildDocumentPath } from '../routes';
 import { DocumentDrawer } from './DocumentDrawer';
 
 type AccessGrantRole = 'view' | 'edit';
-type AccessClientKind = 'browser' | 'agent' | 'api';
+type AccessClientKind = 'browser' | 'agent' | 'api' | 'daemon';
 type ShareStatusKind = 'status' | 'alert';
 
 interface AccessSessionSummary {
@@ -15,6 +15,8 @@ interface AccessSessionSummary {
   color: string;
   lastBranchId: string | null;
   lastSeenAt: string | null;
+  grantId?: string | null;
+  role?: 'host' | AccessGrantRole;
 }
 
 interface AccessGrantSummary {
@@ -35,10 +37,12 @@ interface CreatedAccessGrant {
   role: AccessGrantRole;
   expiresAt: string | null;
   createdAt: string;
+  url?: string;
 }
 
 interface AccessGrantsResponse {
   grants: AccessGrantSummary[];
+  sessions?: AccessSessionSummary[];
 }
 
 interface AccessGrantApi {
@@ -155,6 +159,7 @@ export function ShareDrawer({
     [accessApi],
   );
   const [grants, setGrants] = useState<AccessGrantSummary[]>([]);
+  const [sessions, setSessions] = useState<AccessSessionSummary[]>([]);
   const [role, setRole] = useState<AccessGrantRole>('view');
   const [createdLink, setCreatedLink] = useState<CreatedAccessLink | null>(null);
   const [nameDraft, setNameDraft] = useState(collaboratorName);
@@ -182,6 +187,7 @@ export function ShareDrawer({
     try {
       const response = await maybeAccessApi.listAccessGrants(docId, branchId);
       setGrants(response.grants);
+      setSessions(response.sessions ?? recentSessionsFromGrants(response.grants));
     } catch (error) {
       console.error('Unable to load share settings.', error);
       setReadableStatus(readableAccessError('load'), 'alert');
@@ -213,7 +219,7 @@ export function ShareDrawer({
     setStatus(null);
     try {
       const created = await maybeAccessApi.createAccessGrant(docId, branchId, { role });
-      const url = buildAccessUrl(docId, branchId, created.token, created.role);
+      const url = created.url ?? buildAccessUrl(docId, branchId, created.token, created.role);
       setCreatedLink({ grantId: created.grantId, role: created.role, url });
       setReadableStatus('Access link created. Copy it now; it will not be shown again.');
       await refreshGrants();
@@ -263,7 +269,7 @@ export function ShareDrawer({
     }
   }
 
-  const recentSessions = recentSessionsFromGrants(grants);
+  const recentSessions = sessions;
 
   return (
     <DocumentDrawer id="share-drawer" title="Share" open={open} onClose={onClose} className="share-drawer" testId="share-drawer">
@@ -371,7 +377,7 @@ export function ShareDrawer({
                     <span>
                       <strong>{session.displayName || 'Guest'}</strong>
                       <small>
-                        {session.clientKind} · {formatCreatedAt(session.lastSeenAt)}
+                        {session.role === 'host' ? 'host daemon' : session.clientKind} · {formatCreatedAt(session.lastSeenAt)}
                       </small>
                     </span>
                   </div>
