@@ -1,12 +1,10 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   MarklabWebApi,
-  type BranchSummary,
   type VersionDetail,
   type VersionOperation,
   type VersionSummary,
 } from '../lib/api-client';
-import { buildDocumentPath } from '../routes';
 import { DocumentDrawer } from './DocumentDrawer';
 
 type SaveStatusKind = 'status' | 'alert';
@@ -17,18 +15,13 @@ interface VersionsDrawerProps {
   open: boolean;
   onClose: () => void;
   currentBranchLabel?: string;
-  canSwitchBranches?: boolean;
-  canBranchFromVersion?: boolean;
   canRestoreVersion?: boolean;
   enableSaveShortcut?: boolean;
   onSaveStatusChange?: (status: string, kind: SaveStatusKind) => void;
-  onNavigateToBranch?: (branchId: string) => void;
   onBackToDocuments?: () => void;
   api?: Pick<
     MarklabWebApi,
-    | 'branchFromVersion'
     | 'exportMarkdown'
-    | 'listBranches'
     | 'listVersions'
     | 'manualSaveVersion'
     | 'restoreVersion'
@@ -36,7 +29,7 @@ interface VersionsDrawerProps {
   >;
 }
 
-type BusyAction = 'branch' | 'export' | 'load-branches' | 'manual-save' | 'restore';
+type BusyAction = 'export' | 'manual-save' | 'restore';
 
 function formatCreatedAt(value: string): string {
   const date = new Date(value);
@@ -57,14 +50,7 @@ function operationLabel(operation: VersionOperation): string {
   return operation.replace(/_/gu, ' ');
 }
 
-function branchLabel(branch: BranchSummary): string {
-  const name = branch.slug || branch.name || branch.branchId;
-  const suffix = branch.headVersionNumber ? `v${branch.headVersionNumber}` : 'no versions';
-  return `${name}${branch.isArchived ? ' archived' : ''} (${suffix})`;
-}
-
 function readableVersionError(action: string): string {
-  if (action === 'branches') return 'Unable to load branches.';
   if (action === 'detail') return 'Unable to load version preview.';
   if (action === 'export') return 'Unable to export Markdown.';
   if (action === 'manual-save') return 'Unable to save version.';
@@ -92,21 +78,16 @@ export function VersionsDrawer({
   open,
   onClose,
   currentBranchLabel,
-  canSwitchBranches = true,
-  canBranchFromVersion = canSwitchBranches,
   canRestoreVersion = true,
   enableSaveShortcut = true,
   onSaveStatusChange,
-  onNavigateToBranch,
   onBackToDocuments,
   api,
 }: VersionsDrawerProps) {
   const marklabApi = useMemo(() => api ?? new MarklabWebApi(), [api]);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
-  const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<VersionDetail | null>(null);
-  const [newBranchName, setNewBranchName] = useState('');
   const [restoreConfirmation, setRestoreConfirmation] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<SaveStatusKind>('status');
@@ -145,35 +126,10 @@ export function VersionsDrawer({
     setVersions([]);
     setSelectedVersionId(null);
     setSelectedVersion(null);
-    setNewBranchName('');
     setRestoreConfirmation('');
     setStatus(null);
     void refreshVersions();
   }, [open, refreshVersions]);
-
-  useEffect(() => {
-    if (!open || !canSwitchBranches) return undefined;
-
-    let isActive = true;
-    setBusyAction('load-branches');
-    void marklabApi
-      .listBranches(docId)
-      .then((response) => {
-        if (isActive) setBranches(response.branches);
-      })
-      .catch((error: unknown) => {
-        if (!isActive) return;
-        console.error('Unable to load branches.', error);
-        setReadableStatus(readableVersionError('branches'), 'alert');
-      })
-      .finally(() => {
-        if (isActive) setBusyAction((current) => (current === 'load-branches' ? null : current));
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [canSwitchBranches, docId, marklabApi, open, setReadableStatus]);
 
   useEffect(() => {
     if (!open || !selectedVersionId) {
@@ -239,15 +195,6 @@ export function VersionsDrawer({
     };
   }, [enableSaveShortcut, handleManualSave]);
 
-  function handleBranchChange(nextBranchId: string) {
-    if (!nextBranchId || nextBranchId === branchId) return;
-    if (onNavigateToBranch) {
-      onNavigateToBranch(nextBranchId);
-      return;
-    }
-    window.location.assign(buildDocumentPath(docId, nextBranchId));
-  }
-
   async function handleExportMarkdown() {
     setBusyAction('export');
     setReadableStatus('Exporting');
@@ -258,29 +205,6 @@ export function VersionsDrawer({
     } catch (error) {
       console.error('Unable to export Markdown.', error);
       setReadableStatus(readableVersionError('export'), 'alert');
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function handleBranchFromVersion(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedVersion || !canBranchFromVersion) return;
-
-    const normalizedName = newBranchName.trim();
-    if (!normalizedName) {
-      setReadableStatus('Branch name is required.', 'alert');
-      return;
-    }
-
-    setBusyAction('branch');
-    setStatus(null);
-    try {
-      const branch = await marklabApi.branchFromVersion(docId, selectedVersion.versionId, normalizedName);
-      handleBranchChange(branch.branchId);
-    } catch (error) {
-      console.error('Unable to branch from this version.', error);
-      setReadableStatus(readableVersionError('branch'), 'alert');
     } finally {
       setBusyAction(null);
     }
@@ -322,28 +246,8 @@ export function VersionsDrawer({
     >
       <section className="document-drawer-section versions-drawer-current" aria-label="Current branch">
         <div className="document-drawer-section-heading">
-          <span>Current</span>
+          <span>{currentBranchLabel ?? 'Document'}</span>
         </div>
-        {canSwitchBranches ? (
-          <label className="versions-drawer-branch-control">
-            <span>Branch</span>
-            <select
-              value={branchId}
-              disabled={busyAction === 'load-branches' || branches.length === 0}
-              onChange={(event) => handleBranchChange(event.currentTarget.value)}
-              aria-label="Branch"
-            >
-              {branches.some((branch) => branch.branchId === branchId) ? null : <option value={branchId}>{branchId}</option>}
-              {branches.map((branch) => (
-                <option key={branch.branchId} value={branch.branchId} disabled={branch.isArchived}>
-                  {branchLabel(branch)}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <p className="versions-drawer-branch-label">{currentBranchLabel ?? branchId}</p>
-        )}
         <div className="document-drawer-action-row">
           <button type="button" onClick={() => void handleManualSave()} disabled={busyAction !== null}>
             {busyAction === 'manual-save' ? 'Saving' : 'Save version'}
@@ -354,7 +258,7 @@ export function VersionsDrawer({
         </div>
       </section>
 
-      <section className="document-drawer-section" aria-label="Branch versions">
+      <section className="document-drawer-section" aria-label="Document versions">
         <div className="document-drawer-section-heading">
           <span>History</span>
           <span>{isLoadingVersions ? 'Loading' : `${versions.length}`}</span>
@@ -378,7 +282,7 @@ export function VersionsDrawer({
               </span>
             </button>
           ))}
-          {!isLoadingVersions && versions.length === 0 ? <p className="versions-drawer-empty">No versions on this branch.</p> : null}
+          {!isLoadingVersions && versions.length === 0 ? <p className="versions-drawer-empty">No versions yet.</p> : null}
         </div>
       </section>
 
@@ -392,55 +296,35 @@ export function VersionsDrawer({
         </pre>
       </section>
 
-      {canBranchFromVersion || canRestoreVersion ? (
+      {canRestoreVersion ? (
         <section className="document-drawer-section versions-drawer-advanced" aria-label="Advanced version actions">
           <div className="document-drawer-section-heading">
             <span>Advanced</span>
           </div>
-          {canBranchFromVersion ? (
-            <form className="versions-drawer-form" onSubmit={handleBranchFromVersion}>
-              <label htmlFor="versions-drawer-new-branch-name">New branch name</label>
-              <div className="document-drawer-action-row">
-                <input
-                  id="versions-drawer-new-branch-name"
-                  type="text"
-                  value={newBranchName}
-                  onChange={(event) => setNewBranchName(event.currentTarget.value)}
-                  disabled={!selectedVersion || busyAction !== null}
-                  autoComplete="off"
-                />
-                <button type="submit" disabled={!selectedVersion || busyAction !== null}>
-                  {busyAction === 'branch' ? 'Branching' : 'Branch from this version'}
-                </button>
-              </div>
-            </form>
-          ) : null}
-          {canRestoreVersion ? (
-            <form className="versions-drawer-form" onSubmit={handleRestoreVersion}>
-              <label htmlFor="versions-drawer-restore-confirmation">Type RESTORE to confirm</label>
-              <div className="document-drawer-action-row">
-                <input
-                  id="versions-drawer-restore-confirmation"
-                  type="text"
-                  value={restoreConfirmation}
-                  onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
-                  disabled={!selectedVersion || !selectedVersionIsCurrentBranch || busyAction !== null}
-                  autoComplete="off"
-                />
-                <button
-                  type="submit"
-                  disabled={
-                    !selectedVersion ||
-                    !selectedVersionIsCurrentBranch ||
-                    restoreConfirmation !== 'RESTORE' ||
-                    busyAction !== null
-                  }
-                >
-                  {busyAction === 'restore' ? 'Restoring' : 'Restore this version'}
-                </button>
-              </div>
-            </form>
-          ) : null}
+          <form className="versions-drawer-form" onSubmit={handleRestoreVersion}>
+            <label htmlFor="versions-drawer-restore-confirmation">Type RESTORE to confirm</label>
+            <div className="document-drawer-action-row">
+              <input
+                id="versions-drawer-restore-confirmation"
+                type="text"
+                value={restoreConfirmation}
+                onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
+                disabled={!selectedVersion || !selectedVersionIsCurrentBranch || busyAction !== null}
+                autoComplete="off"
+              />
+              <button
+                type="submit"
+                disabled={
+                  !selectedVersion ||
+                  !selectedVersionIsCurrentBranch ||
+                  restoreConfirmation !== 'RESTORE' ||
+                  busyAction !== null
+                }
+              >
+                {busyAction === 'restore' ? 'Restoring' : 'Restore this version'}
+              </button>
+            </div>
+          </form>
         </section>
       ) : null}
 

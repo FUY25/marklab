@@ -16,8 +16,11 @@
   --workspace-ink: #1f2023;
   --workspace-muted: #65655f;
   --workspace-soft: #8a8a82;
-  --workspace-action: #1f4f46;
-  --workspace-action-hover: #173d36;
+  --workspace-action: #37352f;
+  --workspace-action-hover: #efefed;
+  --workspace-control-bg: #f7f7f5;
+  --workspace-control-hover: #efefed;
+  --workspace-control-active: #e8e8e6;
   --workspace-danger: #9f1d1d;
   --workspace-danger-bg: #fff1f1;
 }
@@ -116,6 +119,63 @@ button:disabled {
   letter-spacing: 0;
 }
 
+.workspace-shell-simple {
+  width: min(760px, calc(100vw - 48px));
+  padding-top: 72px;
+}
+
+.workspace-header-simple {
+  margin-bottom: 34px;
+}
+
+.workspace-header-simple h1 {
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 720;
+}
+
+.home-action-rail {
+  position: fixed;
+  top: 72px;
+  right: 18px;
+  z-index: 60;
+  display: grid;
+  gap: 8px;
+}
+
+.home-action-button {
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  color: var(--workspace-ink);
+  background: #f3f4f7;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.home-action-button:hover,
+.home-action-button-active {
+  background: #e9ebf0;
+  border-color: #dfe2e8;
+}
+
+.home-action-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.home-hidden-file-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .workspace-alert {
   margin: 0 0 16px;
   padding: 12px 14px;
@@ -186,7 +246,7 @@ button:disabled {
 
 .field-stack input:focus {
   border-color: var(--workspace-action);
-  box-shadow: 0 0 0 3px rgba(31, 79, 70, 0.12);
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.1);
 }
 
 .action-row {
@@ -220,9 +280,9 @@ button:disabled {
 .workspace-panel-primary button,
 .file-button,
 .document-toolbar button {
-  color: #ffffff;
-  background: var(--workspace-action);
-  border: 1px solid var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
 }
 
 .workspace-panel button[type='submit']:hover,
@@ -230,18 +290,26 @@ button:disabled {
 .workspace-panel-primary button:hover,
 .file-button:hover,
 .document-toolbar button:hover {
-  background: var(--workspace-action-hover);
-  border-color: var(--workspace-action-hover);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
 }
 
 .button-secondary {
   color: var(--workspace-ink);
-  background: #ffffff;
-  border: 1px solid var(--workspace-border);
+  background: transparent;
+  border: 1px solid transparent;
 }
 
 .button-secondary:hover {
-  border-color: var(--workspace-border-strong);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
+}
+
+.admin-token-panel-compact {
+  gap: 12px;
+  margin: 0 0 24px;
+  padding: 12px;
+  border-radius: 6px;
 }
 
 .admin-token-panel span[role='status'] {
@@ -294,6 +362,17 @@ button:disabled {
   margin-top: 16px;
 }
 
+.recent-documents-simple {
+  margin-top: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.recent-documents-simple .section-heading {
+  padding: 0 0 10px;
+}
+
 .recent-documents ul {
   display: grid;
   gap: 0;
@@ -321,6 +400,15 @@ button:disabled {
 
 .recent-documents button:hover {
   background: var(--workspace-surface-muted);
+}
+
+.recent-documents-simple button {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+  padding: 12px 0;
+}
+
+.recent-documents-simple button:hover {
+  background: transparent;
 }
 
 .recent-documents span {
@@ -541,14 +629,15 @@ button:disabled {
   align-items: center;
   justify-content: center;
   color: var(--workspace-muted);
-  background: #ffffff;
-  border: 1px solid var(--workspace-border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 6px;
 }
 
 .document-drawer-close:hover {
   color: var(--workspace-ink);
-  border-color: var(--workspace-border-strong);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
 }
 
 .document-drawer-body {
@@ -596,8 +685,8 @@ button:disabled {
   justify-content: center;
   padding: 7px 10px;
   color: var(--workspace-ink);
-  background: #ffffff;
-  border: 1px solid var(--workspace-border);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.2;
@@ -610,8 +699,10 @@ button:disabled {
 .document-drawer-link-button:hover,
 .versions-drawer-form button:hover,
 .share-drawer-form button:hover,
+.share-drawer-row button:hover,
 .document-drawer-section-heading button:hover {
-  border-color: var(--workspace-border-strong);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
 }
 
 .document-drawer-status {
@@ -695,7 +786,8 @@ button:disabled {
 
 .versions-drawer-row:hover,
 .versions-drawer-row-active {
-  color: var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
 }
 
 .versions-drawer-row-main,
@@ -764,14 +856,53 @@ button:disabled {
 }
 
 .share-drawer-role {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 58px !important;
+  padding: 8px !important;
   color: var(--workspace-muted);
-  background: var(--workspace-surface-muted);
+  background: transparent;
+  border-color: transparent;
+  text-align: left;
 }
 
 .share-drawer-role-active {
-  color: #ffffff;
-  background: var(--workspace-action);
-  border-color: var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border-color: var(--workspace-border);
+}
+
+.share-drawer-role-icon,
+.share-drawer-role-check {
+  width: 16px;
+  height: 16px;
+}
+
+.share-drawer-role span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.share-drawer-role strong,
+.share-drawer-role small {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-drawer-role strong {
+  color: var(--workspace-ink);
+  font-size: 13px;
+}
+
+.share-drawer-role small {
+  color: var(--workspace-soft);
+  font-size: 11px;
 }
 
 .share-drawer-created-link code {
@@ -867,8 +998,8 @@ button:disabled {
 .collaboration-name-actions button {
   min-height: 36px;
   color: var(--workspace-ink);
-  background: #ffffff;
-  border: 1px solid var(--workspace-border);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.2;
@@ -876,9 +1007,9 @@ button:disabled {
 }
 
 .collaboration-name-actions button[type='submit'] {
-  color: #ffffff;
-  background: var(--workspace-action);
-  border-color: var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-active);
+  border-color: transparent;
 }
 
 .collaboration-name-error {
@@ -938,7 +1069,7 @@ button:disabled {
 .branch-switcher select:focus,
 .version-action input:focus {
   border-color: var(--workspace-action);
-  box-shadow: 0 0 0 3px rgba(31, 79, 70, 0.12);
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.1);
 }
 
 .branch-switcher-status {
@@ -1046,8 +1177,8 @@ button:disabled {
 
 .version-row:hover,
 .version-row-active {
-  background: var(--workspace-surface-muted);
-  border-left-color: var(--workspace-action);
+  background: var(--workspace-control-bg);
+  border-left-color: var(--workspace-border-strong);
 }
 
 .version-row-main,
@@ -1145,9 +1276,9 @@ button:disabled {
   min-height: 36px;
   box-sizing: border-box;
   padding: 8px 10px;
-  color: #ffffff;
-  background: var(--workspace-action);
-  border: 1px solid var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.2;
@@ -1157,18 +1288,19 @@ button:disabled {
 }
 
 .version-action button:hover {
-  background: var(--workspace-action-hover);
-  border-color: var(--workspace-action-hover);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
 }
 
 .version-action-danger button {
-  background: var(--workspace-danger);
-  border-color: var(--workspace-danger);
+  color: var(--workspace-danger);
+  background: var(--workspace-danger-bg);
+  border-color: transparent;
 }
 
 .version-action-danger button:hover {
-  background: #7f1717;
-  border-color: #7f1717;
+  background: #f7dddd;
+  border-color: transparent;
 }
 
 .version-panel-status {
@@ -1224,7 +1356,7 @@ button:disabled {
 .share-access-form input[type='text']:focus,
 .share-access-form select:focus {
   border-color: var(--workspace-action);
-  box-shadow: 0 0 0 3px rgba(31, 79, 70, 0.12);
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.1);
 }
 
 .share-access-row {
@@ -1252,15 +1384,15 @@ button:disabled {
 
 .share-access-form button,
 .created-secret button {
-  color: #ffffff;
-  background: var(--workspace-action);
-  border: 1px solid var(--workspace-action);
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
 }
 
 .share-access-form button:hover,
 .created-secret button:hover {
-  background: var(--workspace-action-hover);
-  border-color: var(--workspace-action-hover);
+  background: var(--workspace-control-hover);
+  border-color: transparent;
 }
 
 .checkbox-row {

@@ -105,7 +105,7 @@ async function saveAdminToken(page: Page) {
   await page.goto(webUrl);
   await page.getByLabel('Admin token').fill(adminToken);
   await page.getByRole('button', { name: 'Save admin token' }).click();
-  await expect(page.getByRole('status')).toContainText('Admin token saved for this browser session.');
+  await expect(page.getByRole('button', { name: 'Admin settings' })).toHaveAttribute('aria-pressed', 'false');
 }
 
 async function createAccessGrant(

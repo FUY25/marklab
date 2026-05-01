@@ -72,7 +72,7 @@ async function continueWithCollaboratorName(page: Page, name: string) {
   await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toBeVisible();
 }
 
-test('branches from and restores older document versions', async ({ page, request }) => {
+test('restores older document versions', async ({ page, request }) => {
   test.skip(process.env.MARKLAB_REQUIRE_AUTH === 'true', 'Covered by the unauthenticated version UI suite; auth access is covered in access-ui.spec.ts.');
 
   requireRemoteApiReadiness();
@@ -91,7 +91,7 @@ test('branches from and restores older document versions', async ({ page, reques
 
   const versionPanel = page.getByTestId('versions-drawer');
   await expect(versionPanel).toBeVisible();
-  await expect(versionPanel.getByRole('combobox', { name: 'Branch' })).toContainText('main');
+  await expect(versionPanel.getByRole('combobox', { name: 'Branch' })).toHaveCount(0);
   await expect(versionPanel.getByTestId('version-row-2')).toContainText('v2');
   await expect(versionPanel.getByTestId('version-row-2')).toContainText('edit');
   await expect(versionPanel.getByTestId('version-row-1')).toContainText('v1');
@@ -99,16 +99,9 @@ test('branches from and restores older document versions', async ({ page, reques
 
   await versionPanel.getByTestId('version-row-1').click();
   await expect(versionPanel.getByTestId('version-preview')).toContainText('Original paragraph for version one.');
+  await expect(versionPanel.getByLabel('New branch name')).toHaveCount(0);
+  await expect(versionPanel.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
 
-  await versionPanel.getByLabel('New branch name').fill('Version one branch');
-  await versionPanel.getByRole('button', { name: 'Branch from this version' }).click();
-  await expect(page).toHaveURL(/\/docs\/[^/]+\/branches\/(?!br_main$)[^/]+$/u);
-  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Original paragraph for version one.');
-
-  await page.goto(`${webUrl}${originalPath}`);
-  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Edited paragraph for version two.');
-  await page.getByRole('button', { name: 'Versions' }).click();
-  await page.getByTestId('version-row-1').click();
   await page.getByLabel('Type RESTORE to confirm').fill('RESTORE');
   await page.getByRole('button', { name: 'Restore this version' }).click();
 

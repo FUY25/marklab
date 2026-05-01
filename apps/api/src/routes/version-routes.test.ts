@@ -539,30 +539,27 @@ describe('version routes', () => {
     expect(flushBranchMarkdownMirror).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'autosave');
   });
 
-  it('branches from a version through the mounted HTTP app', async () => {
-    const { pool, queries } = createFakePool();
+  it('hides branch-from-version through the mounted HTTP app', async () => {
+    vi.mocked(initializeBranchEditorState).mockClear();
+    const { pool } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
 
-    const response = await request(app)
+    await request(app)
       .post('/api/docs/doc_001/versions/ver_001/branch')
       .send({ name: 'Draft Copy' })
-      .expect(201);
+      .expect(404, { error: 'not_found' });
 
-    expect(response.body).toEqual({ branchId: 'br_draft', headVersionId: 'ver_branch' });
-    expect(initializeBranchEditorState).toHaveBeenCalledWith('# Source\n');
-
-    const branchInsert = queries.find((query) => query.sql.includes('insert into document_branches'));
-    expect(branchInsert?.params).toEqual(['doc_001', 'Draft Copy', 'draft-copy', 'ver_001']);
+    expect(initializeBranchEditorState).not.toHaveBeenCalled();
   });
 
-  it('rejects branch-from-version for branch-scoped access grants', async () => {
+  it('hides branch-from-version before branch-scoped access checks', async () => {
     const { pool } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createBranchScopedAuth('edit') });
 
     await request(app)
       .post('/api/docs/doc_001/versions/ver_001/branch')
       .send({ name: 'Draft Copy' })
-      .expect(403, { error: 'forbidden' });
+      .expect(404, { error: 'not_found' });
   });
 
   it('restores a source version as a rollback version through the live writer path', async () => {

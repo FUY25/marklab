@@ -5,7 +5,6 @@ import {
   type VersionOperation,
   type VersionSummary,
 } from '../lib/api-client';
-import { buildDocumentPath } from '../routes';
 
 interface VersionHistoryPanelProps {
   docId: string;
@@ -38,13 +37,12 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<VersionDetail | null>(null);
-  const [branchName, setBranchName] = useState('');
   const [restoreConfirmation, setRestoreConfirmation] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'status' | 'alert'>('status');
   const [isLoadingVersions, setIsLoadingVersions] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
-  const [busyAction, setBusyAction] = useState<'branch' | 'restore' | null>(null);
+  const [busyAction, setBusyAction] = useState<'restore' | null>(null);
 
   async function refreshVersions(nextSelectedVersionId?: string) {
     setIsLoadingVersions(true);
@@ -60,7 +58,6 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
     setSelectedVersionId(null);
     setSelectedVersion(null);
     setStatus(null);
-    setBranchName('');
     setRestoreConfirmation('');
     setIsLoadingVersions(true);
 
@@ -115,29 +112,6 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
     };
   }, [api, docId, selectedVersionId]);
 
-  async function handleBranchFromVersion(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedVersion) return;
-
-    const normalizedName = branchName.trim();
-    if (!normalizedName) {
-      setStatusKind('alert');
-      setStatus('Branch name is required.');
-      return;
-    }
-
-    setBusyAction('branch');
-    setStatus(null);
-    try {
-      const branch = await api.branchFromVersion(docId, selectedVersion.versionId, normalizedName);
-      window.location.assign(buildDocumentPath(docId, branch.branchId));
-    } catch (error) {
-      setStatusKind('alert');
-      setStatus(error instanceof Error ? error.message : 'Unable to branch from this version.');
-      setBusyAction(null);
-    }
-  }
-
   async function handleRestoreVersion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedVersion || restoreConfirmation !== 'RESTORE') return;
@@ -180,7 +154,7 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
 
       {isOpen ? (
         <div id="version-history-panel-body">
-          <div className="version-list" aria-label="Branch versions">
+          <div className="version-list" aria-label="Document versions">
             {versions.map((version) => (
               <button
                 key={version.versionId}
@@ -200,7 +174,7 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
                 </span>
               </button>
             ))}
-            {!isLoadingVersions && versions.length === 0 ? <p className="version-empty">No versions on this branch.</p> : null}
+            {!isLoadingVersions && versions.length === 0 ? <p className="version-empty">No versions yet.</p> : null}
           </div>
 
           <div className="version-detail">
@@ -214,44 +188,25 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
           </div>
 
           {readOnly ? null : (
-            <>
-              <form className="version-action" onSubmit={handleBranchFromVersion}>
-                <label htmlFor="new-branch-name">New branch name</label>
-                <div className="version-action-row">
-                  <input
-                    id="new-branch-name"
-                    type="text"
-                    value={branchName}
-                    onChange={(event) => setBranchName(event.currentTarget.value)}
-                    disabled={!selectedVersion || busyAction !== null}
-                    autoComplete="off"
-                  />
-                  <button type="submit" disabled={!selectedVersion || busyAction !== null}>
-                    {busyAction === 'branch' ? 'Branching...' : 'Branch from this version'}
-                  </button>
-                </div>
-              </form>
-
-              <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
-                <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
-                <div className="version-action-row">
-                  <input
-                    id="restore-confirmation"
-                    type="text"
-                    value={restoreConfirmation}
-                    onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
-                    disabled={!selectedVersion || busyAction !== null}
-                    autoComplete="off"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
-                  >
-                    {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
-                  </button>
-                </div>
-              </form>
-            </>
+            <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
+              <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
+              <div className="version-action-row">
+                <input
+                  id="restore-confirmation"
+                  type="text"
+                  value={restoreConfirmation}
+                  onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
+                  disabled={!selectedVersion || busyAction !== null}
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
+                >
+                  {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
+                </button>
+              </div>
+            </form>
           )}
         </div>
       ) : null}

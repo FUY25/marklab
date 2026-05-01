@@ -41,7 +41,7 @@ function extractDocumentIds(url: string): { docId: string; branchId: string } {
 async function saveAdminToken(page: Page) {
   await page.getByLabel('Admin token').fill(adminToken);
   await page.getByRole('button', { name: 'Save admin token' }).click();
-  await expect(page.getByRole('status')).toContainText('Admin token saved for this browser session.');
+  await expect(page.getByRole('button', { name: 'Admin settings' })).toHaveAttribute('aria-pressed', 'false');
 }
 
 async function continueWithCollaboratorName(page: Page, name: string) {
@@ -52,10 +52,10 @@ async function continueWithCollaboratorName(page: Page, name: string) {
   await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toBeVisible();
 }
 
-async function expectRecentDocument(page: Page, title: string, branchId: string) {
+async function expectRecentDocument(page: Page, title: string, docId: string) {
   const recentDocuments = page.getByRole('region', { name: 'Recent documents' });
   await expect(recentDocuments).toContainText(title);
-  await expect(recentDocuments).toContainText(branchId);
+  await expect(recentDocuments).toContainText(docId);
 }
 
 test('creates imports opens and exports cloud Markdown documents', async ({ page }) => {
@@ -72,17 +72,15 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await expect(page.getByTestId('home-page')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'MarkLab' })).toBeVisible();
 
-  await page.getByLabel('Document title').fill('Lifecycle Blank');
-  await page.getByRole('button', { name: 'New Markdown Doc' }).click();
+  await page.getByRole('button', { name: 'New document' }).click();
   await expect(page).toHaveURL(/\/docs\/[^/]+\/branches\/[^/]+$/u);
   const blankDocument = extractDocumentIds(page.url());
   await continueWithCollaboratorName(page, 'Owner');
 
   await page.goto(webUrl);
-  await expectRecentDocument(page, 'Lifecycle Blank', blankDocument.branchId);
+  await expectRecentDocument(page, 'Untitled document', blankDocument.docId);
 
-  await page.getByLabel('Document title').fill('Lifecycle Import');
-  await page.getByLabel('Import Markdown').setInputFiles({
+  await page.getByLabel('Import Markdown file').setInputFiles({
     name: 'lifecycle-import.md',
     mimeType: 'text/markdown',
     buffer: Buffer.from('# Imported Lifecycle\n\nImported body from fixture.\n'),
@@ -102,7 +100,7 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await expect(page.getByTestId('share-access-panel')).toHaveCount(0);
   await page.getByRole('button', { name: 'Versions' }).click();
   const versionPanel = page.getByTestId('versions-drawer');
-  await expect(versionPanel.getByRole('combobox', { name: 'Branch' })).toContainText('main');
+  await expect(versionPanel.getByRole('combobox', { name: 'Branch' })).toHaveCount(0);
   await expect(versionPanel.getByTestId('version-row-1')).toContainText('import');
   await expect(versionPanel.getByTestId('version-preview')).toContainText('Imported Lifecycle');
   await page.getByRole('button', { name: 'Share' }).click();
@@ -142,34 +140,31 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   const downloadPath = await download.path();
   if (!downloadPath) throw new Error('download path unavailable');
   const exportedMarkdown = await readFile(downloadPath, 'utf8');
-  expect(exportedMarkdown).toContain('# Imported Lifecycle');
   expect(exportedMarkdown).toContain('Imported body from fixture.');
+  expect(exportedMarkdown).toContain('Admin owner edit.');
 
   await page.goto(webUrl);
-  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
+  await expectRecentDocument(page, 'lifecycle-import', importedDocument.docId);
 
-  await page.getByLabel('Document id').fill(importedDocument.docId);
-  await page.getByLabel('Branch id').fill(importedDocument.branchId);
-  await page.getByRole('button', { name: 'Open' }).click();
+  await page.getByRole('button', { name: /lifecycle-import/u }).click();
   await expect(page).toHaveURL(
     `/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,
   );
   await page.goto(webUrl);
-  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
+  await expectRecentDocument(page, 'lifecycle-import', importedDocument.docId);
 
   await page.evaluate(() => localStorage.clear());
   await page.goto(
     `${webUrl}/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,
   );
   await continueWithCollaboratorName(page, 'Owner');
-  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Imported Lifecycle');
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Imported body from fixture.');
   await page.goto(webUrl);
-  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
+  await expectRecentDocument(page, 'lifecycle-import', importedDocument.docId);
 
-  await page.goto(webUrl);
-  await page.getByLabel('Document id').fill(blankDocument.docId);
-  await page.getByLabel('Branch id').fill(blankDocument.branchId);
-  await page.getByRole('button', { name: 'Open' }).click();
+  await page.goto(
+    `${webUrl}/docs/${encodeURIComponent(blankDocument.docId)}/branches/${encodeURIComponent(blankDocument.branchId)}`,
+  );
 
   await expect(page).toHaveURL(
     `/docs/${encodeURIComponent(blankDocument.docId)}/branches/${encodeURIComponent(blankDocument.branchId)}`,
@@ -177,6 +172,6 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await continueWithCollaboratorName(page, 'Owner');
   await expect(page.getByTestId('milkdown-editor')).toBeVisible();
   await page.goto(webUrl);
-  await expectRecentDocument(page, 'Lifecycle Blank', blankDocument.branchId);
+  await expectRecentDocument(page, 'Untitled document', blankDocument.docId);
   expect(importedDocument.docId).not.toEqual(blankDocument.docId);
 });

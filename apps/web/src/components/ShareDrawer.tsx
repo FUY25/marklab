@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Check, Eye, Pencil } from 'lucide-react';
 import { MarklabWebApi } from '../lib/api-client';
 import { buildDocumentPath } from '../routes';
 import { DocumentDrawer } from './DocumentDrawer';
@@ -277,18 +278,30 @@ export function ShareDrawer({
                 <button
                   type="button"
                   className={role === 'view' ? 'share-drawer-role share-drawer-role-active' : 'share-drawer-role'}
+                  aria-label="View only link"
                   aria-pressed={role === 'view'}
                   onClick={() => setRole('view')}
                 >
-                  View
+                  <Eye className="share-drawer-role-icon" aria-hidden="true" />
+                  <span>
+                    <strong>View</strong>
+                    <small>Read only</small>
+                  </span>
+                  {role === 'view' ? <Check className="share-drawer-role-check" aria-hidden="true" /> : null}
                 </button>
                 <button
                   type="button"
                   className={role === 'edit' ? 'share-drawer-role share-drawer-role-active' : 'share-drawer-role'}
+                  aria-label="Edit link"
                   aria-pressed={role === 'edit'}
                   onClick={() => setRole('edit')}
                 >
-                  Edit
+                  <Pencil className="share-drawer-role-icon" aria-hidden="true" />
+                  <span>
+                    <strong>Edit</strong>
+                    <small>Can restore</small>
+                  </span>
+                  {role === 'edit' ? <Check className="share-drawer-role-check" aria-hidden="true" /> : null}
                 </button>
               </div>
               <button type="submit" disabled={busyAction !== null}>

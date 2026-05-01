@@ -6,7 +6,7 @@ import { ReadOnlyMarkdownView } from '../components/ReadOnlyMarkdownView';
 import { ShareDrawer } from '../components/ShareDrawer';
 import { VersionsDrawer } from '../components/VersionsDrawer';
 import { readWebConfig } from '../config';
-import { type BranchSummaryResponse, MarklabWebApi, type ReadDocumentResponse } from '../lib/api-client';
+import { type BranchSummaryResponse, type CreatedDocument, MarklabWebApi, type ReadDocumentResponse } from '../lib/api-client';
 import {
   readOrCreateAccessClientId,
   readStoredCollaboratorName,
@@ -43,17 +43,21 @@ function readableError(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function branchLabel(summary: BranchSummaryResponse | null, fallback: string): string {
-  if (!summary) return fallback;
-  return summary.branchSlug || summary.branchName || summary.branchId;
-}
-
 function collaboratorScope(docId: string, access: BranchSummaryResponse['access']): string {
   return access.grantId ? `grant.${access.grantId}` : `owner.${docId}`;
 }
 
 function ownerGuestName(): string {
   return 'Guest';
+}
+
+function rememberAndOpen(document: CreatedDocument, title: string) {
+  rememberRecentDocument({
+    docId: document.docId,
+    branchId: document.branchId,
+    title,
+  });
+  window.location.assign(buildDocumentPath(document.docId, document.branchId));
 }
 
 interface CollaborationNameDialogProps {
@@ -334,11 +338,34 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
     setSaveStatusKind(kind);
   }, []);
 
-  const handleNavigateToBranch = useCallback(
-    (nextBranchId: string) => {
-      window.location.assign(buildDocumentPath(docId, nextBranchId));
+  const handleCreateDocument = useCallback(async () => {
+    const title = 'Untitled document';
+    setSaveStatusKind('status');
+    setSaveStatus('Creating document');
+    try {
+      const document = await api.createBlankDoc(title);
+      rememberAndOpen(document, title);
+    } catch (error) {
+      setSaveStatusKind('alert');
+      setSaveStatus(readableError(error, 'Unable to create document.'));
+    }
+  }, [api]);
+
+  const handleImportMarkdown = useCallback(
+    async (file: File) => {
+      const title = file.name.replace(/\.md$/iu, '').trim() || 'Imported document';
+      setSaveStatusKind('status');
+      setSaveStatus('Importing Markdown');
+      try {
+        const markdown = await file.text();
+        const document = await api.importMarkdown(title, markdown);
+        rememberAndOpen(document, title);
+      } catch (error) {
+        setSaveStatusKind('alert');
+        setSaveStatus(readableError(error, 'Unable to import Markdown.'));
+      }
     },
-    [docId],
+    [api],
   );
 
   const handleMarkdownChange = useCallback(
@@ -368,7 +395,6 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
   const isReadOnly = accessMode === 'read-only';
   const isEditableReady = accessMode === 'editable' && identityStatus === 'ready' && Boolean(identity);
   const canShowActions = isEditableReady && !isReadOnly;
-  const branchScoped = Boolean(branchSummary?.access.grantId);
 
   return (
     <main className="remote-document-shell" data-testid="remote-document-page">
@@ -401,6 +427,8 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
         hidden={!canShowActions}
         activeDrawer={activeDrawer}
         onToggleDrawer={(drawer) => setActiveDrawer((current) => (current === drawer ? null : drawer))}
+        onCreateDocument={documentToken ? undefined : () => void handleCreateDocument()}
+        onImportMarkdown={documentToken ? undefined : (file) => void handleImportMarkdown(file)}
       />
 
       {canShowActions ? (
@@ -410,11 +438,8 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
             branchId={branchId}
             open={activeDrawer === 'versions'}
             onClose={() => setActiveDrawer(null)}
-            currentBranchLabel={branchLabel(branchSummary, branchId)}
-            canSwitchBranches={branchSummary?.access.canSwitchBranches ?? true}
-            canBranchFromVersion={!branchScoped}
+            currentBranchLabel="Current document"
             canRestoreVersion={branchSummary?.access.canWrite ?? false}
-            onNavigateToBranch={handleNavigateToBranch}
             onSaveStatusChange={handleSaveStatusChange}
           />
           <ShareDrawer

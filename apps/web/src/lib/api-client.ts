@@ -57,11 +57,6 @@ export interface VersionsResponse {
   versions: VersionSummary[];
 }
 
-export interface BranchFromVersionResponse {
-  branchId: string;
-  headVersionId: string;
-}
-
 export interface RestoreVersionResponse {
   versionId: string;
   versionNumber: number;
@@ -357,15 +352,6 @@ export class MarklabWebApi {
       headers: this.documentHeaders(),
     });
     return requireJsonResponse<VersionDetail>(response, 'request');
-  }
-
-  async branchFromVersion(docId: string, versionId: string, name: string): Promise<BranchFromVersionResponse> {
-    const response = await fetch(`${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/versions/${encodeURIComponent(versionId)}/branch`, {
-      method: 'POST',
-      headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name }),
-    });
-    return requireJsonResponse<BranchFromVersionResponse>(response, 'request');
   }
 
   async restoreVersion(docId: string, branchId: string, versionId: string): Promise<RestoreVersionResponse> {

@@ -8,12 +8,7 @@ import { restoreVersionToBranchState } from '../services/editor-state';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 import type { VerifiedDocumentAccess } from '../services/access-control';
-import { branchFromVersion, getDocumentSummary, listBranches, listVersions, showVersion } from '../services/version-service';
-
-const branchSchema = z.object({
-  name: z.string().min(1),
-  slug: z.string().min(1).optional(),
-});
+import { getDocumentSummary, listBranches, listVersions, showVersion } from '../services/version-service';
 
 const restoreSchema = z.object({
   versionId: z.string().min(1),
@@ -23,14 +18,6 @@ function requiredParam(req: Request, name: string): string {
   const value = req.params[name];
   if (typeof value !== 'string' || !value) throw new Error(`missing_route_param:${name}`);
   return value;
-}
-
-function slugifyBranchName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, '-')
-    .replace(/^-|-$/gu, '')
-    .slice(0, 80) || 'branch';
 }
 
 function authRequired(): boolean {
@@ -124,7 +111,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
           canWrite,
           canManageAccess: canWrite,
           canManageVersions: canWrite,
-          canSwitchBranches: !isBranchScopedAccess(readAccess),
+          canSwitchBranches: false,
           actorType: readAccess?.actorType ?? 'user',
           ...(readAccess?.grantId ? { grantId: readAccess.grantId } : {}),
           ...(readAccess?.role ? { role: readAccess.role } : {}),
@@ -194,25 +181,8 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
     }
   });
 
-  router.post('/docs/:docId/versions/:versionId/branch', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const docId = requiredParam(req, 'docId');
-      const versionId = requiredParam(req, 'versionId');
-      const sourceVersion = await showVersion(pool, docId, versionId);
-      const access = await options.auth?.requireDocumentAccess(req, docId, sourceVersion.branchId, 'write');
-      if (isBranchScopedAccess(access)) throw new Error('forbidden');
-      const body = branchSchema.parse(req.body);
-      const result = await branchFromVersion(
-        pool,
-        docId,
-        versionId,
-        body.name,
-        body.slug ?? slugifyBranchName(body.name),
-      );
-      res.status(201).json({ branchId: result.branchId, headVersionId: result.versionId });
-    } catch (error) {
-      next(error);
-    }
+  router.post('/docs/:docId/versions/:versionId/branch', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'not_found' });
   });
 
   router.post('/docs/:docId/branches/:branchId/restore', async (req: Request, res: Response, next: NextFunction) => {

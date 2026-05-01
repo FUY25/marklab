@@ -1,4 +1,5 @@
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { KeyRound, Plus, Upload, X } from 'lucide-react';
 import { MarklabWebApi, type CreatedDocument } from '../lib/api-client';
 import { loadRecentDocuments, rememberRecentDocument, type RecentDocument } from '../lib/recent-documents';
 import { clearSessionAdminToken, readSessionAdminToken, writeSessionAdminToken } from '../lib/session-auth';
@@ -19,31 +20,33 @@ function rememberAndOpen(document: CreatedDocument, title: string) {
 
 export function HomePage() {
   const api = useMemo(() => new MarklabWebApi(), []);
-  const [title, setTitle] = useState('Untitled document');
-  const [docId, setDocId] = useState('');
-  const [branchId, setBranchId] = useState('');
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [adminToken, setAdminToken] = useState(() => readSessionAdminToken() ?? '');
   const [adminTokenSaved, setAdminTokenSaved] = useState(() => Boolean(readSessionAdminToken()));
+  const [isAdminTokenOpen, setIsAdminTokenOpen] = useState(() => !readSessionAdminToken());
   const [adminStatus, setAdminStatus] = useState<string | null>(null);
-  const [recentDocuments, setRecentDocuments] = useState<RecentDocument[]>(() => loadRecentDocuments());
+  const [recentDocuments] = useState<RecentDocument[]>(() => loadRecentDocuments());
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<'create' | 'import' | null>(null);
 
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const normalizedTitle = title.trim();
-    if (!normalizedTitle) {
-      setError('Document title is required.');
-      return;
+  function readableActionError(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback;
+    if (message.includes(':403:')) {
+      setIsAdminTokenOpen(true);
+      return 'Admin token required. Open the key control and save a token.';
     }
+    return message;
+  }
 
+  async function handleCreate() {
+    const title = 'Untitled document';
     setBusyAction('create');
     setError(null);
     try {
-      const document = await api.createBlankDoc(normalizedTitle);
-      rememberAndOpen(document, normalizedTitle);
+      const document = await api.createBlankDoc(title);
+      rememberAndOpen(document, title);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Unable to create document.');
+      setError(readableActionError(createError, 'Unable to create document.'));
       setBusyAction(null);
     }
   }
@@ -51,8 +54,7 @@ export function HomePage() {
   async function handleImport(file: File | undefined) {
     if (!file) return;
 
-    const normalizedTitle = title.trim() || file.name.replace(/\.md$/iu, '') || 'Imported document';
-    setTitle(normalizedTitle);
+    const normalizedTitle = file.name.replace(/\.md$/iu, '').trim() || 'Imported document';
     setBusyAction('import');
     setError(null);
 
@@ -61,31 +63,11 @@ export function HomePage() {
       const document = await api.importMarkdown(normalizedTitle, markdown);
       rememberAndOpen(document, normalizedTitle);
     } catch (importError) {
-      setError(importError instanceof Error ? importError.message : 'Unable to import Markdown.');
+      setError(readableActionError(importError, 'Unable to import Markdown.'));
       setBusyAction(null);
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
     }
-  }
-
-  function handleOpen(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const normalizedDocId = docId.trim();
-    const normalizedBranchId = branchId.trim();
-    if (!normalizedDocId || !normalizedBranchId) {
-      setError('Document id and Branch id are required.');
-      return;
-    }
-
-    setError(null);
-    const existingRecent = loadRecentDocuments().find(
-      (document) => document.docId === normalizedDocId && document.branchId === normalizedBranchId,
-    );
-    const nextRecent = rememberRecentDocument({
-      docId: normalizedDocId,
-      branchId: normalizedBranchId,
-      title: existingRecent?.title ?? normalizedDocId,
-    });
-    setRecentDocuments(nextRecent);
-    openDocument(normalizedDocId, normalizedBranchId);
   }
 
   function handleSaveAdminToken(event: FormEvent<HTMLFormElement>) {
@@ -103,6 +85,7 @@ export function HomePage() {
     setAdminToken(normalizedToken);
     setAdminTokenSaved(true);
     setAdminStatus('Admin token saved for this browser session.');
+    setIsAdminTokenOpen(false);
   }
 
   function handleClearAdminToken() {
@@ -113,13 +96,55 @@ export function HomePage() {
   }
 
   return (
-    <main className="workspace-shell" data-testid="home-page">
-      <header className="workspace-header">
+    <main className="workspace-shell workspace-shell-simple" data-testid="home-page">
+      <header className="workspace-header workspace-header-simple">
         <div>
           <p className="workspace-kicker">Cloud Markdown workspace</p>
           <h1>MarkLab</h1>
         </div>
       </header>
+
+      <nav className="home-action-rail" aria-label="Workspace actions">
+        <button
+          type="button"
+          className="home-action-button"
+          aria-label="New document"
+          title="New document"
+          disabled={busyAction !== null}
+          onClick={() => void handleCreate()}
+        >
+          <Plus className="home-action-icon" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="home-action-button"
+          aria-label="Import Markdown"
+          title="Import Markdown"
+          disabled={busyAction !== null}
+          onClick={() => importInputRef.current?.click()}
+        >
+          <Upload className="home-action-icon" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={isAdminTokenOpen ? 'home-action-button home-action-button-active' : 'home-action-button'}
+          aria-label="Admin settings"
+          aria-pressed={isAdminTokenOpen}
+          title="Admin settings"
+          onClick={() => setIsAdminTokenOpen((current) => !current)}
+        >
+          <KeyRound className="home-action-icon" aria-hidden="true" />
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".md,text/markdown,text/plain"
+          aria-label="Import Markdown file"
+          className="home-hidden-file-input"
+          disabled={busyAction !== null}
+          onChange={(event) => void handleImport(event.currentTarget.files?.[0])}
+        />
+      </nav>
 
       {error ? (
         <div className="workspace-alert" role="alert">
@@ -127,86 +152,41 @@ export function HomePage() {
         </div>
       ) : null}
 
-      <form className="admin-token-panel" aria-label="Admin session token" onSubmit={handleSaveAdminToken}>
-        <div className="field-stack">
-          <label htmlFor="admin-token">Admin token</label>
-          <input
-            id="admin-token"
-            type="password"
-            value={adminToken}
-            onChange={(event) => {
-              setAdminToken(event.currentTarget.value);
-              setAdminStatus(null);
-            }}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </div>
-        <div className="action-row">
-          <button type="submit">Save admin token</button>
-          <button type="button" className="button-secondary" onClick={handleClearAdminToken} disabled={!adminTokenSaved && !adminToken}>
-            Clear
-          </button>
-          <span role="status">{adminStatus}</span>
-        </div>
-      </form>
-
-      <section className="workspace-grid" aria-label="Document actions">
-        <form className="workspace-panel workspace-panel-primary" onSubmit={handleCreate}>
+      {isAdminTokenOpen ? (
+        <form className="admin-token-panel admin-token-panel-compact" aria-label="Admin session token" onSubmit={handleSaveAdminToken}>
+          <div className="document-drawer-section-heading">
+            <span>Admin token</span>
+            <button type="button" aria-label="Close admin settings" title="Close admin settings" onClick={() => setIsAdminTokenOpen(false)}>
+              <X className="document-action-rail-icon" aria-hidden="true" />
+            </button>
+          </div>
           <div className="field-stack">
-            <label htmlFor="document-title">Document title</label>
+            <label htmlFor="admin-token">Admin token</label>
             <input
-              id="document-title"
-              name="document-title"
-              type="text"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              id="admin-token"
+              type="password"
+              value={adminToken}
+              onChange={(event) => {
+                setAdminToken(event.currentTarget.value);
+                setAdminStatus(null);
+              }}
               autoComplete="off"
+              spellCheck={false}
             />
           </div>
           <div className="action-row">
             <button type="submit" disabled={busyAction !== null}>
-              {busyAction === 'create' ? 'Creating...' : 'New Markdown Doc'}
+              Save admin token
             </button>
-            <label className="file-button">
-              Import Markdown
-              <input
-                type="file"
-                accept=".md,text/markdown,text/plain"
-                aria-label="Import Markdown"
-                disabled={busyAction !== null}
-                onChange={(event) => void handleImport(event.currentTarget.files?.[0])}
-              />
-            </label>
+            <button type="button" className="button-secondary" onClick={handleClearAdminToken} disabled={!adminTokenSaved && !adminToken}>
+              Clear
+            </button>
+            <span role="status">{adminStatus}</span>
           </div>
         </form>
+      ) : null}
 
-        <form className="workspace-panel" aria-label="Open document" onSubmit={handleOpen}>
-          <div className="field-stack">
-            <label htmlFor="document-id">Document id</label>
-            <input
-              id="document-id"
-              type="text"
-              value={docId}
-              onChange={(event) => setDocId(event.target.value)}
-              autoComplete="off"
-            />
-          </div>
-          <div className="field-stack">
-            <label htmlFor="branch-id">Branch id</label>
-            <input
-              id="branch-id"
-              type="text"
-              value={branchId}
-              onChange={(event) => setBranchId(event.target.value)}
-              autoComplete="off"
-            />
-          </div>
-          <button type="submit">Open</button>
-        </form>
-      </section>
-
-      <section className="recent-documents" aria-label="Recent documents">
+      <section className="recent-documents recent-documents-simple" aria-label="Recent documents">
         <div className="section-heading">
           <h2>Recent documents</h2>
           <span>{recentDocuments.length}</span>
@@ -223,7 +203,7 @@ export function HomePage() {
                   }}
                 >
                   <span>{document.title}</span>
-                  <code>{document.branchId}</code>
+                  <code>{document.docId}</code>
                 </button>
               </li>
             ))}
