@@ -4,7 +4,7 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createUnavailableLiveMarkdownWriter, type LiveMarkdownTransaction, type LiveMarkdownWriter } from './live-writer';
-import { applyMarkdownToBranchState } from './editor-state';
+import { applyMarkdownToBranchState, restoreVersionToBranchState } from './editor-state';
 
 interface CapturedQuery {
   sql: string;
@@ -12,6 +12,8 @@ interface CapturedQuery {
 }
 
 interface FakePoolOptions {
+  sourceDocId?: string;
+  sourceBranchId?: string;
   currentMarkdown?: string;
   currentHash?: string;
   headVersionId?: string;
@@ -44,6 +46,20 @@ function createFakePool(options: FakePoolOptions = {}) {
             head_version_id: options.headVersionId ?? 'ver_001',
             head_hash: options.headHash ?? options.currentHash ?? 'sha256:head',
             yjs_state_fingerprint: stateFingerprint,
+          } as Row,
+        ],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from document_versions') && sql.includes('markdown_snapshot') && sql.includes('where id = $1')) {
+      return {
+        rows: [
+          {
+            id: 'ver_source',
+            doc_id: options.sourceDocId ?? 'doc_001',
+            branch_id: options.sourceBranchId ?? 'br_main',
+            markdown_snapshot: '# Source snapshot\n',
           } as Row,
         ],
         rowCount: 1,
@@ -219,6 +235,25 @@ describe('applyMarkdownToBranchState', () => {
       'rollback',
     ]);
     expect(result).toMatchObject({ versionId: 'ver_002', versionNumber: 2, hash: expectedHash });
+  });
+
+  it('rejects rollback source versions from a different branch before using the live writer', async () => {
+    const { pool, queries } = createFakePool({ sourceBranchId: 'br_other' });
+    const liveWriter = createCapturingLiveWriter('# Restored snapshot\n', createValidYjsState(), 'sha256:head');
+
+    await expect(
+      restoreVersionToBranchState({
+        pool,
+        liveWriter,
+        docId: 'doc_001',
+        branchId: 'br_main',
+        versionId: 'ver_source',
+      }),
+    ).rejects.toThrow('source_version_not_found');
+
+    expect(liveWriter.transactions).toEqual([]);
+    expect(queries.some((query) => query.sql.includes('update document_branch_states'))).toBe(false);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
   });
 
   it('creates a pre-agent checkpoint before a full write only when the live hash matches the submitted base hash', async () => {

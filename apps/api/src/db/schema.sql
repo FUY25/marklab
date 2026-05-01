@@ -91,3 +91,34 @@ create table if not exists share_links (
   revoked_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+create table if not exists access_grants (
+  id uuid primary key default gen_random_uuid(),
+  doc_id uuid not null references documents(id) on delete cascade,
+  branch_id uuid not null references document_branches(id) on delete cascade,
+  token_hash text not null unique,
+  role text not null check (role in ('view', 'edit')),
+  expires_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists access_sessions (
+  id uuid primary key default gen_random_uuid(),
+  grant_id uuid not null references access_grants(id) on delete cascade,
+  client_id text not null,
+  client_kind text not null default 'browser' check (client_kind in ('browser', 'agent', 'api')),
+  display_name text not null,
+  color text not null,
+  last_branch_id uuid references document_branches(id) on delete set null,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (grant_id, client_id)
+);
+
+create index if not exists access_grants_doc_active_idx
+  on access_grants (doc_id, branch_id, created_at desc)
+  where revoked_at is null;
+
+create index if not exists access_sessions_grant_seen_idx
+  on access_sessions (grant_id, last_seen_at desc);

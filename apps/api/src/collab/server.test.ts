@@ -63,6 +63,14 @@ function createPersistencePool(
       docId: string;
       branchId: string | null;
       role: 'view' | 'edit';
+      revokedAt?: Date | string | null;
+    }>;
+    accessGrants?: Array<{
+      tokenHash: string;
+      docId: string;
+      branchId: string;
+      role: 'view' | 'edit';
+      revokedAt?: Date | string | null;
     }>;
   } = {},
 ) {
@@ -97,7 +105,22 @@ function createPersistencePool(
           .map((row) => ({
             role: row.role,
             expires_at: null,
-            revoked_at: null,
+            revoked_at: row.revokedAt ?? null,
+          })) as Row[],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+      const [tokenHash, docId, branchId] = params ?? [];
+      return {
+        rows: (options.accessGrants ?? [])
+          .filter((row) => row.tokenHash === tokenHash && row.docId === docId && row.branchId === branchId)
+          .map((row) => ({
+            id: 'agr_1',
+            role: row.role,
+            expires_at: null,
+            revoked_at: row.revokedAt ?? null,
           })) as Row[],
         rowCount: 1,
       };
@@ -394,6 +417,84 @@ describe('createCollabServer persistence hooks', () => {
           token: shareToken,
         }),
       ).resolves.toBeUndefined();
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('accepts edit access grants only for the shared branch when auth is required', async () => {
+    enableAuthMode();
+    const accessToken = 'ml_access_edit';
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState, {
+      accessGrants: [
+        {
+          tokenHash: sha256Hex(accessToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'edit',
+        },
+      ],
+    });
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: accessToken,
+        }),
+      ).resolves.toBeUndefined();
+
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_other'),
+          token: accessToken,
+        }),
+      ).rejects.toThrow('forbidden');
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('rejects view or revoked access grants for editable collab when auth is required', async () => {
+    enableAuthMode();
+    const viewToken = 'ml_access_view';
+    const revokedToken = 'ml_access_revoked';
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState, {
+      accessGrants: [
+        {
+          tokenHash: sha256Hex(viewToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'view',
+        },
+        {
+          tokenHash: sha256Hex(revokedToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'edit',
+          revokedAt: new Date(),
+        },
+      ],
+    });
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: viewToken,
+        }),
+      ).rejects.toThrow('forbidden');
+
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: revokedToken,
+        }),
+      ).rejects.toThrow('forbidden');
     } finally {
       await collab.server.destroy?.();
     }

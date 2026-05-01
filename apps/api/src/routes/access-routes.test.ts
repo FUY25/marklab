@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
+import { toRoomName } from '../collab/persistence';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp } from '../http/app';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
@@ -22,6 +23,19 @@ interface TokenRecord {
   expires_at: Date | string | null;
   revoked_at: Date | string | null;
   created_at: Date | string;
+  branch_name?: string;
+}
+
+interface SessionRecord {
+  id: string;
+  grant_id: string;
+  client_id: string;
+  client_kind: 'browser' | 'agent' | 'api';
+  display_name: string;
+  color: string;
+  last_branch_id: string | null;
+  created_at: Date | string;
+  last_seen_at: Date | string;
 }
 
 const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
@@ -41,8 +55,12 @@ function createAccessRoutePool() {
   const queries: CapturedQuery[] = [];
   const agentTokens: TokenRecord[] = [];
   const shareLinks: TokenRecord[] = [];
+  const accessGrants: TokenRecord[] = [];
+  const accessSessions: SessionRecord[] = [];
   let nextAgentTokenId = 1;
   let nextShareLinkId = 1;
+  let nextAccessGrantId = 1;
+  let nextAccessSessionId = 1;
 
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
@@ -124,6 +142,101 @@ function createAccessRoutePool() {
       return { rows: [{ id: row.id } as Row], rowCount: 1 };
     }
 
+    if (sql.includes('insert into access_grants')) {
+      const row: TokenRecord = {
+        id: `agr_${nextAccessGrantId++}`,
+        doc_id: String(params?.[0]),
+        branch_id: String(params?.[1]),
+        token_hash: String(params?.[2]),
+        role: params?.[3] as 'view' | 'edit',
+        expires_at: (params?.[4] as Date | string | null | undefined) ?? null,
+        revoked_at: null,
+        created_at: new Date('2026-05-01T12:00:00Z'),
+        branch_name: 'main',
+      };
+      accessGrants.push(row);
+      return { rows: [row as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('from document_branches') && sql.includes('is_archived = false')) {
+      if (params?.[0] === 'br_missing') return { rows: [], rowCount: 0 };
+      return { rows: [{ id: params?.[0] } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('from access_grants') && sql.includes('where doc_id = $1')) {
+      const rows = accessGrants
+        .filter((row) => row.doc_id === params?.[0] && row.branch_id === params?.[1] && !row.revoked_at)
+        .map((row) => ({
+          ...row,
+          sessions: accessSessions.filter((session) => session.grant_id === row.id),
+        }));
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+
+    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+      const rows = accessGrants.filter(
+        (row) => row.token_hash === params?.[0] && row.doc_id === params?.[1] && row.branch_id === params?.[2],
+      );
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+
+    if (sql.includes('select id') && sql.includes('from access_grants') && sql.includes('for update')) {
+      const row = accessGrants.find((grant) => grant.id === params?.[0] && grant.doc_id === params?.[1] && grant.branch_id === params?.[2]);
+      return { rows: (row ? [row] : []) as Row[], rowCount: row ? 1 : 0 };
+    }
+
+    if (sql.includes('select doc_id, branch_id') && sql.includes('from access_grants')) {
+      const row = accessGrants.find((candidate) => candidate.id === params?.[0] && !candidate.revoked_at);
+      return { rows: (row ? [row] : []) as Row[], rowCount: row ? 1 : 0 };
+    }
+
+    if (sql.includes('update access_grants')) {
+      const row = accessGrants.find((candidate) => candidate.id === params?.[0] && !candidate.revoked_at);
+      if (!row) return { rows: [], rowCount: 0 };
+      row.revoked_at = new Date('2026-05-01T12:05:00Z');
+      return { rows: [{ id: row.id } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('from access_sessions') && sql.includes('grant_id = $1') && sql.includes('client_id = $2')) {
+      const row = accessSessions.find((session) => session.grant_id === params?.[0] && session.client_id === params?.[1]);
+      return { rows: (row ? [row] : []) as Row[], rowCount: row ? 1 : 0 };
+    }
+
+    if (sql.includes('from access_sessions') && sql.includes('display_name like')) {
+      const rows = accessSessions.filter((session) => session.grant_id === params?.[0] && session.display_name.startsWith('Guest '));
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+
+    if (sql.includes('insert into access_sessions')) {
+      const row: SessionRecord = {
+        id: `ses_${nextAccessSessionId++}`,
+        grant_id: String(params?.[0]),
+        client_id: String(params?.[1]),
+        client_kind: params?.[2] as 'browser' | 'agent' | 'api',
+        display_name: String(params?.[3]),
+        color: String(params?.[4]),
+        last_branch_id: String(params?.[5]),
+        created_at: new Date('2026-05-01T12:01:00Z'),
+        last_seen_at: new Date('2026-05-01T12:01:00Z'),
+      };
+      accessSessions.push(row);
+      return { rows: [row as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('update access_sessions')) {
+      const row = accessSessions.find((session) => session.grant_id === params?.[0] && session.client_id === params?.[1]);
+      if (!row) return { rows: [], rowCount: 0 };
+      const nextName = String(params?.[3] ?? '').trim();
+      if (nextName) row.display_name = nextName;
+      row.last_branch_id = String(params?.[2]);
+      row.last_seen_at = new Date('2026-05-01T12:06:00Z');
+      return { rows: [row as Row], rowCount: 1 };
+    }
+
+    if (sql === 'begin' || sql === 'commit' || sql === 'rollback') {
+      return { rows: [], rowCount: 0 };
+    }
+
     return { rows: [], rowCount: 0 };
   };
 
@@ -137,7 +250,7 @@ function createAccessRoutePool() {
     connect: async () => client,
   };
 
-  return { pool, queries, agentTokens, shareLinks };
+  return { pool, queries, agentTokens, shareLinks, accessGrants, accessSessions };
 }
 
 describe('access routes', () => {
@@ -299,5 +412,219 @@ describe('access routes', () => {
     expect(shareLinks[0]?.revoked_at).toBeTruthy();
 
     await request(app).delete('/api/share-links/missing').set(admin).expect(404, { error: 'share_link_not_found' });
+  });
+
+  it('creates, lists without raw secret, and revokes unified access grants', async () => {
+    requireAuth('admin-secret');
+    const { pool, accessGrants } = createAccessRoutePool();
+    const closedRooms: string[] = [];
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      closeCollabDocumentConnections(roomName) {
+        closedRooms.push(roomName);
+      },
+    });
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const createResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'edit' })
+      .expect(201);
+
+    expect(createResponse.body).toMatchObject({
+      grantId: 'agr_1',
+      token: expect.stringMatching(/^ml_access_/u),
+      role: 'edit',
+      branchId: 'br_main',
+      expiresAt: null,
+      createdAt: '2026-05-01T12:00:00.000Z',
+    });
+    expect(accessGrants[0]?.token_hash).toBe(hashToken(createResponse.body.token));
+
+    const listResponse = await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .expect(200);
+
+    expect(listResponse.body.grants).toEqual([
+      {
+        grantId: 'agr_1',
+        role: 'edit',
+        branchId: 'br_main',
+        branchName: 'main',
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: '2026-05-01T12:00:00.000Z',
+        sessions: [],
+      },
+    ]);
+    expect(JSON.stringify(listResponse.body)).not.toContain(createResponse.body.token);
+
+    await request(app).delete('/api/access-grants/agr_1').set(admin).expect(204);
+    expect(accessGrants[0]?.revoked_at).toBeTruthy();
+    expect(closedRooms).toEqual([toRoomName('doc_001', 'br_main')]);
+
+    await request(app).delete('/api/access-grants/missing').set(admin).expect(404, { error: 'access_grant_not_found' });
+  });
+
+  it('uses ml_access grants for exact branch access and blocks revoked grants', async () => {
+    requireAuth('admin-secret');
+    const { pool, accessGrants } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const createResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'view' })
+      .expect(201);
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access')
+      .set({ Authorization: `Bearer ${createResponse.body.token}` })
+      .expect(200, {
+        canRead: true,
+        canWrite: false,
+        actorType: 'user',
+        grantId: 'agr_1',
+        role: 'view',
+      });
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_other/access')
+      .set({ Authorization: `Bearer ${createResponse.body.token}` })
+      .expect(403, { error: 'forbidden' });
+
+    accessGrants[0]!.revoked_at = new Date('2026-05-01T12:05:00Z');
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access')
+      .set({ Authorization: `Bearer ${createResponse.body.token}` })
+      .expect(403, { error: 'forbidden' });
+  });
+
+  it('rejects access grant creation when the branch does not belong to the document', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_missing/access-grants')
+      .set({ Authorization: 'Bearer admin-secret' })
+      .send({ role: 'edit' })
+      .expect(404, { error: 'branch_not_found' });
+  });
+
+  it('allows editable branch grants to manage access links for the same branch', async () => {
+    requireAuth('admin-secret');
+    const { pool, accessGrants } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const editGrantResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'edit' })
+      .expect(201);
+    const editGrantAuth = { Authorization: `Bearer ${editGrantResponse.body.token}` };
+
+    const createdByEditGrant = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(editGrantAuth)
+      .send({ role: 'view' })
+      .expect(201);
+
+    expect(createdByEditGrant.body).toMatchObject({
+      grantId: 'agr_2',
+      role: 'view',
+      branchId: 'br_main',
+    });
+
+    const listResponse = await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(editGrantAuth)
+      .expect(200);
+
+    expect(listResponse.body.grants.map((grant: { grantId: string }) => grant.grantId)).toEqual(['agr_1', 'agr_2']);
+
+    await request(app).delete('/api/access-grants/agr_2').set(editGrantAuth).expect(204);
+    expect(accessGrants.find((grant) => grant.id === 'agr_2')?.revoked_at).toBeTruthy();
+  });
+
+  it('creates and reuses editable access sessions protected by the raw access token', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const createGrantResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'edit' })
+      .expect(201);
+
+    const firstSession = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-sessions')
+      .set({ Authorization: `Bearer ${createGrantResponse.body.token}` })
+      .send({ clientId: 'browser_001', clientKind: 'browser', displayName: '  Alex  ' })
+      .expect(201);
+
+    expect(firstSession.body).toMatchObject({
+      grantId: 'agr_1',
+      sessionId: 'ses_1',
+      displayName: 'Alex',
+      color: expect.stringMatching(/^#[0-9a-f]{6}$/iu),
+      role: 'edit',
+      canRead: true,
+      canWrite: true,
+    });
+
+    const guestOne = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-sessions')
+      .set({ Authorization: `Bearer ${createGrantResponse.body.token}` })
+      .send({ clientId: 'browser_002', clientKind: 'browser', displayName: '' })
+      .expect(201);
+
+    const guestTwo = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-sessions')
+      .set({ Authorization: `Bearer ${createGrantResponse.body.token}` })
+      .send({ clientId: 'browser_003', clientKind: 'browser', displayName: ' ' })
+      .expect(201);
+
+    expect(guestOne.body.displayName).toBe('Guest 1');
+    expect(guestTwo.body.displayName).toBe('Guest 2');
+
+    const repeatSession = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-sessions')
+      .set({ Authorization: `Bearer ${createGrantResponse.body.token}` })
+      .send({ clientId: 'browser_001', clientKind: 'browser', displayName: 'Changed' })
+      .expect(200);
+
+    expect(repeatSession.body).toMatchObject({
+      grantId: 'agr_1',
+      sessionId: 'ses_1',
+      displayName: 'Changed',
+      role: 'edit',
+      canWrite: true,
+    });
+  });
+
+  it('rejects access session creation for view grants', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    const createGrantResponse = await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'view' })
+      .expect(201);
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-sessions')
+      .set({ Authorization: `Bearer ${createGrantResponse.body.token}` })
+      .send({ clientId: 'browser_001', clientKind: 'browser', displayName: 'Alex' })
+      .expect(403, { error: 'forbidden' });
   });
 });

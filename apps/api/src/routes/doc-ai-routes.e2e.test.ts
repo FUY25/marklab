@@ -33,6 +33,13 @@ interface FakePoolOptions {
     branchId: string | null;
     role: 'view' | 'edit';
   }>;
+  accessGrants?: Array<{
+    tokenHash: string;
+    docId: string;
+    branchId: string;
+    role: 'view' | 'edit';
+    revokedAt?: Date | string | null;
+  }>;
 }
 
 interface CapturedQuery {
@@ -90,6 +97,21 @@ function createFakePool(options: FakePoolOptions = {}) {
             role: row.role,
             expires_at: null,
             revoked_at: null,
+          })) as Row[],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+      const [tokenHash, docId, branchId] = params ?? [];
+      return {
+        rows: (options.accessGrants ?? [])
+          .filter((row) => row.tokenHash === tokenHash && row.docId === docId && row.branchId === branchId)
+          .map((row) => ({
+            id: 'agr_1',
+            role: row.role,
+            expires_at: null,
+            revoked_at: row.revokedAt ?? null,
           })) as Row[],
         rowCount: 1,
       };
@@ -746,6 +768,93 @@ describe('doc AI routes minimal transaction e2e', () => {
       .expect(403, { error: 'forbidden' });
 
     expect(hasMirrorOrVersionWrite(queries)).toBe(false);
+  });
+
+  it('uses ml_access view grants only for read_doc on the shared branch', async () => {
+    const accessToken = 'ml_access_view';
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('# Doc\n\nOld paragraph.\n');
+    const { pool, queries } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      headHash: seeded.hash,
+      yjsState: seeded.yjsState,
+      accessGrants: [
+        {
+          tokenHash: sha256Hex(accessToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'view',
+        },
+      ],
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/read')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_other/read')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(403, { error: 'forbidden' });
+
+    await request(app)
+      .get('/api/docs/doc_other/branches/br_main/read')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(403, { error: 'forbidden' });
+
+    const writesBeforeForbiddenWrite = queries.filter(
+      (query) => query.sql.includes('update document_branch_states') || query.sql.includes('insert into document_versions'),
+    ).length;
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Requested target' })
+      .expect(403, { error: 'forbidden' });
+
+    expect(
+      queries.filter(
+        (query) => query.sql.includes('update document_branch_states') || query.sql.includes('insert into document_versions'),
+      ),
+    ).toHaveLength(writesBeforeForbiddenWrite);
+  });
+
+  it('uses ml_access edit grants only for write_doc and edit_doc on the shared branch', async () => {
+    const accessToken = 'ml_access_edit';
+    const { pool } = createFakePool({
+      accessGrants: [
+        {
+          tokenHash: sha256Hex(accessToken),
+          docId: 'doc_001',
+          branchId: 'br_main',
+          role: 'edit',
+        },
+      ],
+      versionIds: ['ver_002', 'ver_003'],
+    });
+    const liveWriter = createRecordingLiveWriter({
+      serializedMarkdown: '# Agent result\n',
+      yjsState: createValidYjsState(),
+      previousHash: 'sha256:current',
+      changedRangeCount: 1,
+      appliedTransactionCount: 1,
+    });
+    const app = createHttpApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/write')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ baseVersionId: 'ver_001', baseHash: 'sha256:current', markdown: '# Agent target' })
+      .expect(200);
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_other/edit')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ oldString: 'Old', newString: 'New', replaceAll: false })
+      .expect(403, { error: 'forbidden' });
   });
 
   it('allows write_doc with a write-capable agent token when auth is required', async () => {

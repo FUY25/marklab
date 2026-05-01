@@ -1,6 +1,7 @@
 import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { createHeadlessMilkdownRuntime } from './milkdown-headless-runtime';
+import { shouldCreateAutosaveVersion } from './save-policy';
 import { createVersionWithClient } from './version-service';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
@@ -102,6 +103,34 @@ export async function flushBranchMarkdownMirror(
         versionNumber: row.head_version_number,
         createdVersion: false,
       };
+    }
+
+    if (operation === 'autosave') {
+      const autosave = await client.query<{ last_autosave_at: Date | string | null }>(
+        `select max(created_at) as last_autosave_at
+           from document_versions
+          where branch_id = $1
+            and operation = 'autosave'`,
+        [branchId],
+      );
+      const lastAutosaveAt = autosave.rows[0]?.last_autosave_at;
+      if (
+        !shouldCreateAutosaveVersion({
+          currentHash: serialized.hash,
+          headHash: row.head_hash,
+          lastAutosaveAt: lastAutosaveAt ? new Date(lastAutosaveAt) : null,
+          now: new Date(),
+        })
+      ) {
+        return {
+          branchId,
+          markdown: serialized.markdown,
+          hash: serialized.hash,
+          versionId: row.head_version_id,
+          versionNumber: row.head_version_number,
+          createdVersion: false,
+        };
+      }
     }
 
     const version = await createVersionWithClient({

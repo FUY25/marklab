@@ -44,6 +44,14 @@ async function saveAdminToken(page: Page) {
   await expect(page.getByRole('status')).toContainText('Admin token saved for this browser session.');
 }
 
+async function continueWithCollaboratorName(page: Page, name: string) {
+  const dialog = page.getByRole('dialog', { name: 'Name for collaboration' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Collaborator name').fill(name);
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toBeVisible();
+}
+
 async function expectRecentDocument(page: Page, title: string, branchId: string) {
   const recentDocuments = page.getByRole('region', { name: 'Recent documents' });
   await expect(recentDocuments).toContainText(title);
@@ -68,6 +76,7 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await page.getByRole('button', { name: 'New Markdown Doc' }).click();
   await expect(page).toHaveURL(/\/docs\/[^/]+\/branches\/[^/]+$/u);
   const blankDocument = extractDocumentIds(page.url());
+  await continueWithCollaboratorName(page, 'Owner');
 
   await page.goto(webUrl);
   await expectRecentDocument(page, 'Lifecycle Blank', blankDocument.branchId);
@@ -81,24 +90,51 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
 
   await expect(page).toHaveURL(/\/docs\/[^/]+\/branches\/[^/]+$/u);
   const importedDocument = extractDocumentIds(page.url());
+  await continueWithCollaboratorName(page, 'Owner');
   const importedEditor = page.getByTestId('milkdown-editor').locator('.ProseMirror');
   await expect(importedEditor).toContainText('Imported Lifecycle');
   await expect(importedEditor).toContainText('Imported body from fixture.');
-  await expect(page.getByTestId('branch-switcher')).toContainText('1 branch');
-  const versionPanel = page.getByTestId('version-history-panel');
+  await expect(page.getByText('Cloud document')).toHaveCount(0);
+  await expect(page.getByTestId('document-action-rail')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Versions' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Share' })).toBeVisible();
+  await expect(page.getByTestId('version-history-panel')).toHaveCount(0);
+  await expect(page.getByTestId('share-access-panel')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Versions' }).click();
+  const versionPanel = page.getByTestId('versions-drawer');
+  await expect(versionPanel.getByRole('combobox', { name: 'Branch' })).toContainText('main');
   await expect(versionPanel.getByTestId('version-row-1')).toContainText('import');
   await expect(versionPanel.getByTestId('version-preview')).toContainText('Imported Lifecycle');
+  await page.getByRole('button', { name: 'Share' }).click();
+  await expect(page.getByTestId('versions-drawer')).toHaveCount(0);
+  await expect(page.getByTestId('share-drawer')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('share-drawer')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Versions' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('versions-drawer')).toHaveCount(0);
+  const autosavePromise = page.waitForResponse(
+    (response) => response.url().includes('/versions/autosave') && response.request().method() === 'POST',
+  );
   await importedEditor.click();
   await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+End`);
   await page.keyboard.press('Enter');
   await page.keyboard.type('Admin owner edit.');
   await expect(importedEditor).toContainText('Admin owner edit.');
+  await autosavePromise;
   await expect(page.getByText('Connection lost')).toHaveCount(0);
   await expect(page.getByText(/request_failed:403/u)).toHaveCount(0);
   expect(forbiddenResponses).toEqual([]);
 
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/versions/manual-save') && response.request().method() === 'POST'),
+    page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+S`),
+  ]);
+  await expect(page.getByText(/Manual saved v\d+|No changes to save/u).first()).toBeVisible();
+
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export Markdown' }).click();
+  await page.getByRole('button', { name: 'Versions' }).click();
+  await page.getByTestId('versions-drawer').getByRole('button', { name: 'Export .md' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(
     /^lifecycle-import__EXPORT__doc-[a-z0-9]+__branch-main__v\d{4}__\d{8}-\d{6}Z__sha-[a-f0-9]{8}__check-cloud-before-use\.md$/u,
@@ -125,9 +161,10 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await page.goto(
     `${webUrl}/docs/${encodeURIComponent(importedDocument.docId)}/branches/${encodeURIComponent(importedDocument.branchId)}`,
   );
-  await expect(page.getByTestId('remote-document-id')).toHaveText(importedDocument.docId);
+  await continueWithCollaboratorName(page, 'Owner');
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Imported Lifecycle');
   await page.goto(webUrl);
-  await expectRecentDocument(page, importedDocument.docId, importedDocument.branchId);
+  await expectRecentDocument(page, 'Lifecycle Import', importedDocument.branchId);
 
   await page.goto(webUrl);
   await page.getByLabel('Document id').fill(blankDocument.docId);
@@ -137,8 +174,9 @@ test('creates imports opens and exports cloud Markdown documents', async ({ page
   await expect(page).toHaveURL(
     `/docs/${encodeURIComponent(blankDocument.docId)}/branches/${encodeURIComponent(blankDocument.branchId)}`,
   );
-  await expect(page.getByTestId('remote-document-id')).toHaveText(blankDocument.docId);
+  await continueWithCollaboratorName(page, 'Owner');
+  await expect(page.getByTestId('milkdown-editor')).toBeVisible();
   await page.goto(webUrl);
-  await expectRecentDocument(page, blankDocument.docId, blankDocument.branchId);
+  await expectRecentDocument(page, 'Lifecycle Blank', blankDocument.branchId);
   expect(importedDocument.docId).not.toEqual(blankDocument.docId);
 });

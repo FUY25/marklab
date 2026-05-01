@@ -40,6 +40,42 @@ describe('createHeadlessMilkdownRuntime', () => {
     expect(initialized.markdown).toBe('# Still usable\n');
   });
 
+  it('keeps process event globals available after headless session cleanup', async () => {
+    const eventGlobalNames = ['addEventListener', 'removeEventListener', 'dispatchEvent'] as const;
+    const previousDescriptors = new Map(
+      eventGlobalNames.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const),
+    );
+
+    try {
+      for (const name of eventGlobalNames) {
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+        if (!descriptor || descriptor.configurable) delete (globalThis as Record<string, unknown>)[name];
+      }
+
+      const runtime = createHeadlessMilkdownRuntime();
+      const initialized = await runtime.initializeFromMarkdown('# Timer cleanup\n');
+
+      expect(initialized.markdown).toBe('# Timer cleanup\n');
+      for (const name of eventGlobalNames) {
+        expect(typeof (globalThis as Record<string, unknown>)[name]).toBe('function');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 3100));
+
+      for (const name of eventGlobalNames) {
+        expect(typeof (globalThis as Record<string, unknown>)[name]).toBe('function');
+      }
+    } finally {
+      for (const [name, descriptor] of previousDescriptors.entries()) {
+        if (descriptor) {
+          Object.defineProperty(globalThis, name, descriptor);
+        } else {
+          delete (globalThis as Record<string, unknown>)[name];
+        }
+      }
+    }
+  });
+
   it('keeps concurrent headless sessions isolated while initializing, serializing, and applying changes', async () => {
     const runtime = createHeadlessMilkdownRuntime();
     const inputs = Array.from({ length: 8 }, (_, index) => ({

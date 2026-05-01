@@ -6,6 +6,7 @@ import type { Doc } from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 
 interface RemoteAwarenessUser {
+  name?: string;
   color?: string;
 }
 
@@ -25,11 +26,19 @@ function normalizeRemoteColor(color: string | undefined): string {
 
 function buildRemoteCursor(user: RemoteAwarenessUser) {
   const color = normalizeRemoteColor(user.color);
+  const label = user.name?.trim();
   const cursor = document.createElement('span');
   cursor.classList.add('ProseMirror-yjs-cursor', 'marklab-collab-cursor');
   cursor.style.borderColor = color;
   cursor.style.setProperty('--marklab-collab-color', color);
   cursor.setAttribute('aria-hidden', 'true');
+  if (label) {
+    const labelElement = document.createElement('span');
+    labelElement.classList.add('marklab-collab-cursor-label');
+    labelElement.textContent = label;
+    labelElement.style.backgroundColor = color;
+    cursor.append(labelElement);
+  }
   return cursor;
 }
 
@@ -107,7 +116,7 @@ export function MilkdownEditor({
           .get(collabServiceCtx)
           .bindDoc(ydoc);
 
-        service.setOptions({
+        service.mergeOptions({
           yCursorOpts: {
             cursorBuilder: buildRemoteCursor,
             selectionBuilder: buildRemoteSelection,

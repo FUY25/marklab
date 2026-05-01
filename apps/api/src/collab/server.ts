@@ -18,6 +18,7 @@ export interface CollabServerHandle {
   server: Hocuspocus;
   flushDocument(roomName: string): Promise<void>;
   applyDocumentState(roomName: string, yjsState: Uint8Array): Promise<void>;
+  closeDocumentConnections(roomName: string): void;
 }
 
 export function createCollabServer(pool: DbPool) {
@@ -139,6 +140,9 @@ export function createCollabServer(pool: DbPool) {
         yjsState: nextState,
       });
       Y.applyUpdate(document, nextState);
+    },
+    closeDocumentConnections(roomName: string) {
+      server.closeConnections(roomName);
     },
   } satisfies CollabServerHandle;
 }

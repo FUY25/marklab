@@ -168,14 +168,16 @@ export interface RestoreVersionToBranchInput {
 export async function restoreVersionToBranchState(
   input: RestoreVersionToBranchInput,
 ): Promise<ApplyMarkdownToBranchResult> {
-  const source = await input.pool.query<{ id: string; doc_id: string; markdown_snapshot: string }>(
-    `select id, doc_id, markdown_snapshot
+  const source = await input.pool.query<{ id: string; doc_id: string; branch_id: string; markdown_snapshot: string }>(
+    `select id, doc_id, branch_id, markdown_snapshot
        from document_versions
       where id = $1`,
     [input.versionId],
   );
   const sourceRow = source.rows[0];
-  if (!sourceRow || sourceRow.doc_id !== input.docId) throw new Error('source_version_not_found');
+  if (!sourceRow || sourceRow.doc_id !== input.docId || sourceRow.branch_id !== input.branchId) {
+    throw new Error('source_version_not_found');
+  }
 
   return applyMarkdownToBranchState({
     pool: input.pool,

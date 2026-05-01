@@ -179,6 +179,36 @@ describe('export route version metadata consistency', () => {
     expect(response.headers['content-disposition']).toContain(`__sha-${flushedHash.slice('sha256:'.length, 15)}__`);
   });
 
+  it('authorizes export against the requested shared branch before flushing', async () => {
+    const flushedHash = sha256Hex('# Exported\n');
+    vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
+      branchId: 'br_main',
+      markdown: '# Exported\n',
+      hash: flushedHash,
+      versionId: 'ver_011',
+      versionNumber: 11,
+      createdVersion: true,
+    });
+    const { pool } = createExportPool({
+      currentHash: flushedHash,
+      versionHash: flushedHash,
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      auth: {
+        async requireAdminAccess() {
+          throw new Error('forbidden');
+        },
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          if (docId !== 'doc_001' || branchId !== 'br_main' || operation !== 'read') throw new Error('forbidden');
+          return { actorType: 'user', grantId: 'agr_1', role: 'view' };
+        },
+      },
+    });
+
+    await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
+    await request(app).get('/api/docs/doc_001/branches/br_other/export.md').expect(403, { error: 'forbidden' });
+  });
+
   it('refuses a versioned export filename when the flushed body does not match the flushed hash', async () => {
     vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
       branchId: 'br_main',

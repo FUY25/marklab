@@ -1,13 +1,18 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { toRoomName } from '../collab/persistence';
 import type { DbPool } from '../db/client';
+import type { HttpAppOptions } from '../http/app';
 import {
+  createOrUpdateAccessSession,
+  generateAccessToken,
   generateAgentToken,
   generateShareToken,
   hashToken,
   isAdminToken,
   verifyAdminToken,
   verifyDocumentAccess,
+  type AccessClientKind,
 } from '../services/access-control';
 
 interface AgentTokenRow {
@@ -26,6 +31,32 @@ interface ShareLinkRow {
   created_at: Date | string;
 }
 
+interface AccessGrantRow {
+  id: string;
+  doc_id?: string;
+  branch_id: string;
+  branch_name: string;
+  role: 'view' | 'edit';
+  expires_at: Date | string | null;
+  revoked_at: Date | string | null;
+  created_at: Date | string;
+  sessions?: AccessSessionListRow[];
+}
+
+interface AccessSessionListRow {
+  sessionId?: string;
+  session_id?: string;
+  clientKind?: AccessClientKind;
+  client_kind?: AccessClientKind;
+  displayName?: string;
+  display_name?: string;
+  color: string;
+  lastBranchId?: string | null;
+  last_branch_id?: string | null;
+  lastSeenAt?: Date | string;
+  last_seen_at?: Date | string;
+}
+
 const createAgentTokenSchema = z.object({
   name: z.string().min(1),
   canRead: z.boolean().optional().default(true),
@@ -36,6 +67,17 @@ const createAgentTokenSchema = z.object({
 const createShareLinkSchema = z.object({
   role: z.enum(['view', 'edit']),
   expiresAt: z.string().datetime().nullable().optional(),
+});
+
+const createAccessGrantSchema = z.object({
+  role: z.enum(['view', 'edit']),
+  expiresAt: z.string().datetime().nullable().optional(),
+});
+
+const createAccessSessionSchema = z.object({
+  clientId: z.string().min(1),
+  clientKind: z.enum(['browser', 'agent', 'api']).optional().default('browser'),
+  displayName: z.string().default(''),
 });
 
 function authRequired(): boolean {
@@ -57,6 +99,17 @@ function documentToken(req: Request): string | undefined {
 function requireAdmin(req: Request): void {
   if (!authRequired()) return;
   verifyAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
+}
+
+function isAdminRequest(req: Request): boolean {
+  if (!authRequired()) return true;
+  return isAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
+}
+
+async function requireBranchWriteAccess(pool: DbPool, req: Request, docId: string, branchId: string): Promise<void> {
+  if (isAdminRequest(req)) return;
+  const access = await verifyDocumentAccess(pool, documentToken(req), docId, branchId, 'write');
+  if (!access.grantId || access.role !== 'edit') throw new Error('forbidden');
 }
 
 function requiredParam(req: Request, name: string): string {
@@ -90,7 +143,44 @@ function toShareLinkSummary(row: ShareLinkRow) {
   };
 }
 
-export function createAccessRoutes(pool: DbPool) {
+function normalizeSessions(value: unknown): AccessSessionListRow[] {
+  if (Array.isArray(value)) return value as AccessSessionListRow[];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? (parsed as AccessSessionListRow[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function toAccessSessionSummary(row: AccessSessionListRow) {
+  return {
+    sessionId: row.sessionId ?? row.session_id,
+    clientKind: row.clientKind ?? row.client_kind,
+    displayName: row.displayName ?? row.display_name,
+    color: row.color,
+    lastBranchId: row.lastBranchId ?? row.last_branch_id ?? null,
+    lastSeenAt: toIsoString(row.lastSeenAt ?? row.last_seen_at ?? null),
+  };
+}
+
+function toAccessGrantSummary(row: AccessGrantRow) {
+  return {
+    grantId: row.id,
+    role: row.role,
+    branchId: row.branch_id,
+    branchName: row.branch_name,
+    expiresAt: toIsoString(row.expires_at),
+    revokedAt: toIsoString(row.revoked_at),
+    createdAt: toIsoString(row.created_at),
+    sessions: normalizeSessions(row.sessions).map(toAccessSessionSummary),
+  };
+}
+
+export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, 'closeCollabDocumentConnections'> = {}) {
   const router = Router();
 
   router.get('/docs/:docId/branches/:branchId/access', async (req: Request, res: Response, next: NextFunction) => {
@@ -121,6 +211,8 @@ export function createAccessRoutes(pool: DbPool) {
         canRead: true,
         canWrite,
         actorType: readAccess.actorType,
+        ...(readAccess.grantId ? { grantId: readAccess.grantId } : {}),
+        ...(readAccess.role ? { role: readAccess.role } : {}),
       });
     } catch (error) {
       next(error);
@@ -190,6 +282,151 @@ export function createAccessRoutes(pool: DbPool) {
       );
       if (!result.rows[0]) throw new Error('token_not_found');
       res.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/docs/:docId/branches/:branchId/access-grants', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const docId = requiredParam(req, 'docId');
+      const branchId = requiredParam(req, 'branchId');
+      await requireBranchWriteAccess(pool, req, docId, branchId);
+      const body = createAccessGrantSchema.parse(req.body);
+      const branchResult = await pool.query<{ id: string }>(
+        `select id
+           from document_branches
+          where id = $1
+            and doc_id = $2
+            and is_archived = false`,
+        [branchId, docId],
+      );
+      if (!branchResult.rows[0]) throw new Error('branch_not_found');
+      const token = generateAccessToken();
+      const result = await pool.query<AccessGrantRow>(
+        `insert into access_grants
+           (doc_id, branch_id, token_hash, role, expires_at)
+         values ($1, $2, $3, $4, $5)
+         returning id, branch_id, role, expires_at, revoked_at, created_at`,
+        [docId, branchId, hashToken(token), body.role, body.expiresAt ?? null],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error('access_grant_insert_failed');
+      res.status(201).json({
+        grantId: row.id,
+        branchId: row.branch_id,
+        token,
+        role: row.role,
+        expiresAt: toIsoString(row.expires_at),
+        createdAt: toIsoString(row.created_at),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/docs/:docId/branches/:branchId/access-grants', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const docId = requiredParam(req, 'docId');
+      const branchId = requiredParam(req, 'branchId');
+      await requireBranchWriteAccess(pool, req, docId, branchId);
+      const result = await pool.query<AccessGrantRow>(
+        `select g.id,
+                g.branch_id,
+                b.name as branch_name,
+                g.role,
+                g.expires_at,
+                g.revoked_at,
+                g.created_at,
+                coalesce(
+                  json_agg(
+                    json_build_object(
+                      'sessionId', s.id,
+                      'clientKind', s.client_kind,
+                      'displayName', s.display_name,
+                      'color', s.color,
+                      'lastBranchId', s.last_branch_id,
+                      'lastSeenAt', s.last_seen_at
+                    )
+                    order by s.last_seen_at desc
+                  ) filter (where s.id is not null),
+                  '[]'::json
+                ) as sessions
+           from (
+             select *
+               from access_grants
+              where doc_id = $1
+                and branch_id = $2
+                and revoked_at is null
+           ) g
+           join document_branches b on b.id = g.branch_id
+           left join access_sessions s on s.grant_id = g.id
+          group by g.id, g.branch_id, b.name, g.role, g.expires_at, g.revoked_at, g.created_at
+          order by g.created_at desc`,
+        [docId, branchId],
+      );
+      res.json({ grants: result.rows.map(toAccessGrantSummary) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/access-grants/:grantId', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const grantId = requiredParam(req, 'grantId');
+      const grantResult = await pool.query<{ doc_id: string; branch_id: string }>(
+        `select doc_id, branch_id
+           from access_grants
+          where id = $1
+            and revoked_at is null`,
+        [grantId],
+      );
+      const grant = grantResult.rows[0];
+      if (!grant) throw new Error('access_grant_not_found');
+      await requireBranchWriteAccess(pool, req, grant.doc_id, grant.branch_id);
+      const result = await pool.query<{ id: string }>(
+        `update access_grants
+            set revoked_at = now()
+          where id = $1
+            and revoked_at is null
+          returning id`,
+        [grantId],
+      );
+      if (!result.rows[0]) throw new Error('access_grant_not_found');
+      options.closeCollabDocumentConnections?.(toRoomName(grant.doc_id, grant.branch_id));
+      res.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/docs/:docId/branches/:branchId/access-sessions', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const docId = requiredParam(req, 'docId');
+      const branchId = requiredParam(req, 'branchId');
+      const body = createAccessSessionSchema.parse(req.body);
+      const access = await verifyDocumentAccess(pool, documentToken(req), docId, branchId, 'write');
+      if (!access.grantId || access.role !== 'edit') throw new Error('forbidden');
+
+      const session = await createOrUpdateAccessSession(pool, {
+        grantId: access.grantId,
+        docId,
+        branchId,
+        clientId: body.clientId,
+        clientKind: body.clientKind,
+        displayName: body.displayName,
+      });
+
+      const status = session.createdAt === session.lastSeenAt ? 201 : 200;
+      res.status(status).json({
+        grantId: session.grantId,
+        sessionId: session.sessionId,
+        displayName: session.displayName,
+        color: session.color,
+        role: access.role,
+        canRead: true,
+        canWrite: true,
+      });
     } catch (error) {
       next(error);
     }

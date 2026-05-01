@@ -68,6 +68,13 @@ export interface RestoreVersionResponse {
   hash: string;
 }
 
+export interface ManualSaveVersionResponse {
+  created: boolean;
+  versionId: string;
+  versionNumber: number;
+  hash: string;
+}
+
 export interface ReadDocumentResponse {
   versionId: string;
   hash: string;
@@ -78,6 +85,8 @@ export interface DocumentAccessResponse {
   canRead: boolean;
   canWrite: boolean;
   actorType: 'agent' | 'user';
+  grantId?: string;
+  role?: AccessGrantRole;
 }
 
 export interface AgentTokenSummary {
@@ -102,7 +111,73 @@ export interface AgentTokensResponse {
   tokens: AgentTokenSummary[];
 }
 
-export type ShareLinkRole = 'view' | 'edit';
+export type AccessGrantRole = 'view' | 'edit';
+export type ShareLinkRole = AccessGrantRole;
+
+export interface AccessSessionSummary {
+  sessionId: string;
+  clientKind: AccessClientKind;
+  displayName: string;
+  color: string;
+  lastBranchId: string | null;
+  lastSeenAt: string | null;
+}
+
+export interface AccessGrantSummary {
+  grantId: string;
+  role: AccessGrantRole;
+  branchId: string;
+  branchName: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  sessions: AccessSessionSummary[];
+}
+
+export interface CreatedAccessGrant {
+  grantId: string;
+  branchId: string;
+  role: AccessGrantRole;
+  expiresAt: string | null;
+  createdAt: string;
+  token: string;
+}
+
+export interface AccessGrantsResponse {
+  grants: AccessGrantSummary[];
+}
+
+export type AccessClientKind = 'browser' | 'agent' | 'api';
+
+export interface CreatedAccessSession {
+  grantId: string;
+  sessionId: string;
+  displayName: string;
+  color: string;
+  role: AccessGrantRole;
+  canRead: boolean;
+  canWrite: boolean;
+}
+
+export interface BranchSummaryAccess {
+  canRead: boolean;
+  canWrite: boolean;
+  canManageAccess: boolean;
+  canManageVersions: boolean;
+  canSwitchBranches: boolean;
+  actorType: 'agent' | 'user';
+  grantId?: string;
+  role?: AccessGrantRole;
+}
+
+export interface BranchSummaryResponse {
+  docId: string;
+  branchId: string;
+  title: string;
+  branchName: string;
+  branchSlug: string;
+  access: BranchSummaryAccess;
+}
 
 export interface ShareLinkSummary {
   linkId: string;
@@ -261,6 +336,14 @@ export class MarklabWebApi {
     return requireJsonResponse<BranchesResponse>(response, 'request');
   }
 
+  async getBranchSummary(docId: string, branchId: string): Promise<BranchSummaryResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/summary`,
+      { headers: this.documentHeaders() },
+    );
+    return requireJsonResponse<BranchSummaryResponse>(response, 'branch_summary');
+  }
+
   async listVersions(docId: string, branchId: string): Promise<VersionsResponse> {
     const response = await fetch(
       `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/versions`,
@@ -295,6 +378,79 @@ export class MarklabWebApi {
       },
     );
     return requireJsonResponse<RestoreVersionResponse>(response, 'request');
+  }
+
+  async manualSaveVersion(docId: string, branchId: string): Promise<ManualSaveVersionResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/versions/manual-save`,
+      {
+        method: 'POST',
+        headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
+      },
+    );
+    return requireJsonResponse<ManualSaveVersionResponse>(response, 'manual_save');
+  }
+
+  async autosaveVersion(docId: string, branchId: string): Promise<ManualSaveVersionResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/versions/autosave`,
+      {
+        method: 'POST',
+        headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
+      },
+    );
+    return requireJsonResponse<ManualSaveVersionResponse>(response, 'autosave');
+  }
+
+  async createAccessGrant(
+    docId: string,
+    branchId: string,
+    input: { role: AccessGrantRole; expiresAt?: string | null },
+  ): Promise<CreatedAccessGrant> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/access-grants`,
+      {
+        method: 'POST',
+        headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ role: input.role, expiresAt: input.expiresAt ?? null }),
+      },
+    );
+    return requireJsonResponse<CreatedAccessGrant>(response, 'create_access_grant');
+  }
+
+  async listAccessGrants(docId: string, branchId: string): Promise<AccessGrantsResponse> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/access-grants`,
+      { headers: this.documentHeaders() },
+    );
+    return requireJsonResponse<AccessGrantsResponse>(response, 'list_access_grants');
+  }
+
+  async revokeAccessGrant(grantId: string): Promise<void> {
+    const response = await fetch(`${this.apiUrl}/api/access-grants/${encodeURIComponent(grantId)}`, {
+      method: 'DELETE',
+      headers: this.documentHeaders(),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`revoke_access_grant_failed:${response.status}:${body}`);
+    }
+  }
+
+  async createAccessSession(
+    docId: string,
+    branchId: string,
+    input: { clientId: string; clientKind: AccessClientKind; displayName: string },
+  ): Promise<CreatedAccessSession> {
+    const response = await fetch(
+      `${this.apiUrl}/api/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}/access-sessions`,
+      {
+        method: 'POST',
+        headers: this.documentHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(input),
+      },
+    );
+    return requireJsonResponse<CreatedAccessSession>(response, 'create_access_session');
   }
 
   async createAgentToken(

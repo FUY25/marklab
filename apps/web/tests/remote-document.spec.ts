@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { APIRequestContext, APIResponse, BrowserContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse, BrowserContext, Page } from '@playwright/test';
 import {
   rejectManagedUrlOverrides,
   requireLocalHttpUrl,
@@ -24,8 +24,14 @@ interface ReadDocument {
   markdown: string;
 }
 
-interface CreatedShareLink {
+interface CreatedAccessGrant {
+  grantId: string;
   token: string;
+}
+
+interface CreatedAccessSession {
+  displayName: string;
+  color: string;
 }
 
 function requireRemoteApiReadiness() {
@@ -72,13 +78,38 @@ async function readDocument(
   return (await response.json()) as ReadDocument;
 }
 
-async function createEditShareToken(request: APIRequestContext, docId: string, branchId: string): Promise<string> {
-  const response = await request.post(`${apiUrl}/api/docs/${docId}/branches/${branchId}/share-links`, {
+async function createEditAccessGrant(request: APIRequestContext, docId: string, branchId: string): Promise<CreatedAccessGrant> {
+  const response = await request.post(`${apiUrl}/api/docs/${docId}/branches/${branchId}/access-grants`, {
     headers: { Authorization: `Bearer ${adminToken}` },
     data: { role: 'edit' },
   });
-  await expectOkResponse(response, 'create_share_link');
-  return ((await response.json()) as CreatedShareLink).token;
+  await expectOkResponse(response, 'create_access_grant');
+  return (await response.json()) as CreatedAccessGrant;
+}
+
+async function editDocument(request: APIRequestContext, docId: string, branchId: string) {
+  const response = await request.post(`${apiUrl}/api/docs/${docId}/branches/${branchId}/edit`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: {
+      oldString: 'Original paragraph.',
+      newString: 'Edited paragraph.',
+      replaceAll: false,
+    },
+  });
+  await expectOkResponse(response, 'edit_doc');
+}
+
+async function joinEditableAccessLink(page: Page, accessUrl: string, displayName: string): Promise<CreatedAccessSession> {
+  await page.goto(accessUrl);
+  const dialog = page.getByRole('dialog', { name: 'Name for collaboration' });
+  await expect(dialog).toBeVisible();
+  const sessionResponse = page.waitForResponse(
+    (response) => response.url().includes('/access-sessions') && response.request().method() === 'POST',
+  );
+  await dialog.getByLabel('Collaborator name').fill(displayName);
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toBeVisible();
+  return (await (await sessionResponse).json()) as CreatedAccessSession;
 }
 
 test('keeps two remote browser windows and API writes synchronized without refresh', async ({ browser, request }) => {
@@ -86,9 +117,9 @@ test('keeps two remote browser windows and API writes synchronized without refre
   await setupRemoteApi();
 
   const doc = await importDocument(request);
-  const editToken = await createEditShareToken(request, doc.docId, doc.branchId);
+  const editGrant = await createEditAccessGrant(request, doc.docId, doc.branchId);
   const documentPath = `/docs/${encodeURIComponent(doc.docId)}/branches/${encodeURIComponent(doc.branchId)}`;
-  const editDocumentUrl = `${webUrl}${documentPath}?token=${encodeURIComponent(editToken)}&mode=edit`;
+  const editDocumentUrl = `${webUrl}${documentPath}?token=${encodeURIComponent(editGrant.token)}&mode=edit`;
 
   let contextA: BrowserContext | undefined;
   let contextB: BrowserContext | undefined;
@@ -99,12 +130,18 @@ test('keeps two remote browser windows and API writes synchronized without refre
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();
 
-    await Promise.all([pageA.goto(editDocumentUrl), pageB.goto(editDocumentUrl)]);
+    const [sessionA, sessionB] = await Promise.all([
+      joinEditableAccessLink(pageA, editDocumentUrl, 'Alex'),
+      joinEditableAccessLink(pageB, editDocumentUrl, 'Blair'),
+    ]);
+    expect(sessionA).toMatchObject({ displayName: 'Alex', color: expect.stringMatching(/^#[0-9a-f]{6}$/iu) });
+    expect(sessionB).toMatchObject({ displayName: 'Blair', color: expect.stringMatching(/^#[0-9a-f]{6}$/iu) });
+    expect(sessionB.color).not.toBe(sessionA.color);
 
     await expect(pageA.getByTestId('remote-document-page')).toBeVisible();
     await expect(pageB.getByTestId('remote-document-page')).toBeVisible();
-    await expect(pageA.getByTestId('remote-document-id')).toHaveText(doc.docId);
-    await expect(pageB.getByTestId('remote-document-id')).toHaveText(doc.docId);
+    await expect(pageA.getByTestId('document-action-rail')).toBeVisible();
+    await expect(pageB.getByTestId('document-action-rail')).toBeVisible();
 
     const editorA = pageA.getByTestId('milkdown-editor').locator('.ProseMirror');
     const editorB = pageB.getByTestId('milkdown-editor').locator('.ProseMirror');
@@ -114,14 +151,11 @@ test('keeps two remote browser windows and API writes synchronized without refre
 
     await editorA.click();
     await expect(pageB.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);
-    await expect(pageB.locator('.ProseMirror-yjs-cursor div')).toHaveCount(0);
-    await expect(pageB.locator('.ProseMirror-yjs-cursor')).not.toContainText('Human Writer');
-    const pageACursorColor = await pageB.locator('.ProseMirror-yjs-cursor').evaluate((element) => getComputedStyle(element).borderColor);
+    await expect(pageB.locator('.marklab-collab-cursor-label')).toContainText('Alex');
 
     await editorB.click();
     await expect(pageA.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);
-    const pageBCursorColor = await pageA.locator('.ProseMirror-yjs-cursor').evaluate((element) => getComputedStyle(element).borderColor);
-    expect(pageBCursorColor).not.toBe(pageACursorColor);
+    await expect(pageA.locator('.marklab-collab-cursor-label')).toContainText('Blair');
 
     await editorA.click();
     await pageA.keyboard.press(`${modifier}+End`);
@@ -129,10 +163,10 @@ test('keeps two remote browser windows and API writes synchronized without refre
     await pageA.keyboard.type('Browser A edit.');
     await expect(editorB).toContainText('Browser A edit.');
 
-    const current = await readDocument(request, doc.docId, doc.branchId, editToken);
+    const current = await readDocument(request, doc.docId, doc.branchId, editGrant.token);
     expect(current.markdown).toContain('Browser A edit.');
     const writeResponse = await request.post(`${apiUrl}/api/docs/${doc.docId}/branches/${doc.branchId}/write`, {
-      headers: { Authorization: `Bearer ${editToken}` },
+      headers: { Authorization: `Bearer ${editGrant.token}` },
       data: {
         baseVersionId: current.versionId,
         baseHash: current.hash,
@@ -145,6 +179,68 @@ test('keeps two remote browser windows and API writes synchronized without refre
     await expect(editorB).toContainText('Browser A edit.');
     await expect(editorA).toContainText('API write visible.');
     await expect(editorB).toContainText('API write visible.');
+  } finally {
+    await contextA?.close();
+    await contextB?.close();
+  }
+});
+
+test('keeps version drawer state local while restore updates the shared branch', async ({ browser, request }) => {
+  requireRemoteApiReadiness();
+  await setupRemoteApi();
+
+  const doc = await importDocument(request);
+  await editDocument(request, doc.docId, doc.branchId);
+  const editGrant = await createEditAccessGrant(request, doc.docId, doc.branchId);
+  const documentPath = `/docs/${encodeURIComponent(doc.docId)}/branches/${encodeURIComponent(doc.branchId)}`;
+  const editDocumentUrl = `${webUrl}${documentPath}?token=${encodeURIComponent(editGrant.token)}&mode=edit`;
+
+  let contextA: BrowserContext | undefined;
+  let contextB: BrowserContext | undefined;
+
+  try {
+    contextA = await browser.newContext();
+    contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    await Promise.all([
+      joinEditableAccessLink(pageA, editDocumentUrl, 'Alex'),
+      joinEditableAccessLink(pageB, editDocumentUrl, 'Blair'),
+    ]);
+
+    const editorA = pageA.getByTestId('milkdown-editor').locator('.ProseMirror');
+    const editorB = pageB.getByTestId('milkdown-editor').locator('.ProseMirror');
+    await expect(editorA).toContainText('Edited paragraph.');
+    await expect(editorB).toContainText('Edited paragraph.');
+
+    await pageA.getByRole('button', { name: 'Versions' }).click();
+    await pageB.getByRole('button', { name: 'Versions' }).click();
+    const versionPanelA = pageA.getByTestId('versions-drawer');
+    const versionPanelB = pageB.getByTestId('versions-drawer');
+    await expect(versionPanelA.getByTestId('version-row-2')).toContainText('v2');
+    await expect(versionPanelB.getByTestId('version-row-2')).toContainText('v2');
+
+    await pageB.keyboard.press('Escape');
+    await expect(pageB.getByTestId('versions-drawer')).toHaveCount(0);
+    await expect(versionPanelA.getByTestId('version-preview')).toBeVisible();
+
+    await versionPanelA.getByTestId('version-row-1').click();
+    await expect(versionPanelA.getByTestId('version-preview')).toContainText('Original paragraph.');
+    await pageB.getByRole('button', { name: 'Versions' }).click();
+    await expect(versionPanelB.getByTestId('version-preview')).toContainText('Edited paragraph.');
+
+    await versionPanelA.getByLabel('Type RESTORE to confirm').fill('RESTORE');
+    await Promise.all([
+      pageA.waitForResponse((response) => response.url().includes('/restore') && response.request().method() === 'POST'),
+      versionPanelA.getByRole('button', { name: 'Restore this version' }).click(),
+    ]);
+
+    await expect(versionPanelA.getByRole('status')).toHaveText('Restored version');
+    await expect(versionPanelA.getByTestId('version-row-3')).toContainText('rollback');
+    await expect(editorA).toContainText('Original paragraph.');
+    await expect(editorB).toContainText('Original paragraph.');
+    await expect(pageA).toHaveURL(editDocumentUrl);
   } finally {
     await contextA?.close();
     await contextB?.close();

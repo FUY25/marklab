@@ -13,6 +13,7 @@ const liveWriter = createPostgresLiveMarkdownWriter(pool);
 const app = createHttpApp(pool, liveWriter, {
   flushCollabDocument: collab.flushDocument,
   applyCollabDocumentState: collab.applyDocumentState,
+  closeCollabDocumentConnections: collab.closeDocumentConnections,
 });
 const httpServer = http.createServer(app);
 

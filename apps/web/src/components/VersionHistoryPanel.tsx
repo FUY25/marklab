@@ -34,6 +34,7 @@ function operationLabel(operation: VersionOperation): string {
 
 export function VersionHistoryPanel({ docId, branchId, readOnly = false }: VersionHistoryPanelProps) {
   const api = useMemo(() => new MarklabWebApi(), []);
+  const [isOpen, setIsOpen] = useState(true);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<VersionDetail | null>(null);
@@ -147,9 +148,8 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
       const restored = await api.restoreVersion(docId, branchId, selectedVersion.versionId);
       await refreshVersions(restored.versionId);
       setStatusKind('status');
-      setStatus(`Restored as v${restored.versionNumber}.`);
+      setStatus('Restored version');
       setRestoreConfirmation('');
-      window.location.assign(buildDocumentPath(docId, branchId));
     } catch (error) {
       setStatusKind('alert');
       setStatus(error instanceof Error ? error.message : 'Unable to restore this version.');
@@ -165,82 +165,96 @@ export function VersionHistoryPanel({ docId, branchId, readOnly = false }: Versi
           <p className="workspace-kicker">History</p>
           <h2>Versions</h2>
         </div>
-        <span>{isLoadingVersions ? 'Loading' : `${versions.length}`}</span>
-      </div>
-
-      <div className="version-list" aria-label="Branch versions">
-        {versions.map((version) => (
+        <div className="version-panel-heading-actions">
+          <span>{isLoadingVersions ? 'Loading' : `${versions.length}`}</span>
           <button
-            key={version.versionId}
             type="button"
-            className={version.versionId === selectedVersionId ? 'version-row version-row-active' : 'version-row'}
-            data-testid={`version-row-${version.versionNumber}`}
-            onClick={() => setSelectedVersionId(version.versionId)}
+            aria-expanded={isOpen}
+            aria-controls="version-history-panel-body"
+            onClick={() => setIsOpen((current) => !current)}
           >
-            <span className="version-row-main">
-              <strong>v{version.versionNumber}</strong>
-              <span>{operationLabel(version.operation)}</span>
-            </span>
-            <span className="version-row-meta">
-              <span>{version.actorType}</span>
-              <time dateTime={version.createdAt}>{formatCreatedAt(version.createdAt)}</time>
-              <code>{shortHash(version.hash)}</code>
-            </span>
+            {isOpen ? 'Hide versions' : 'Show versions'}
           </button>
-        ))}
-        {!isLoadingVersions && versions.length === 0 ? <p className="version-empty">No versions on this branch.</p> : null}
-      </div>
-
-      <div className="version-detail">
-        <div className="version-detail-title">
-          <h3>{selectedVersion ? `v${selectedVersion.versionNumber} preview` : 'Preview'}</h3>
-          <span>{isLoadingDetail ? 'Loading...' : selectedVersion ? operationLabel(selectedVersion.operation) : 'No version'}</span>
         </div>
-        <pre className="version-preview" data-testid="version-preview">
-          {selectedVersion?.markdown ?? ''}
-        </pre>
       </div>
 
-      {readOnly ? null : (
-        <>
-          <form className="version-action" onSubmit={handleBranchFromVersion}>
-            <label htmlFor="new-branch-name">New branch name</label>
-            <div className="version-action-row">
-              <input
-                id="new-branch-name"
-                type="text"
-                value={branchName}
-                onChange={(event) => setBranchName(event.currentTarget.value)}
-                disabled={!selectedVersion || busyAction !== null}
-                autoComplete="off"
-              />
-              <button type="submit" disabled={!selectedVersion || busyAction !== null}>
-                {busyAction === 'branch' ? 'Branching...' : 'Branch from this version'}
-              </button>
-            </div>
-          </form>
-
-          <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
-            <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
-            <div className="version-action-row">
-              <input
-                id="restore-confirmation"
-                type="text"
-                value={restoreConfirmation}
-                onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
-                disabled={!selectedVersion || busyAction !== null}
-                autoComplete="off"
-              />
+      {isOpen ? (
+        <div id="version-history-panel-body">
+          <div className="version-list" aria-label="Branch versions">
+            {versions.map((version) => (
               <button
-                type="submit"
-                disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
+                key={version.versionId}
+                type="button"
+                className={version.versionId === selectedVersionId ? 'version-row version-row-active' : 'version-row'}
+                data-testid={`version-row-${version.versionNumber}`}
+                onClick={() => setSelectedVersionId(version.versionId)}
               >
-                {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
+                <span className="version-row-main">
+                  <strong>v{version.versionNumber}</strong>
+                  <span>{operationLabel(version.operation)}</span>
+                </span>
+                <span className="version-row-meta">
+                  <span>{version.actorType}</span>
+                  <time dateTime={version.createdAt}>{formatCreatedAt(version.createdAt)}</time>
+                  <code>{shortHash(version.hash)}</code>
+                </span>
               </button>
+            ))}
+            {!isLoadingVersions && versions.length === 0 ? <p className="version-empty">No versions on this branch.</p> : null}
+          </div>
+
+          <div className="version-detail">
+            <div className="version-detail-title">
+              <h3>{selectedVersion ? `v${selectedVersion.versionNumber} preview` : 'Preview'}</h3>
+              <span>{isLoadingDetail ? 'Loading...' : selectedVersion ? operationLabel(selectedVersion.operation) : 'No version'}</span>
             </div>
-          </form>
-        </>
-      )}
+            <pre className="version-preview" data-testid="version-preview">
+              {selectedVersion?.markdown ?? ''}
+            </pre>
+          </div>
+
+          {readOnly ? null : (
+            <>
+              <form className="version-action" onSubmit={handleBranchFromVersion}>
+                <label htmlFor="new-branch-name">New branch name</label>
+                <div className="version-action-row">
+                  <input
+                    id="new-branch-name"
+                    type="text"
+                    value={branchName}
+                    onChange={(event) => setBranchName(event.currentTarget.value)}
+                    disabled={!selectedVersion || busyAction !== null}
+                    autoComplete="off"
+                  />
+                  <button type="submit" disabled={!selectedVersion || busyAction !== null}>
+                    {busyAction === 'branch' ? 'Branching...' : 'Branch from this version'}
+                  </button>
+                </div>
+              </form>
+
+              <form className="version-action version-action-danger" onSubmit={handleRestoreVersion}>
+                <label htmlFor="restore-confirmation">Type RESTORE to confirm</label>
+                <div className="version-action-row">
+                  <input
+                    id="restore-confirmation"
+                    type="text"
+                    value={restoreConfirmation}
+                    onChange={(event) => setRestoreConfirmation(event.currentTarget.value)}
+                    disabled={!selectedVersion || busyAction !== null}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!selectedVersion || restoreConfirmation !== 'RESTORE' || busyAction !== null}
+                  >
+                    {busyAction === 'restore' ? 'Restoring...' : 'Restore this version'}
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <span className="version-panel-status" role={statusKind}>
         {status}

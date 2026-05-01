@@ -5,18 +5,30 @@ import { createAccessRoutes } from '../routes/access-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createVersionRoutes } from '../routes/version-routes';
-import { isAdminToken, verifyAdminToken, verifyDocumentAccess, type AccessOperation } from '../services/access-control';
+import {
+  isAdminToken,
+  verifyAdminToken,
+  verifyDocumentAccess,
+  type AccessOperation,
+  type VerifiedDocumentAccess,
+} from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
   applyCollabDocumentState?: (roomName: string, yjsState: Uint8Array) => Promise<void>;
+  closeCollabDocumentConnections?: (roomName: string) => void;
   auth?: HttpRequestAuth;
 }
 
 export interface HttpRequestAuth {
   requireAdminAccess(req: Request): Promise<void>;
-  requireDocumentAccess(req: Request, docId: string, branchId: string, operation: AccessOperation): Promise<void>;
+  requireDocumentAccess(
+    req: Request,
+    docId: string,
+    branchId: string,
+    operation: AccessOperation,
+  ): Promise<VerifiedDocumentAccess | void>;
 }
 
 const defaultCorsOrigins = new Set([
@@ -98,10 +110,10 @@ function createRequestAuth(pool: DbPool): HttpRequestAuth {
       verifyAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
     },
     async requireDocumentAccess(req: Request, docId: string, branchId: string, operation: AccessOperation) {
-      if (!authRequired()) return;
+      if (!authRequired()) return { actorType: 'user' };
       const token = documentToken(req);
-      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
-      await verifyDocumentAccess(pool, token, docId, branchId, operation);
+      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return { actorType: 'user' };
+      return verifyDocumentAccess(pool, token, docId, branchId, operation);
     },
   };
 }
@@ -172,6 +184,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'access_grant_not_found') {
+    res.status(404).json({ error: 'access_grant_not_found' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'live_yjs_state_changed') {
     res.status(409).json({ error: 'live_yjs_state_changed' });
     return;
@@ -195,7 +212,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     res.json({ ok: true });
   });
 
-  app.use('/api', createAccessRoutes(pool));
+  app.use('/api', createAccessRoutes(pool, routeOptions));
   app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
   app.use('/api', createImportExportRoutes(pool, routeOptions));
   app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));

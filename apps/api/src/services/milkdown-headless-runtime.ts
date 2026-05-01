@@ -74,7 +74,27 @@ function defineGlobal(name: string, value: unknown): void {
   });
 }
 
+function installProcessEventTargetGlobals(): void {
+  if (typeof EventTarget !== 'function') return;
+
+  const events = new EventTarget();
+  const eventTargetGlobals = [
+    ['addEventListener', events.addEventListener.bind(events)],
+    ['removeEventListener', events.removeEventListener.bind(events)],
+    ['dispatchEvent', events.dispatchEvent.bind(events)],
+  ] as const;
+
+  for (const [name, value] of eventTargetGlobals) {
+    if (typeof (globalThis as Record<string, unknown>)[name] === 'function') continue;
+    defineGlobal(name, value);
+  }
+}
+
 function installDom(dom: JSDOM): () => void {
+  // Milkdown timers can fire after the temporary JSDOM globals are restored.
+  // Keep Node-level event methods available so delayed timer cleanup is safe.
+  installProcessEventTargetGlobals();
+
   const window = dom.window;
   const previous = new Map(
     [

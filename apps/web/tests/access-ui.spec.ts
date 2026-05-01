@@ -24,6 +24,18 @@ interface ReadDocument {
   markdown: string;
 }
 
+interface CreatedAccessGrant {
+  grantId: string;
+  branchId: string;
+  token: string;
+  role: 'view' | 'edit';
+}
+
+interface CreatedAccessSession {
+  displayName: string;
+  color: string;
+}
+
 function requireRemoteApiReadiness() {
   rejectManagedUrlOverrides();
 
@@ -96,21 +108,59 @@ async function saveAdminToken(page: Page) {
   await expect(page.getByRole('status')).toContainText('Admin token saved for this browser session.');
 }
 
-async function createShareLink(page: Page, role: 'view' | 'edit'): Promise<string> {
-  await page.getByLabel('Share link role').selectOption(role);
-  await page.getByRole('button', { name: 'Create share link' }).click();
-  const shareUrl = page.getByTestId('created-share-url');
-  await expect(shareUrl).toContainText(`mode=${role}`);
-  return (await shareUrl.textContent())?.trim() ?? '';
+async function createAccessGrant(
+  request: APIRequestContext,
+  doc: ImportedDocument,
+  role: 'view' | 'edit',
+): Promise<CreatedAccessGrant> {
+  const response = await request.post(`${apiUrl}/api/docs/${doc.docId}/branches/${doc.branchId}/access-grants`, {
+    headers: authHeaders(),
+    data: { role },
+  });
+  await expectOkResponse(response, 'create_access_grant');
+  return (await response.json()) as CreatedAccessGrant;
 }
 
-async function createReadOnlyAgentToken(page: Page): Promise<string> {
-  await page.getByLabel('Agent token name').fill('Read-only agent');
-  await page.getByLabel('Allow writes').setChecked(false);
-  await page.getByRole('button', { name: 'Create agent token' }).click();
-  const rawToken = page.getByTestId('created-agent-token');
-  await expect(rawToken).toContainText(/^ml_agent_/u);
-  return (await rawToken.textContent())?.trim() ?? '';
+function accessGrantUrl(doc: ImportedDocument, grant: CreatedAccessGrant): string {
+  const url = new URL(`${webUrl}${documentPath(doc)}`);
+  url.searchParams.set('token', grant.token);
+  url.searchParams.set('mode', grant.role);
+  return url.toString();
+}
+
+async function expectCollaborationNamePrompt(page: Page) {
+  const dialog = page.getByRole('dialog', { name: 'Name for collaboration' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('This is how others will see your cursor.');
+  await expect(page.getByTestId('milkdown-editor')).toHaveCount(0);
+  return dialog;
+}
+
+function waitForAccessSession(page: Page) {
+  return page.waitForResponse(
+    (response) => response.url().includes('/access-sessions') && response.request().method() === 'POST',
+  );
+}
+
+async function continueWithCollaboratorName(
+  page: Page,
+  name: string,
+  options: { waitForSession?: boolean } = { waitForSession: true },
+): Promise<CreatedAccessSession | null> {
+  const dialog = await expectCollaborationNamePrompt(page);
+  const sessionResponse = options.waitForSession ? waitForAccessSession(page) : null;
+  await dialog.getByLabel('Collaborator name').fill(name);
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Access UI');
+  return sessionResponse ? ((await (await sessionResponse).json()) as CreatedAccessSession) : null;
+}
+
+async function continueAsGuest(page: Page): Promise<CreatedAccessSession> {
+  const dialog = await expectCollaborationNamePrompt(page);
+  const sessionResponse = waitForAccessSession(page);
+  await dialog.getByRole('button', { name: 'Continue as Guest' }).click();
+  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Access UI');
+  return (await (await sessionResponse).json()) as CreatedAccessSession;
 }
 
 async function expectRenderedReadOnlyDocument(page: Page) {
@@ -141,7 +191,7 @@ async function expectRenderedReadOnlyDocument(page: Page) {
   await expect(readOnlySurface).not.toContainText('Read-only edit attempt.');
 }
 
-test('manages share links and agent tokens under required auth', async ({ browser, page, request }) => {
+test('edit access links prompt for collaborator names and create browser sessions', async ({ browser, request }) => {
   requireRemoteApiReadiness();
   await setupRemoteApi();
 
@@ -154,76 +204,120 @@ test('manages share links and agent tokens under required auth', async ({ browse
   );
 
   const doc = await importDocument(request);
-  await saveAdminToken(page);
-  await page.goto(`${webUrl}${documentPath(doc)}`);
-  await expect(page.getByTestId('remote-document-page')).toBeVisible();
+  const editGrant = await createAccessGrant(request, doc, 'edit');
+  const editUrl = accessGrantUrl(doc, editGrant);
+  expect(editUrl).toContain(`${webUrl}${documentPath(doc)}`);
+  expect(editUrl).toContain('token=ml_access_');
 
-  const editShareUrl = await createShareLink(page, 'edit');
-  expect(editShareUrl).toContain(`${webUrl}${documentPath(doc)}`);
-  expect(editShareUrl).toContain('token=ml_share_');
-  await page.goto(editShareUrl);
-  await expect(page.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Access UI');
-
+  let namedContext: BrowserContext | undefined;
   let editContext: BrowserContext | undefined;
   try {
+    namedContext = await browser.newContext();
     editContext = await browser.newContext();
+    const namedPage = await namedContext.newPage();
     const sharedPage = await editContext.newPage();
-    await sharedPage.goto(editShareUrl);
+
+    await namedPage.goto(editUrl);
+    await expect(await continueWithCollaboratorName(namedPage, 'Alex')).toMatchObject({
+      displayName: 'Alex',
+      color: expect.stringMatching(/^#[0-9a-f]{6}$/iu),
+    });
+
+    await sharedPage.goto(editUrl);
+    await expect(await continueAsGuest(sharedPage)).toMatchObject({
+      displayName: 'Guest 1',
+      color: expect.stringMatching(/^#[0-9a-f]{6}$/iu),
+    });
+
     const sharedEditor = sharedPage.getByTestId('milkdown-editor').locator('.ProseMirror');
-    const ownerEditor = page.getByTestId('milkdown-editor').locator('.ProseMirror');
+    const namedEditor = namedPage.getByTestId('milkdown-editor').locator('.ProseMirror');
     await expect(sharedEditor).toContainText('Access UI');
 
-    await sharedEditor.click();
-    await sharedPage.keyboard.press(`${modifier}+End`);
-    await sharedPage.keyboard.press('Enter');
-    await sharedPage.keyboard.type('Shared edit.');
-    await expect(ownerEditor).toContainText('Shared edit.');
+    await namedEditor.click();
+    await namedPage.keyboard.press('ArrowRight');
+    await expect(sharedPage.locator('.marklab-collab-cursor-label')).toContainText('Alex');
   } finally {
+    await namedContext?.close();
     await editContext?.close();
   }
+});
 
-  const viewShareUrl = await createShareLink(page, 'view');
+test('blank edit access names become numbered guests and reopen without prompting', async ({ browser, request }) => {
+  requireRemoteApiReadiness();
+  await setupRemoteApi();
+
+  const doc = await importDocument(request);
+  const editGrant = await createAccessGrant(request, doc, 'edit');
+  const editUrl = accessGrantUrl(doc, editGrant);
+
+  let firstContext: BrowserContext | undefined;
+  let secondContext: BrowserContext | undefined;
+  try {
+    firstContext = await browser.newContext();
+    secondContext = await browser.newContext();
+    const firstPage = await firstContext.newPage();
+    const secondPage = await secondContext.newPage();
+
+    await firstPage.goto(editUrl);
+    await expect(await continueAsGuest(firstPage)).toMatchObject({ displayName: 'Guest 1' });
+
+    const repeatSessionResponse = waitForAccessSession(firstPage);
+    await firstPage.goto(editUrl);
+    await expect(firstPage.getByRole('dialog', { name: 'Name for collaboration' })).toHaveCount(0);
+    await expect(firstPage.getByTestId('milkdown-editor').locator('.ProseMirror')).toContainText('Access UI');
+    await expect((await (await repeatSessionResponse).json()) as CreatedAccessSession).toMatchObject({
+      displayName: 'Guest 1',
+    });
+
+    await secondPage.goto(editUrl);
+    await expect(await continueAsGuest(secondPage)).toMatchObject({ displayName: 'Guest 2' });
+  } finally {
+    await firstContext?.close();
+    await secondContext?.close();
+  }
+});
+
+test('owner editing prompts for a local collaborator name when none is stored', async ({ page, request }) => {
+  requireRemoteApiReadiness();
+  await setupRemoteApi();
+
+  const doc = await importDocument(request);
+  await saveAdminToken(page);
+  await page.goto(`${webUrl}${documentPath(doc)}`);
+  await continueWithCollaboratorName(page, 'Owner Admin', { waitForSession: false });
+});
+
+test('view access links open read-only without collaborator sessions', async ({ browser, request }) => {
+  requireRemoteApiReadiness();
+  await setupRemoteApi();
+
+  const doc = await importDocument(request);
+  const viewGrant = await createAccessGrant(request, doc, 'view');
+  const viewUrl = accessGrantUrl(doc, viewGrant);
   let viewContext: BrowserContext | undefined;
   try {
     viewContext = await browser.newContext();
     const viewPage = await viewContext.newPage();
-    await viewPage.goto(viewShareUrl);
+    const sessionRequests: string[] = [];
+    viewPage.on('request', (browserRequest) => {
+      if (browserRequest.url().includes('/access-sessions')) sessionRequests.push(browserRequest.url());
+    });
+    await viewPage.goto(viewUrl);
+    await expect(viewPage.getByRole('dialog', { name: 'Name for collaboration' })).toHaveCount(0);
     await expectRenderedReadOnlyDocument(viewPage);
     await expect(viewPage.getByTestId('milkdown-editor')).toHaveCount(0);
+    await expect(viewPage.getByTestId('document-action-rail')).toHaveCount(0);
     await expect(viewPage.getByTestId('share-access-panel')).toHaveCount(0);
     await expect(viewPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
     await expect(viewPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);
+    expect(sessionRequests).toEqual([]);
   } finally {
     await viewContext?.close();
   }
 
-  const agentToken = await createReadOnlyAgentToken(page);
-  const readResult = await readDocument(request, doc, agentToken);
-  expect(readResult.markdown).toContain('Shared edit.');
-  await expectStatus(await writeDocument(request, doc, agentToken, `${readResult.markdown}\nForbidden write.\n`), 403, 'read-only write_doc');
+  const readResult = await readDocument(request, doc, viewGrant.token);
+  expect(readResult.markdown).toContain('Access UI');
+  await expectStatus(await writeDocument(request, doc, viewGrant.token, `${readResult.markdown}\nForbidden write.\n`), 403, 'read-only write_doc');
 
-  let readOnlyAgentContext: BrowserContext | undefined;
-  try {
-    readOnlyAgentContext = await browser.newContext();
-    const readOnlyAgentPage = await readOnlyAgentContext.newPage();
-    await readOnlyAgentPage.goto(
-      `${webUrl}${documentPath(doc)}?token=${encodeURIComponent(agentToken)}&mode=edit`,
-    );
-    await expectRenderedReadOnlyDocument(readOnlyAgentPage);
-    await expect(readOnlyAgentPage.getByTestId('milkdown-editor')).toHaveCount(0);
-    await expect(readOnlyAgentPage.getByTestId('share-access-panel')).toHaveCount(0);
-    await expect(readOnlyAgentPage.getByRole('button', { name: 'Branch from this version' })).toHaveCount(0);
-    await expect(readOnlyAgentPage.getByRole('button', { name: 'Restore this version' })).toHaveCount(0);
-  } finally {
-    await readOnlyAgentContext?.close();
-  }
-
-  await page.getByRole('button', { name: 'Revoke agent token Read-only agent' }).click();
-  await expectStatus(
-    await request.get(`${apiUrl}/api/docs/${doc.docId}/branches/${doc.branchId}/read`, {
-      headers: authHeaders(agentToken),
-    }),
-    403,
-    'revoked read_doc',
-  );
+  expect(viewGrant.grantId).toBeTruthy();
 });
