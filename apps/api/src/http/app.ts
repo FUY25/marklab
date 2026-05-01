@@ -5,7 +5,7 @@ import { createAccessRoutes } from '../routes/access-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createVersionRoutes } from '../routes/version-routes';
-import { verifyAdminToken, verifyDocumentAccess, type AccessOperation } from '../services/access-control';
+import { isAdminToken, verifyAdminToken, verifyDocumentAccess, type AccessOperation } from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 
 export interface HttpAppOptions {
@@ -99,7 +99,9 @@ function createRequestAuth(pool: DbPool): HttpRequestAuth {
     },
     async requireDocumentAccess(req: Request, docId: string, branchId: string, operation: AccessOperation) {
       if (!authRequired()) return;
-      await verifyDocumentAccess(pool, documentToken(req), docId, branchId, operation);
+      const token = documentToken(req);
+      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
+      await verifyDocumentAccess(pool, token, docId, branchId, operation);
     },
   };
 }

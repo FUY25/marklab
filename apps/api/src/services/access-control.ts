@@ -44,6 +44,11 @@ export function verifyAdminToken(token: string | undefined, adminTokenHash: stri
   if (!token || !hashesMatch(hashToken(token), adminTokenHash)) throw new Error('forbidden');
 }
 
+export function isAdminToken(token: string | undefined, adminTokenHash: string | undefined): boolean {
+  if (!token || !adminTokenHash) return false;
+  return hashesMatch(hashToken(token), adminTokenHash);
+}
+
 function isUsable(row: { expires_at?: Date | string | null; revoked_at?: Date | string | null }, now = Date.now()): boolean {
   if (row.revoked_at) return false;
   if (row.expires_at && new Date(row.expires_at).getTime() <= now) return false;

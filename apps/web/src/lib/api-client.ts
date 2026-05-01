@@ -187,7 +187,8 @@ export class MarklabWebApi {
   }
 
   private resolvedDocumentToken(): string | null {
-    return this.documentToken === undefined ? currentUrlDocumentToken() : this.documentToken;
+    if (this.documentToken !== undefined) return this.documentToken;
+    return currentUrlDocumentToken() ?? this.resolvedAdminToken();
   }
 
   private adminHeaders(headers: HeadersInit = {}): HeadersInit {

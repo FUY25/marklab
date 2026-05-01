@@ -1,7 +1,7 @@
 import { Hocuspocus } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
-import { verifyDocumentAccess } from '../services/access-control';
+import { isAdminToken, verifyDocumentAccess } from '../services/access-control';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import { createEmptyYjsState, loadYjsStateWithMetadata, parseRoomName, storeYjsState } from './persistence';
 
@@ -86,6 +86,7 @@ export function createCollabServer(pool: DbPool) {
     async onAuthenticate({ documentName, token }: { documentName: string; token: string }) {
       if (!requireAuth) return;
       try {
+        if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
         const { docId, branchId } = parseRoomName(documentName);
         await verifyDocumentAccess(pool, token, docId, branchId, 'write');
       } catch {

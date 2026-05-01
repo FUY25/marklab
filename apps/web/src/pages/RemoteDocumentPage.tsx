@@ -10,6 +10,7 @@ import { MarklabWebApi, type ReadDocumentResponse } from '../lib/api-client';
 import { createEditorCollab } from '../lib/editor-collab';
 import { buildBranchRoomName } from '../lib/remote-room';
 import { loadRecentDocuments, rememberRecentDocument } from '../lib/recent-documents';
+import { readSessionAdminToken } from '../lib/session-auth';
 
 interface RemoteDocumentPageProps {
   docId: string;
@@ -28,7 +29,9 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
   const config = useMemo(() => readWebConfig(), []);
   const roomName = useMemo(() => buildBranchRoomName(docId, branchId), [branchId, docId]);
   const documentToken = useMemo(() => readDocumentToken(), []);
-  const api = useMemo(() => new MarklabWebApi({ documentToken }), [documentToken]);
+  const adminToken = useMemo(() => readSessionAdminToken(), []);
+  const collabToken = documentToken ?? adminToken;
+  const api = useMemo(() => new MarklabWebApi(documentToken ? { documentToken } : {}), [documentToken]);
   const [accessMode, setAccessMode] = useState<DocumentAccessMode>(documentToken ? 'checking' : 'editable');
   const [collab, setCollab] = useState<EditorCollab | null>(null);
   const [readOnlyDocument, setReadOnlyDocument] = useState<ReadDocumentResponse | null>(null);
@@ -94,7 +97,7 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
       nextCollab = createEditorCollab({
         websocketUrl: config.websocketUrl,
         roomName,
-        ...(documentToken ? { token: documentToken } : {}),
+        ...(collabToken ? { token: collabToken } : {}),
         user: { name: 'Human Writer', color: '#2563eb' },
       });
     } catch {
@@ -126,7 +129,7 @@ export function RemoteDocumentPage({ docId, branchId }: RemoteDocumentPageProps)
       setCollab(null);
       nextCollab.destroy();
     };
-  }, [accessMode, api, branchId, config.websocketUrl, docId, documentToken, roomName]);
+  }, [accessMode, api, branchId, collabToken, config.websocketUrl, docId, roomName]);
 
   const isReadOnly = accessMode === 'read-only';
 

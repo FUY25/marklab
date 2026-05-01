@@ -158,13 +158,20 @@ function createPersistencePool(
 }
 
 const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
+const originalAdminHash = process.env.MARKLAB_ADMIN_TOKEN_HASH;
 
 afterEach(() => {
   process.env.MARKLAB_REQUIRE_AUTH = originalRequireAuth;
+  process.env.MARKLAB_ADMIN_TOKEN_HASH = originalAdminHash;
 });
 
 function enableAuthMode() {
   process.env.MARKLAB_REQUIRE_AUTH = 'true';
+}
+
+function enableAuthModeWithAdminToken(token: string) {
+  enableAuthMode();
+  process.env.MARKLAB_ADMIN_TOKEN_HASH = sha256Hex(token);
 }
 
 describe('createCollabServer persistence hooks', () => {
@@ -341,6 +348,24 @@ describe('createCollabServer persistence hooks', () => {
           token: '',
         }),
       ).rejects.toThrow('forbidden');
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('accepts bootstrap admin tokens for editable collab when auth is required', async () => {
+    enableAuthModeWithAdminToken('admin-secret');
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: 'admin-secret',
+        }),
+      ).resolves.toBeUndefined();
     } finally {
       await collab.server.destroy?.();
     }

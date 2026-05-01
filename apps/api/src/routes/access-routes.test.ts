@@ -177,6 +177,21 @@ describe('access routes', () => {
     expect(JSON.stringify(accessResponse.body)).not.toContain(createResponse.body.token);
   });
 
+  it('reports full document access for the bootstrap admin token when auth is required', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access')
+      .set({ Authorization: 'Bearer admin-secret' })
+      .expect(200, {
+        canRead: true,
+        canWrite: true,
+        actorType: 'user',
+      });
+  });
+
   it('rejects document access introspection for invalid tokens when auth is required', async () => {
     requireAuth('admin-secret');
     const { pool } = createAccessRoutePool();

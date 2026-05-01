@@ -5,6 +5,7 @@ import {
   generateAgentToken,
   generateShareToken,
   hashToken,
+  isAdminToken,
   verifyAdminToken,
   verifyDocumentAccess,
 } from '../services/access-control';
@@ -102,6 +103,11 @@ export function createAccessRoutes(pool: DbPool) {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const token = documentToken(req);
+      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) {
+        res.json({ canRead: true, canWrite: true, actorType: 'user' });
+        return;
+      }
+
       const readAccess = await verifyDocumentAccess(pool, token, docId, branchId, 'read');
       let canWrite = false;
       try {
