@@ -54,7 +54,8 @@ export function printUsage() {
   marklab open <file.md> [--background]
   marklab share <file.md> [--json]
   marklab join <edit-link> <file.md>
-  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir]
+  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir] [--background]
+  marklab join <edit-link> --pick-dir [--background]
   marklab share-state <file.md> [--json]
   marklab create-link <file.md> --role <view|edit> [--json]
   marklab revoke-link <file.md> <grant-id> [--json]
@@ -90,9 +91,10 @@ Start sharing a local Markdown file. Foreground sharing stops when this terminal
   if (command === 'join') {
     console.log(`Usage:
   marklab join <edit-link> <file.md>
-  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir]
+  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir] [--background]
+  marklab join <edit-link> --pick-dir [--background]
 
-Join an edit link as a local Markdown mirror. View links and host-offline links are rejected before directories, files, watchers, or daemons are created.`);
+Join an edit link as a local Markdown mirror. Use --pick-dir to choose the destination folder with a system dialog. Foreground mode keeps the terminal attached; background mode keeps syncing until marklab stop. View links and host-offline links are rejected before directories, files, watchers, or daemons are created.`);
     return;
   }
   printUsage();
@@ -172,6 +174,8 @@ export function parseCliArgs(argv) {
       replace: rest.includes('--replace'),
       review: rest.includes('--review'),
       cancel: rest.includes('--cancel'),
+      background: rest.includes('--background'),
+      pickDir: rest.includes('--pick-dir'),
     };
   }
 
@@ -294,6 +298,83 @@ function waitForChildExit(child) {
 
 async function waitForSessionExit(session) {
   await Promise.all(session.children.map(waitForChildExit));
+}
+
+function captureCommand(command, args) {
+  return new Promise((resolveCapture, rejectCapture) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', rejectCapture);
+    child.once('exit', (code) => {
+      if (code === 0 && stdout.trim()) {
+        resolveCapture(stdout.trim());
+        return;
+      }
+      rejectCapture(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}`));
+    });
+  });
+}
+
+async function captureOptionalCommand(command, args) {
+  try {
+    return await captureCommand(command, args);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function pickJoinDirectory(env = process.env, platform = process.platform) {
+  if (env.MARKLAB_PICK_DIR_FOR_TEST?.trim()) return resolve(env.MARKLAB_PICK_DIR_FOR_TEST);
+
+  if (platform === 'darwin') {
+    try {
+      return resolve(await captureCommand('osascript', [
+        '-e',
+        'POSIX path of (choose folder with prompt "Choose where MarkLab should create the shared Markdown file")',
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/User canceled|cancelled|canceled/u.test(message)) throw new Error('Folder selection cancelled.');
+      throw new Error(`Unable to open the folder picker. Re-run with --dir <folder>. ${message}`);
+    }
+  }
+
+  if (platform === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      '$dialog.Description = "Choose where MarkLab should create the shared Markdown file"',
+      '$dialog.ShowNewFolderButton = $true',
+      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) } else { exit 2 }',
+    ].join('; ');
+    try {
+      return resolve(await captureCommand('powershell.exe', ['-NoProfile', '-STA', '-Command', script]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/exited with code 2/u.test(message)) throw new Error('Folder selection cancelled.');
+      throw new Error(`Unable to open the folder picker. Re-run with --dir <folder>. ${message}`);
+    }
+  }
+
+  for (const candidate of [
+    { command: 'zenity', args: ['--file-selection', '--directory', '--title=Choose where MarkLab should create the shared Markdown file'] },
+    { command: 'kdialog', args: ['--getexistingdirectory', '.', 'Choose where MarkLab should create the shared Markdown file'] },
+  ]) {
+    const picked = await captureOptionalCommand(candidate.command, candidate.args);
+    if (picked) return resolve(picked);
+  }
+
+  throw new Error('--pick-dir requires macOS Finder, Windows PowerShell, zenity, or kdialog. Re-run with --dir <folder>.');
 }
 
 export function ensurePackagedRuntimeWorkspaceLinks(activeRepoRoot = repoRoot, runtimeRoot = packagedRuntimeRoot) {
@@ -546,7 +627,45 @@ async function shareForeground(file) {
 
 async function ensureBackgroundDaemon(file) {
   const markdownPath = await resolveMarkdownFile(file);
-  const registryPath = defaultDaemonRegistryPath();
+  return startBackgroundDaemon(markdownPath);
+}
+
+async function shareJsonCommand(file) {
+  const { daemon, reused } = await ensureBackgroundDaemon(file);
+  const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, 'edit');
+  writeAgentJson(agentSuccess({
+    path: daemon.realpath,
+    reusedDaemon: reused,
+    browserUrl: daemon.localUrl ?? null,
+    relayRoomId: created.relayRoomId,
+    grantId: created.grantId,
+    role: created.role,
+    url: created.url,
+    expiresAt: created.expiresAt ?? null,
+    createdAt: created.createdAt ?? null,
+  }));
+}
+
+async function openBackground(file) {
+  const markdownPath = await resolveMarkdownFile(file);
+  const { daemon, reused } = await startBackgroundDaemon(markdownPath);
+  if (reused) {
+    console.log(`MarkLab is already watching ${markdownPath}`);
+    console.log(`Browser URL: ${daemon.localUrl}`);
+    console.log(`Stop with: marklab stop ${markdownPath}`);
+    openBrowser(daemon.localUrl);
+    return;
+  }
+
+  console.log(`Opened ${markdownPath}`);
+  console.log(`Browser URL: ${daemon.localUrl}`);
+  console.log('Sync is running in the background.');
+  console.log(`Stop with: marklab stop ${markdownPath}`);
+  openBrowser(daemon.localUrl);
+}
+
+async function startBackgroundDaemon(markdownPath, options = {}) {
+  const registryPath = options.registryPath ?? defaultDaemonRegistryPath();
   const existing = await findDaemonByRealpath(markdownPath, registryPath);
   if (existing) return { daemon: existing, reused: true };
 
@@ -568,6 +687,15 @@ async function ensureBackgroundDaemon(file) {
             MARKLAB_PUBLIC_WEB_URL: relayConfig.publicWebUrl,
             MARKLAB_PUBLIC_RELAY_WS_URL: relayConfig.publicRelayWebSocketUrl,
             MARKLAB_RELAY_WS_URL: relayConfig.relayWebSocketUrl,
+          }
+        : {}),
+      ...(options.relayJoin
+        ? {
+            MARKLAB_RELAY_ROOM_ID: options.relayJoin.relayRoomId,
+            MARKLAB_RELAY_TOKEN: options.relayJoin.token,
+            MARKLAB_RELAY_CLIENT_ID: options.relayJoin.clientId,
+            MARKLAB_RELAY_DISPLAY_NAME: options.relayJoin.displayName,
+            MARKLAB_RELAY_WS_URL: options.relayJoin.wsUrl,
           }
         : {}),
     },
@@ -608,101 +736,6 @@ async function ensureBackgroundDaemon(file) {
   }
 
   return { daemon: entry, reused: false };
-}
-
-async function shareJsonCommand(file) {
-  const { daemon, reused } = await ensureBackgroundDaemon(file);
-  const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, 'edit');
-  writeAgentJson(agentSuccess({
-    path: daemon.realpath,
-    reusedDaemon: reused,
-    browserUrl: daemon.localUrl ?? null,
-    relayRoomId: created.relayRoomId,
-    grantId: created.grantId,
-    role: created.role,
-    url: created.url,
-    expiresAt: created.expiresAt ?? null,
-    createdAt: created.createdAt ?? null,
-  }));
-}
-
-async function openBackground(file) {
-  const markdownPath = await resolveMarkdownFile(file);
-  const registryPath = defaultDaemonRegistryPath();
-  const existing = await findDaemonByRealpath(markdownPath, registryPath);
-  if (existing) {
-    console.log(`MarkLab is already watching ${markdownPath}`);
-    console.log(`Browser URL: ${existing.localUrl}`);
-    console.log(`Stop with: marklab stop ${markdownPath}`);
-    openBrowser(existing.localUrl);
-    return;
-  }
-
-  const { apiPort, webPort } = await chooseLocalPorts();
-  const token = randomBytes(24).toString('base64url');
-  const { apiUrl, webUrl, localUrl } = buildLocalUrls(apiPort, webPort, token);
-  const relayConfig = localRelayConfig(apiPort, webPort);
-  const child = spawn(process.execPath, [cliPath, '__serve', markdownPath, '--api-port', String(apiPort), '--web-port', String(webPort), '--token', token], {
-    cwd: repoRoot,
-    detached: true,
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
-      MARKLAB_LOCAL_METADATA_PATH: defaultMetadataPath(),
-      ...(relayConfig.mode === 'production'
-        ? {
-            MARKLAB_PUBLIC_API_URL: relayConfig.publicApiUrl,
-            MARKLAB_PUBLIC_WEB_URL: relayConfig.publicWebUrl,
-            MARKLAB_PUBLIC_RELAY_WS_URL: relayConfig.publicRelayWebSocketUrl,
-            MARKLAB_RELAY_WS_URL: relayConfig.relayWebSocketUrl,
-          }
-        : {}),
-    },
-  });
-  child.unref();
-
-  const entry = createDaemonEntry({
-    realpath: markdownPath,
-    pid: child.pid,
-    apiPort,
-    webPort,
-    apiUrl,
-    webUrl,
-    localUrl,
-    token,
-  });
-
-  const registered = await registerDaemonEntry(entry, registryPath);
-  if (!registered.registered) {
-    try {
-      process.kill(child.pid, 'SIGTERM');
-    } catch {
-      // Already gone.
-    }
-    console.log(`MarkLab is already watching ${markdownPath}`);
-    console.log(`Browser URL: ${registered.existing.localUrl}`);
-    openBrowser(registered.existing.localUrl);
-    return;
-  }
-
-  try {
-    await Promise.all([waitForHttp(`${apiUrl}/healthz`), waitForHttp(webUrl)]);
-  } catch (error) {
-    try {
-      process.kill(child.pid, 'SIGTERM');
-    } catch {
-      // Already gone.
-    }
-    await unregisterDaemonEntry(entry.id, registryPath);
-    throw error;
-  }
-
-  console.log(`Opened ${markdownPath}`);
-  console.log(`Browser URL: ${localUrl}`);
-  console.log('Sync is running in the background.');
-  console.log(`Stop with: marklab stop ${markdownPath}`);
-  openBrowser(localUrl);
 }
 
 async function printStatus() {
@@ -974,6 +1007,7 @@ function parseRelayLink(link) {
     relayRoomId: decodeURIComponent(match[1]),
     token,
     apiUrl,
+    suggestedFilename: url.searchParams.get('filename') || url.searchParams.get('name') || null,
   };
 }
 
@@ -998,9 +1032,12 @@ async function joinCommand(input) {
   if (!access.hostOnline) throw new Error('Host offline. Ask the host to open MarkLab again.');
   if (access.stale) throw new Error('Shared relay state is stale. Ask the host to keep MarkLab open and try again.');
 
+  if (input.file && (input.dir || input.pickDir)) throw new Error('join accepts either a target file, --dir, or --pick-dir, not more than one.');
+  if (input.dir && input.pickDir) throw new Error('join accepts either --dir or --pick-dir, not both.');
+
   let target;
-  if (input.dir) {
-    const directory = resolve(input.dir);
+  if (input.dir || input.pickDir) {
+    const directory = resolve(input.dir ?? await pickJoinDirectory());
     if (!existsSync(directory)) {
       if (!input.createDir) throw new Error(`${directory} does not exist. Re-run with --create-dir to create it.`);
       await import('node:fs/promises').then(({ mkdir }) => mkdir(directory, { recursive: true }));
@@ -1009,7 +1046,7 @@ async function joinCommand(input) {
       const directoryStat = await stat(directory);
       if (!directoryStat.isDirectory()) throw new Error(`${directory} is not a directory.`);
     }
-    target = resolve(directory, safeRelayJoinFilename(input.name ?? access.suggestedFilename ?? 'shared-notes.md'));
+    target = resolve(directory, safeRelayJoinFilename(input.name ?? link.suggestedFilename ?? access.suggestedFilename ?? 'shared-notes.md'));
   } else if (input.file) {
     target = resolve(input.file);
   } else {
@@ -1017,6 +1054,10 @@ async function joinCommand(input) {
   }
 
   if (existsSync(target)) {
+    if (input.background) {
+      const watchedTarget = await findDaemonByRealpath(await canonicalRealpath(target));
+      if (watchedTarget) throw new Error(`MarkLab is already watching ${watchedTarget.realpath}. Stop it before joining this relay link.`);
+    }
     const { readFile } = await import('node:fs/promises');
     const existing = await readFile(target, 'utf8');
     if (existing.length > 0 && !input.replace) {
@@ -1032,25 +1073,43 @@ async function joinCommand(input) {
   const { mkdir, writeFile } = await import('node:fs/promises');
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, access.markdown ?? '', 'utf8');
+  const markdownPath = await canonicalRealpath(target);
+  const { wsUrl } = buildRelayJoinUrls(input.link);
+  const relayJoin = {
+    relayRoomId: link.relayRoomId,
+    token: link.token,
+    clientId: `mirror_${randomBytes(12).toString('base64url')}`,
+    displayName: input.name ?? basename(markdownPath),
+    wsUrl,
+  };
+
+  if (input.background) {
+    const { daemon, reused } = await startBackgroundDaemon(markdownPath, { relayJoin });
+    console.log(`Joined relay room ${link.relayRoomId}`);
+    console.log(`Local mirror file: ${markdownPath}`);
+    console.log(`Local browser URL: ${daemon.localUrl}`);
+    if (reused) {
+      console.log('MarkLab was already watching this mirror file.');
+    } else {
+      console.log('Sync is running in the background.');
+    }
+    console.log(`Stop with: marklab stop ${markdownPath}`);
+    openBrowser(daemon.localUrl);
+    return;
+  }
+
   const { apiPort, webPort } = await chooseLocalPorts();
   const localToken = randomBytes(24).toString('base64url');
-  const { wsUrl } = buildRelayJoinUrls(input.link);
   const session = serveLocalFile({
-    markdownPath: target,
+    markdownPath,
     apiPort,
     webPort,
     token: localToken,
-    relayJoin: {
-      relayRoomId: link.relayRoomId,
-      token: link.token,
-      clientId: `mirror_${randomBytes(12).toString('base64url')}`,
-      displayName: input.name ?? 'Local mirror',
-      wsUrl,
-    },
+    relayJoin,
   });
   await session.waitReady();
   console.log(`Joined relay room ${link.relayRoomId}`);
-  console.log(`Local mirror file: ${target}`);
+  console.log(`Local mirror file: ${markdownPath}`);
   console.log(`Local browser URL: ${session.localUrl}`);
   await waitForSessionExit(session);
 }

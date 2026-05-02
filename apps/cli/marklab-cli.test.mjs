@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import http from 'node:http';
-import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs, safeRelayJoinFilename } from './marklab.mjs';
+import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs, pickJoinDirectory, safeRelayJoinFilename } from './marklab.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -48,7 +48,7 @@ async function startRelayAccessServer(access) {
         yjsStateBase64: null,
         markdown: access.markdown ?? '# Shared\n',
         stale: !access.hostOnline,
-        suggestedFilename: 'README.md',
+        suggestedFilename: access.suggestedFilename ?? 'README.md',
       }));
       return;
     }
@@ -191,6 +191,34 @@ describe('marklab CLI', () => {
       replace: false,
       review: false,
       cancel: false,
+      background: false,
+      pickDir: false,
+    });
+    expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir', '--background'])).toEqual({
+      command: 'join',
+      link: 'https://example.test/relay/room_1?token=secret',
+      file: null,
+      dir: './docs',
+      name: 'shared.md',
+      createDir: true,
+      replace: false,
+      review: false,
+      cancel: false,
+      background: true,
+      pickDir: false,
+    });
+    expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--pick-dir', '--background'])).toEqual({
+      command: 'join',
+      link: 'https://example.test/relay/room_1?token=secret',
+      file: null,
+      dir: null,
+      name: null,
+      createDir: false,
+      replace: false,
+      review: false,
+      cancel: false,
+      background: true,
+      pickDir: true,
     });
     expect(parseCliArgs(['share-state', 'README.md', '--json'])).toEqual({
       command: 'share-state',
@@ -216,6 +244,11 @@ describe('marklab CLI', () => {
     expect(safeRelayJoinFilename('README.md')).toBe('README.md');
     expect(() => safeRelayJoinFilename('../README.md')).toThrow('--name must be a Markdown filename');
     expect(() => safeRelayJoinFilename('nested/README.md')).toThrow('--name must be a Markdown filename');
+  });
+
+  it('supports test-controlled folder picking without opening a native picker', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-pick-dir-'));
+    await expect(pickJoinDirectory({ MARKLAB_PICK_DIR_FOR_TEST: directory }, 'darwin')).resolves.toBe(resolve(directory));
   });
 
   it('rejects host-offline join before creating directories or files', async () => {
@@ -390,6 +423,7 @@ describe('marklab CLI', () => {
       expectCliOk(createdLink);
       expect(createdLink.stdout).toContain('/relay/');
       expect(createdLink.stdout).toContain('mode=view');
+      expect(createdLink.stdout).toContain('filename=README.md');
 
       const shareState = await runCli(['share-state', markdownPath, '--json'], env);
       expectCliOk(shareState);
@@ -418,4 +452,58 @@ describe('marklab CLI', () => {
       await runCli(['stop', '--all'], env, 30000).catch(() => undefined);
     }
   }, 120000);
+
+  it('joins an edit link as a real background local mirror daemon', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-join-bg-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const targetDirectory = join(directory, 'docs');
+    await mkdir(targetDirectory);
+    const relay = await startRelayAccessServer({ canWrite: true, hostOnline: true, markdown: '# Shared mirror\n\nInitial body.\n' });
+    const link = `http://127.0.0.1:5175/relay/room_1?token=edit&filename=${encodeURIComponent('Host Notes.md')}&apiUrl=${encodeURIComponent(relay.apiUrl)}`;
+
+    const env = {
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_NO_OPEN: 'true',
+      MARKLAB_API_PORT: String(await freePort()),
+      MARKLAB_WEB_PORT: String(await freePort()),
+    };
+
+    try {
+      const joined = await runCli(['join', link, '--pick-dir', '--background'], {
+        ...env,
+        MARKLAB_PICK_DIR_FOR_TEST: targetDirectory,
+      }, 120000);
+      expectCliOk(joined);
+      const canonicalTarget = await realpath(join(targetDirectory, 'Host Notes.md'));
+      expect(joined.stdout).toContain('Joined relay room room_1');
+      expect(joined.stdout).toContain(`Local mirror file: ${canonicalTarget}`);
+      expect(joined.stdout).toContain('Sync is running in the background.');
+      expect(joined.stdout).toContain(`Stop with: marklab stop ${canonicalTarget}`);
+      await expect(readFile(canonicalTarget, 'utf8')).resolves.toBe('# Shared mirror\n\nInitial body.\n');
+
+      const browserUrl = joined.stdout.match(/Local browser URL: (http:\/\/127\.0\.0\.1:\d+\/local#token=\S+)/)?.[1];
+      expect(browserUrl).toBeTruthy();
+      const token = decodeURIComponent(new URL(browserUrl).hash.replace(/^#token=/u, ''));
+
+      const status = await runCli(['status'], env);
+      expectCliOk(status);
+      expect(status.stdout).toContain(canonicalTarget);
+      expect(status.stdout).toContain('Last sync state: running');
+
+      const documentResponse = await fetch(`http://127.0.0.1:${env.MARKLAB_API_PORT}/api/local/document`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(documentResponse.status).toBe(200);
+      await expect(documentResponse.json()).resolves.toMatchObject({
+        absolutePath: canonicalTarget,
+      });
+
+      const stopped = await runCli(['stop', canonicalTarget], env);
+      expectCliOk(stopped);
+      expect(stopped.stdout).toContain(`Stopped ${canonicalTarget}`);
+    } finally {
+      await runCli(['stop', '--all'], env, 30000).catch(() => undefined);
+      await relay.close();
+    }
+  }, 130000);
 });

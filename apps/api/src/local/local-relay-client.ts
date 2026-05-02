@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 import * as Y from 'yjs';
 import WebSocket from 'ws';
 import type { LocalFileService } from './local-file-service';
@@ -85,10 +86,12 @@ function buildRelayUrl(input: {
   role: RelayAccessRole;
   publicApiUrl?: string;
   publicRelayWebSocketUrl?: string;
+  suggestedFilename?: string;
 }): string {
   const url = new URL(`/relay/${encodeURIComponent(input.relayRoomId)}`, input.publicWebUrl);
   url.searchParams.set('token', input.token);
   url.searchParams.set('mode', input.role);
+  if (input.suggestedFilename) url.searchParams.set('filename', input.suggestedFilename);
   if (input.publicApiUrl) url.searchParams.set('apiUrl', input.publicApiUrl);
   if (input.publicRelayWebSocketUrl) url.searchParams.set('wsUrl', input.publicRelayWebSocketUrl);
   return url.toString();
@@ -422,6 +425,7 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       relayRoomId: grant.relayRoomId,
       token: grant.token,
       role: grant.role,
+      suggestedFilename: basename(this.options.localFileService.getSummary().absolutePath),
     };
     if (this.options.publicApiUrl) urlInput.publicApiUrl = this.options.publicApiUrl;
     if (this.options.publicRelayWebSocketUrl) urlInput.publicRelayWebSocketUrl = this.options.publicRelayWebSocketUrl;
