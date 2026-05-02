@@ -66,6 +66,7 @@ type RelayClientMessage =
       asHost?: boolean;
     }
   | { type: 'propose_update'; proposalId?: string; updateBase64: string; replace?: boolean }
+  | { type: 'awareness_update'; updateBase64: string }
   | { type: 'host_ack'; proposalId: string; yjsStateBase64: string; sharedHash: string }
   | { type: 'host_reject'; proposalId: string; reason?: string }
   | { type: 'host_update'; yjsStateBase64: string; sharedHash: string }
@@ -123,6 +124,13 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
 
   function broadcast(relayRoomId: string, message: Record<string, unknown>): void {
     for (const connection of connectionsForRoom(relayRoomId)) {
+      sendJson(connection.socket, message);
+    }
+  }
+
+  function broadcastExcept(relayRoomId: string, excluded: RelayConnection, message: Record<string, unknown>): void {
+    for (const connection of connectionsForRoom(relayRoomId)) {
+      if (connection === excluded) continue;
       sendJson(connection.socket, message);
     }
   }
@@ -361,6 +369,15 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     rejectPending(pending, message.reason || 'host_write_failed');
   }
 
+  function handleAwarenessUpdate(connection: RelayConnection, message: Extract<RelayClientMessage, { type: 'awareness_update' }>): void {
+    const updateBase64 = requireString(message.updateBase64, 'missing_awareness_update');
+    broadcastExcept(connection.relayRoomId, connection, {
+      type: 'awareness_update',
+      fromSessionId: connection.sessionId,
+      updateBase64,
+    });
+  }
+
   async function handleMessage(socket: WebSocket, rawData: WebSocket.RawData): Promise<void> {
     try {
       assertRelayMessageBytes(rawData, limits.maxMessageBytes);
@@ -407,6 +424,10 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       }
       if (message.type === 'propose_update') {
         await handleProposal(connection, message);
+        return;
+      }
+      if (message.type === 'awareness_update') {
+        handleAwarenessUpdate(connection, message);
         return;
       }
       if (message.type === 'host_ack') {

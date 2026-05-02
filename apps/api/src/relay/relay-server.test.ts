@@ -91,6 +91,20 @@ async function nextMessageOfType(socket: WebSocket, type: string, label = type):
   throw new Error(`timed_out_waiting_for_${label}`);
 }
 
+async function expectNoMessage(socket: WebSocket, label: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off('message', onMessage);
+      resolve();
+    }, 150);
+    const onMessage = (raw: WebSocket.RawData) => {
+      clearTimeout(timer);
+      reject(new Error(`unexpected_${label}: ${raw.toString()}`));
+    };
+    socket.once('message', onMessage);
+  });
+}
+
 async function waitForCondition(assertion: () => Promise<void> | void, timeoutMs = 3000): Promise<void> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -255,6 +269,34 @@ describe('relay websocket authority bridge', () => {
       error: 'room_connection_limit_exceeded',
     });
     expect(stack.relay.connectionCount).toBe(2);
+  });
+
+  it('forwards ephemeral awareness updates to other live room sockets without echoing to the sender', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom();
+    const aliceGrant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const bobGrant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const alice = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: aliceGrant.token,
+      clientId: 'alice',
+      displayName: 'Alice',
+    });
+    const bob = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: bobGrant.token,
+      clientId: 'bob',
+      displayName: 'Bob',
+    });
+
+    alice.send(JSON.stringify({ type: 'awareness_update', updateBase64: 'AQID' }));
+
+    await expect(nextMessageOfType(bob, 'awareness_update')).resolves.toMatchObject({
+      type: 'awareness_update',
+      updateBase64: 'AQID',
+    });
+    await expectNoMessage(alice, 'awareness_echo');
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({ sharedRevision: 0 });
   });
 
   it('rejects websocket clients that claim host authority without the host token', async () => {

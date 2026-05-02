@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
-import { Awareness } from 'y-protocols/awareness';
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { MilkdownEditor } from '../components/MilkdownEditor';
 import { ReadOnlyMarkdownView } from '../components/ReadOnlyMarkdownView';
 import { readWebConfig } from '../config';
@@ -19,6 +19,12 @@ interface RelayCollab {
   ydoc: Y.Doc;
   awareness: Awareness;
   destroy: () => void;
+}
+
+interface AwarenessChange {
+  added: number[];
+  updated: number[];
+  removed: number[];
 }
 
 type RelayAccessMode = 'checking' | 'editable' | 'read-only';
@@ -244,7 +250,24 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
     });
 
     const socket = new WebSocket(relayWebSocketUrl());
+    let relayReadyForAwareness = false;
+    let cleanedUp = false;
     socketRef.current = socket;
+    const sendAwarenessUpdate = (clientIds: number[]) => {
+      if (!relayReadyForAwareness || clientIds.length === 0 || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(
+        JSON.stringify({
+          type: 'awareness_update',
+          updateBase64: encodeBase64(encodeAwarenessUpdate(awareness, clientIds)),
+        }),
+      );
+    };
+    const handleAwarenessUpdate = (change: AwarenessChange, origin: unknown) => {
+      if (origin === relayOrigin) return;
+      sendAwarenessUpdate([...change.added, ...change.updated, ...change.removed]);
+    };
+    awareness.on('update', handleAwarenessUpdate);
+
     const sendProposal = () => {
       proposalTimerRef.current = null;
       if (relayPausedRef.current) return;
@@ -306,6 +329,10 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
         replace?: boolean;
         reason?: string;
       };
+      if (message.type === 'awareness_update' && message.updateBase64) {
+        applyAwarenessUpdate(awareness, decodeBrowserBase64(message.updateBase64), relayOrigin);
+        return;
+      }
       if (typeof message.hostOnline === 'boolean') {
         hostOnlineRef.current = message.hostOnline;
         setHostOnline(message.hostOnline);
@@ -349,6 +376,10 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
           setStatusKind('status');
         }
       }
+      if (message.type === 'hello_ack') {
+        relayReadyForAwareness = true;
+        sendAwarenessUpdate([awareness.clientID]);
+      }
       if (message.type === 'rejected') {
         const hostOffline = message.reason === 'host_offline';
         if (message.proposalId && message.proposalId === pendingProposalIdRef.current) {
@@ -372,17 +403,25 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
       setHostOnline(false);
     });
 
+    const cleanupRelayCollab = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      ydoc.off('update', handleYjsUpdate);
+      if (proposalTimerRef.current !== null) window.clearTimeout(proposalTimerRef.current);
+      proposalTimerRef.current = null;
+      if (relayReadyForAwareness && socket.readyState === WebSocket.OPEN) {
+        awareness.setLocalState(null);
+      }
+      awareness.off('update', handleAwarenessUpdate);
+      socket.close();
+      awareness.destroy();
+      ydoc.destroy();
+    };
+
     setCollab({
       ydoc,
       awareness,
-      destroy: () => {
-        ydoc.off('update', handleYjsUpdate);
-        if (proposalTimerRef.current !== null) window.clearTimeout(proposalTimerRef.current);
-        proposalTimerRef.current = null;
-        socket.close();
-        awareness.destroy();
-        ydoc.destroy();
-      },
+      destroy: cleanupRelayCollab,
     });
 
     return () => {
@@ -390,12 +429,7 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
       setCollab(null);
       pendingProposalIdRef.current = null;
       dirtySincePendingRef.current = false;
-      ydoc.off('update', handleYjsUpdate);
-      if (proposalTimerRef.current !== null) window.clearTimeout(proposalTimerRef.current);
-      proposalTimerRef.current = null;
-      socket.close();
-      awareness.destroy();
-      ydoc.destroy();
+      cleanupRelayCollab();
     };
   }, [access, accessMode, identity, identityStatus, relayRoomId, token]);
 
