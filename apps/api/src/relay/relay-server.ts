@@ -3,6 +3,16 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { RelayRoomService, RelayAccessRole, RelayClientKind } from './relay-room-service';
+import {
+  assertRelayMessageBytes,
+  assertRelayRoomConnectionLimit,
+  relayRawDataByteLength,
+  resolveRelayLimits,
+} from './relay-limits';
+import {
+  noopRelayObservabilitySink,
+  type RelayObservabilitySink,
+} from './relay-observability';
 
 type RelayConnectionRole = 'host' | RelayAccessRole;
 
@@ -37,6 +47,10 @@ export interface RelayServerHandle {
 export interface CreateRelayServerOptions {
   proposalTimeoutMs?: number;
   hostLeaseMs?: number;
+  maxMessageBytes?: number;
+  maxConnectionsPerRoom?: number;
+  allowedOrigins?: readonly string[];
+  observability?: RelayObservabilitySink;
 }
 
 type RelayClientMessage =
@@ -86,9 +100,12 @@ function requireString(value: unknown, error: string): string {
 }
 
 export function createRelayServer(service: RelayRoomService, options: CreateRelayServerOptions = {}): RelayServerHandle {
-  const wss = new WebSocketServer({ noServer: true });
+  const limits = resolveRelayLimits(options);
+  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxMessageBytes });
   const proposalTimeoutMs = options.proposalTimeoutMs ?? 8000;
   const hostLeaseMs = options.hostLeaseMs ?? 30000;
+  const allowedOrigins = new Set(options.allowedOrigins ?? []);
+  const observability = options.observability ?? noopRelayObservabilitySink;
   const connections = new Set<RelayConnection>();
   const pendingByProposalId = new Map<string, PendingProposal>();
 
@@ -113,6 +130,13 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
   function rejectPending(pending: PendingProposal, reason: string): void {
     clearTimeout(pending.timer);
     pendingByProposalId.delete(pending.proposalId);
+    observability.increment('write_rejected', {
+      relayRoomId: pending.relayRoomId,
+      grantId: pending.proposer.grantId,
+      sessionId: pending.proposer.sessionId,
+      role: pending.proposer.role,
+      reason,
+    });
     sendJson(pending.proposer.socket, {
       type: 'rejected',
       proposalId: pending.proposalId,
@@ -131,6 +155,10 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     if (connection.role !== 'host') return;
     rejectPendingForHost(connection.relayRoomId, 'host_offline');
     if (markHostOffline) {
+      observability.increment('host_lease_offline', {
+        relayRoomId: connection.relayRoomId,
+        sessionId: connection.hostSessionId,
+      });
       void service.markHostOffline(connection.relayRoomId, connection.hostSessionId).catch(() => undefined);
       broadcast(connection.relayRoomId, { type: 'host_status', hostOnline: false });
     }
@@ -145,6 +173,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       const existingHost = hostForRoom(relayRoomId);
       if (existingHost) removeConnection(existingHost, false);
       const room = await service.markHostOnline(relayRoomId, hostSessionId);
+      assertRelayRoomConnectionLimit(connectionsForRoom(relayRoomId).length, limits.maxConnectionsPerRoom);
       const connection: RelayConnection = {
         socket,
         relayRoomId,
@@ -156,6 +185,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
         lastSeenAt: Date.now(),
       };
       connections.add(connection);
+      observability.increment('host_lease_online', { relayRoomId, sessionId: hostSessionId, clientKind: 'daemon' });
       sendJson(socket, {
         type: 'hello_ack',
         role: 'host',
@@ -171,6 +201,13 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
 
     const token = requireString(message.token, 'missing_token');
     const access = await service.verifyAccess({ relayRoomId, token, operation: 'read' });
+    observability.increment('grant_validation', {
+      relayRoomId,
+      grantId: access.grantId,
+      role: access.role,
+      clientKind: message.clientKind ?? 'browser',
+    });
+    assertRelayRoomConnectionLimit(connectionsForRoom(relayRoomId).length, limits.maxConnectionsPerRoom);
     let sessionId: string | null = null;
     if (message.clientId) {
       const session = await service.createOrUpdateSession({
@@ -214,19 +251,41 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
 
   async function handleProposal(connection: RelayConnection, message: Extract<RelayClientMessage, { type: 'propose_update' }>): Promise<void> {
     if (connection.role !== 'edit') {
+      observability.increment('write_rejected', {
+        relayRoomId: connection.relayRoomId,
+        grantId: connection.grantId,
+        sessionId: connection.sessionId,
+        role: connection.role,
+        reason: 'forbidden',
+      });
       sendJson(connection.socket, { type: 'rejected', reason: 'forbidden' });
       return;
     }
 
     const host = hostForRoom(connection.relayRoomId);
     const room = await service.getRoom(connection.relayRoomId);
-    if (!host || room.state !== 'host_online') {
-      sendJson(connection.socket, { type: 'rejected', reason: 'host_offline' });
+    if (!host || room.state !== 'host_online' || Date.now() - host.lastSeenAt > hostLeaseMs) {
+      const reason = host && Date.now() - host.lastSeenAt > hostLeaseMs ? 'host_lease_expired' : 'host_offline';
+      observability.increment('write_rejected', {
+        relayRoomId: connection.relayRoomId,
+        grantId: connection.grantId,
+        sessionId: connection.sessionId,
+        role: connection.role,
+        reason,
+      });
+      sendJson(connection.socket, { type: 'rejected', reason });
       return;
     }
 
     const proposalId = message.proposalId || randomUUID();
     if (pendingForRoom(connection.relayRoomId)) {
+      observability.increment('write_rejected', {
+        relayRoomId: connection.relayRoomId,
+        grantId: connection.grantId,
+        sessionId: connection.sessionId,
+        role: connection.role,
+        reason: 'proposal_in_flight',
+      });
       sendJson(connection.socket, { type: 'rejected', proposalId, reason: 'proposal_in_flight' });
       return;
     }
@@ -259,6 +318,12 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     proposalId: string | null,
   ): Promise<void> {
     if (connection.role !== 'host') {
+      observability.increment('write_rejected', {
+        relayRoomId: connection.relayRoomId,
+        sessionId: connection.sessionId,
+        role: connection.role,
+        reason: 'forbidden',
+      });
       sendJson(connection.socket, { type: 'rejected', reason: 'forbidden' });
       return;
     }
@@ -297,6 +362,19 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
   }
 
   async function handleMessage(socket: WebSocket, rawData: WebSocket.RawData): Promise<void> {
+    try {
+      assertRelayMessageBytes(rawData, limits.maxMessageBytes);
+    } catch {
+      const connection = connectionForSocket(socket);
+      observability.increment('oversized_message', {
+        relayRoomId: connection?.relayRoomId ?? null,
+        grantId: connection?.grantId ?? null,
+        sessionId: connection?.sessionId ?? null,
+        messageBytes: relayRawDataByteLength(rawData),
+      });
+      closeSocket(socket, 1009, 'message_too_large');
+      return;
+    }
     const message = decodeJsonMessage(rawData);
     if (!message) {
       sendJson(socket, { type: 'error', error: 'invalid_message' });
@@ -318,6 +396,10 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
 
       if (message.type === 'ping') {
         if (connection.role === 'host' && connection.hostSessionId) {
+          observability.increment('host_lease_online', {
+            relayRoomId: connection.relayRoomId,
+            sessionId: connection.hostSessionId,
+          });
           void service.markHostOnline(connection.relayRoomId, connection.hostSessionId).catch(() => undefined);
         }
         sendJson(socket, { type: 'pong' });
@@ -340,6 +422,9 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'relay_error';
+      if (reason === 'room_connection_limit_exceeded') {
+        observability.increment('room_connection_limit_rejected');
+      }
       sendJson(socket, { type: 'error', error: reason });
     }
   }
@@ -349,6 +434,10 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     for (const connection of [...connections]) {
       if (connection.role !== 'host') continue;
       if (now - connection.lastSeenAt <= hostLeaseMs) continue;
+      observability.increment('host_lease_expired', {
+        relayRoomId: connection.relayRoomId,
+        sessionId: connection.hostSessionId,
+      });
       closeSocket(connection.socket, 4001, 'host_lease_expired');
       removeConnection(connection, true);
     }
@@ -371,11 +460,20 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
 
   return {
     handleUpgrade(request, socket, head) {
+      if (allowedOrigins.size > 0) {
+        const origin = request.headers.origin;
+        if (!origin || !allowedOrigins.has(origin)) {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
       wss.handleUpgrade(request, socket, head, (websocket) => {
         wss.emit('connection', websocket, request);
       });
     },
     disconnectGrant(grantId) {
+      observability.increment('grant_revoked', { grantId });
       for (const connection of [...connections]) {
         if (connection.grantId !== grantId) continue;
         closeSocket(connection.socket, 4003, 'grant_revoked');
@@ -383,6 +481,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       }
     },
     closeRoom(relayRoomId) {
+      observability.increment('room_closed', { relayRoomId });
       for (const connection of connectionsForRoom(relayRoomId)) {
         closeSocket(connection.socket, 4004, 'room_closed');
         removeConnection(connection, false);

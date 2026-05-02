@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import crossws from 'crossws/adapters/node';
 import type { WebSocketLike } from '@hocuspocus/server';
 import { createCollabServer } from './collab/server';
+import { loadApiEnv } from './config/env';
 import { createPool, type DbPool } from './db/client';
 import { createHttpApp } from './http/app';
 import { createLocalFileServiceWithOptions } from './local/local-file-service';
@@ -12,7 +13,8 @@ import { createRelayServer } from './relay/relay-server';
 import { isLoopbackLocalRequest } from './routes/local-file-routes';
 import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
 
-const port = Number(process.env.PORT ?? 3001);
+const env = loadApiEnv();
+const port = env.port;
 const localMode = Boolean(process.env.MARKLAB_LOCAL_FILE);
 const host = process.env.MARKLAB_HOST ?? process.env.HOST ?? (localMode ? '127.0.0.1' : undefined);
 
@@ -38,14 +40,21 @@ async function main() {
     ? process.env.MARKLAB_LOCAL_TOKEN ?? randomBytes(24).toString('base64url')
     : undefined;
   const useDatabase = !localFileService || process.env.MARKLAB_LOCAL_USE_DATABASE === 'true';
-  const pool = useDatabase ? createPool() : createLocalOnlyPool();
+  const pool = useDatabase ? createPool(env.databaseUrl) : createLocalOnlyPool();
   const relayService =
-    useDatabase && process.env.DATABASE_URL
+    useDatabase && env.databaseUrl
       ? createRelayRoomService(pool)
       : process.env.MARKLAB_ENABLE_RELAY === 'true'
         ? createInMemoryRelayRoomService()
         : undefined;
-  const relay = relayService ? createRelayServer(relayService) : undefined;
+  const relay = relayService
+    ? createRelayServer(relayService, {
+        hostLeaseMs: env.relayHostLeaseSeconds * 1000,
+        maxConnectionsPerRoom: env.relayMaxRoomConnections,
+        maxMessageBytes: env.relayMaxMessageBytes,
+        ...(env.mode === 'production' ? { allowedOrigins: env.allowedOrigins } : {}),
+      })
+    : undefined;
   const shouldStartLocalRelayMirror = Boolean(
     localFileService && process.env.MARKLAB_RELAY_ROOM_ID && process.env.MARKLAB_RELAY_TOKEN,
   );
@@ -55,9 +64,9 @@ async function main() {
           localFileService,
           relayService,
           relayWebSocketUrl: process.env.MARKLAB_RELAY_WS_URL ?? `ws://127.0.0.1:${port}/relay`,
-          publicWebUrl: process.env.MARKLAB_PUBLIC_WEB_URL ?? process.env.MARKLAB_WEB_ORIGIN?.split(',')[0]?.trim() ?? `http://127.0.0.1:5175`,
-          publicApiUrl: process.env.MARKLAB_PUBLIC_API_URL ?? `http://127.0.0.1:${port}`,
-          publicRelayWebSocketUrl: process.env.MARKLAB_PUBLIC_RELAY_WS_URL ?? `ws://127.0.0.1:${port}/relay`,
+          publicWebUrl: env.publicWebUrl,
+          publicApiUrl: env.publicApiUrl,
+          publicRelayWebSocketUrl: env.publicRelayWebSocketUrl,
         })
       : undefined;
   const localRelayMirror =
@@ -101,6 +110,13 @@ async function main() {
           relayServer: relay,
         }
       : {}),
+    allowedOrigins: env.allowedOrigins,
+    enforceAllowedOrigins: env.mode === 'production',
+    health: {
+      databaseRequired: env.mode === 'production',
+      relayRequired: Boolean(relayService),
+      schemaTables: ['relay_rooms', 'relay_access_grants', 'relay_access_sessions'],
+    },
   });
   const httpServer = http.createServer(app);
   let isShuttingDown = false;

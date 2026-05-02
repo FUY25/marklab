@@ -77,6 +77,12 @@ export interface RelayShareState {
   sessions: RelayShareSessionSummary[];
 }
 
+export interface RelayCleanupResult {
+  expiredGrants: number;
+  staleSessions: number;
+  expiredEphemeralRooms: number;
+}
+
 export interface VerifiedRelayAccess {
   grantId: string;
   relayRoomId: string;
@@ -172,6 +178,10 @@ function isUsable(row: { expires_at?: Date | string | null; revoked_at?: Date | 
   if (row.revoked_at) return false;
   if (row.expires_at && new Date(row.expires_at).getTime() <= now) return false;
   return true;
+}
+
+function isExpired(expiresAt: string | null | undefined, nowMs = Date.now()): boolean {
+  return Boolean(expiresAt && new Date(expiresAt).getTime() <= nowMs);
 }
 
 function isHostOnline(state: RelayRoomState): boolean {
@@ -299,8 +309,11 @@ export class RelayRoomService {
       `update relay_rooms
           set host_session_id = $2,
               state = 'host_online',
+              host_offline_reason = null,
               last_ephemeral_yjs_state = coalesce($3, last_ephemeral_yjs_state),
               last_shared_hash = coalesce($4, last_shared_hash),
+              ephemeral_last_updated_at = case when $3::bytea is null then ephemeral_last_updated_at else now() end,
+              ephemeral_cache_expires_at = case when $3::bytea is null then ephemeral_cache_expires_at else now() + ($5::double precision * interval '1 second') end,
               updated_at = now()
         where id = $1
         returning id, host_session_id, state, last_ephemeral_yjs_state, last_shared_hash, shared_revision, created_at, updated_at`,
@@ -309,6 +322,7 @@ export class RelayRoomService {
         hostSessionId,
         input.lastEphemeralYjsState ? Buffer.from(input.lastEphemeralYjsState) : null,
         input.lastSharedHash ?? null,
+        relayEphemeralCacheTtlMs() / 1000,
       ],
     );
     const row = result.rows[0];
@@ -320,6 +334,7 @@ export class RelayRoomService {
     const result = await this.pool.query<RelayRoomRow>(
       `update relay_rooms
           set state = 'host_offline',
+              host_offline_reason = coalesce(host_offline_reason, 'host_offline'),
               updated_at = now()
         where id = $1
           and ($2::text is null or host_session_id = $2)
@@ -341,11 +356,16 @@ export class RelayRoomService {
       Buffer.from(input.yjsState),
       input.sharedHash,
       input.expectedRevision ?? null,
+      relayEphemeralCacheTtlMs() / 1000,
     ];
     const result = await this.pool.query<RelayRoomRow>(
       `update relay_rooms
           set last_ephemeral_yjs_state = $2,
               last_shared_hash = $3,
+              accepted_shared_revision = shared_revision + 1,
+              accepted_shared_hash = $3,
+              ephemeral_last_updated_at = now(),
+              ephemeral_cache_expires_at = now() + ($5::double precision * interval '1 second'),
               shared_revision = shared_revision + 1,
               updated_at = now()
         where id = $1
@@ -575,6 +595,55 @@ export class RelayRoomService {
   async assertTokenHashNotStoredAsRawToken(token: string, tokenHash: string): Promise<void> {
     if (hashesMatch(token, tokenHash)) throw new Error('relay_token_hash_matches_raw_token');
   }
+
+  async cleanupExpiredRelayState(input: {
+    now?: Date;
+    staleSessionTtlMs?: number;
+  } = {}): Promise<RelayCleanupResult> {
+    const now = input.now ?? new Date();
+    const staleSessionTtlMs = Number.isFinite(input.staleSessionTtlMs) && input.staleSessionTtlMs! > 0
+      ? input.staleSessionTtlMs!
+      : 24 * 60 * 60 * 1000;
+    const staleBefore = new Date(now.getTime() - staleSessionTtlMs);
+
+    const expiredGrants = await this.pool.query(
+      `update relay_access_grants
+          set revoked_at = coalesce(revoked_at, $1),
+              cleanup_last_run_at = $1
+        where expires_at is not null
+          and expires_at <= $1
+          and revoked_at is null`,
+      [now],
+    );
+    const staleSessions = await this.pool.query(
+      `delete from relay_access_sessions
+        where (expires_at is not null and expires_at <= $1)
+           or last_seen_at < $2
+           or exists (
+              select 1
+                from relay_access_grants g
+               where g.id = relay_access_sessions.grant_id
+                 and (g.revoked_at is not null or (g.expires_at is not null and g.expires_at <= $1))
+           )`,
+      [now, staleBefore],
+    );
+    const expiredEphemeralRooms = await this.pool.query(
+      `update relay_rooms
+          set last_ephemeral_yjs_state = null,
+              ephemeral_cache_expires_at = null,
+              cleanup_last_run_at = $1,
+              updated_at = now()
+        where ephemeral_cache_expires_at is not null
+          and ephemeral_cache_expires_at <= $1`,
+      [now],
+    );
+
+    return {
+      expiredGrants: expiredGrants.rowCount ?? 0,
+      staleSessions: staleSessions.rowCount ?? 0,
+      expiredEphemeralRooms: expiredEphemeralRooms.rowCount ?? 0,
+    };
+  }
 }
 
 export function createRelayRoomService(pool: DbPool): RelayRoomService {
@@ -723,7 +792,8 @@ export function createInMemoryRelayRoomService(): RelayRoomService {
         (candidate) =>
           candidate.tokenHash === tokenHash &&
           (!input.relayRoomId || candidate.relayRoomId === input.relayRoomId) &&
-          !candidate.revokedAt,
+          !candidate.revokedAt &&
+          !isExpired(candidate.expiresAtRaw),
       );
       if (!grant) throw new Error('forbidden');
       if (input.operation === 'write') assertRoleCanWrite(grant.role);
@@ -755,7 +825,9 @@ export function createInMemoryRelayRoomService(): RelayRoomService {
       displayName: string;
     }): Promise<RelayAccessSessionIdentity> {
       const grant = grants.get(input.grantId);
-      if (!grant || grant.relayRoomId !== input.relayRoomId || grant.revokedAt) throw new Error('forbidden');
+      if (!grant || grant.relayRoomId !== input.relayRoomId || grant.revokedAt || isExpired(grant.expiresAtRaw)) {
+        throw new Error('forbidden');
+      }
       const existing = [...sessions.values()].find(
         (session) => session.grantId === input.grantId && session.clientId === input.clientId,
       );
@@ -834,6 +906,43 @@ export function createInMemoryRelayRoomService(): RelayRoomService {
       if (!grant || grant.revokedAt) throw new Error('relay_access_grant_not_found');
       grants.set(grantId, { ...grant, revokedAt: now() });
       return { grantId, relayRoomId: grant.relayRoomId };
+    }
+
+    override async cleanupExpiredRelayState(input: {
+      now?: Date;
+      staleSessionTtlMs?: number;
+    } = {}): Promise<RelayCleanupResult> {
+      const nowMs = (input.now ?? new Date()).getTime();
+      const staleSessionTtlMs = Number.isFinite(input.staleSessionTtlMs) && input.staleSessionTtlMs! > 0
+        ? input.staleSessionTtlMs!
+        : 24 * 60 * 60 * 1000;
+      let expiredGrants = 0;
+      let staleSessions = 0;
+      let expiredEphemeralRooms = 0;
+
+      for (const [grantId, grant] of grants) {
+        if (!grant.revokedAt && isExpired(grant.expiresAtRaw, nowMs)) {
+          grants.set(grantId, { ...grant, revokedAt: new Date(nowMs).toISOString() });
+          expiredGrants += 1;
+        }
+      }
+
+      for (const [sessionId, session] of [...sessions]) {
+        const grant = session.grantId ? grants.get(session.grantId) : null;
+        const lastSeenAt = new Date(session.lastSeenAt).getTime();
+        if ((grant && (grant.revokedAt || isExpired(grant.expiresAtRaw, nowMs))) || nowMs - lastSeenAt > staleSessionTtlMs) {
+          sessions.delete(sessionId);
+          staleSessions += 1;
+        }
+      }
+
+      for (const [relayRoomId, room] of rooms) {
+        if (!isEphemeralCacheStale(room.state, room.updatedAt) || !room.lastEphemeralYjsState) continue;
+        rooms.set(relayRoomId, { ...room, lastEphemeralYjsState: null, updatedAt: new Date(nowMs).toISOString() });
+        expiredEphemeralRooms += 1;
+      }
+
+      return { expiredGrants, staleSessions, expiredEphemeralRooms };
     }
   }
 
@@ -1219,4 +1328,11 @@ export async function getRelayShareState(pool: DbPool, input: RelayShareStateInp
     links,
     sessions: sessionsResult.rows.map(shareSessionFromRow),
   };
+}
+
+export async function cleanupExpiredRelayState(
+  pool: DbPool,
+  input: { now?: Date; staleSessionTtlMs?: number } = {},
+): Promise<RelayCleanupResult> {
+  return new RelayRoomService(pool).cleanupExpiredRelayState(input);
 }

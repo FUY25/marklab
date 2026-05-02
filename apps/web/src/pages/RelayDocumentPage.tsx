@@ -48,7 +48,7 @@ function relayWebSocketUrl(): string {
   const fromUrl = params.get('wsUrl');
   if (fromUrl && fromUrl.trim()) return fromUrl;
   const config = readWebConfig();
-  return config.websocketUrl.replace(/\/collab$/u, '/relay');
+  return config.relayWebSocketUrl;
 }
 
 function readOrCreateRelayClientId(relayRoomId: string, grantId: string): string {
@@ -309,7 +309,19 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
       if (typeof message.hostOnline === 'boolean') {
         hostOnlineRef.current = message.hostOnline;
         setHostOnline(message.hostOnline);
-        if (!relayPausedRef.current) {
+        if (message.hostOnline && relayPausedRef.current) {
+          relayPausedRef.current = false;
+          setRelayPaused(false);
+          pendingProposalIdRef.current = null;
+          const shouldSendAgain = dirtySincePendingRef.current;
+          setStatus(shouldSendAgain ? 'Saving' : 'Connected');
+          setStatusKind('status');
+          if (shouldSendAgain) {
+            dirtySincePendingRef.current = false;
+            if (proposalTimerRef.current !== null) window.clearTimeout(proposalTimerRef.current);
+            proposalTimerRef.current = window.setTimeout(sendProposal, 0);
+          }
+        } else if (!relayPausedRef.current) {
           setStatus(message.hostOnline ? 'Connected' : 'Host offline');
           setStatusKind(message.hostOnline ? 'status' : 'alert');
         }
@@ -341,6 +353,10 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
         const hostOffline = message.reason === 'host_offline';
         if (message.proposalId && message.proposalId === pendingProposalIdRef.current) {
           pendingProposalIdRef.current = null;
+        }
+        if (hostOffline) {
+          hostOnlineRef.current = false;
+          setHostOnline(false);
         }
         relayPausedRef.current = true;
         setRelayPaused(true);

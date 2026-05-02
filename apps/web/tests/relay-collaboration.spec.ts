@@ -76,7 +76,11 @@ async function stopChild(child: ChildProcess): Promise<void> {
   ]);
 }
 
-async function startRelayStack() {
+interface RelayStackOptions {
+  publicWebUrl?: string;
+}
+
+async function startRelayStack(options: RelayStackOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'marklab-relay-e2e-'));
   const file = join(directory, 'README.md');
   const metadataPath = join(directory, 'metadata.json');
@@ -88,6 +92,7 @@ async function startRelayStack() {
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const webUrl = `http://127.0.0.1:${webPort}`;
   const relayWsUrl = `ws://127.0.0.1:${apiPort}/relay`;
+  const publicWebUrl = options.publicWebUrl ?? webUrl;
 
   const api = spawnPnpm(['--filter', '@marklab/api', 'start'], {
     PORT: String(apiPort),
@@ -97,7 +102,7 @@ async function startRelayStack() {
     MARKLAB_LOCAL_METADATA_PATH: metadataPath,
     MARKLAB_ENABLE_RELAY: 'true',
     MARKLAB_WEB_ORIGIN: webUrl,
-    MARKLAB_PUBLIC_WEB_URL: webUrl,
+    MARKLAB_PUBLIC_WEB_URL: publicWebUrl,
     MARKLAB_PUBLIC_API_URL: apiUrl,
     MARKLAB_PUBLIC_RELAY_WS_URL: relayWsUrl,
     MARKLAB_RELAY_WS_URL: relayWsUrl,
@@ -112,6 +117,12 @@ async function startRelayStack() {
   );
 
   await Promise.all([waitForHttp(`${apiUrl}/healthz`), waitForHttp(webUrl)]);
+  const localDocumentResponse = await fetch(`${apiUrl}/api/local/document`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!localDocumentResponse.ok) {
+    throw new Error(`local document prime failed: ${await localDocumentResponse.text()}`);
+  }
 
   async function createRelayLink(role: 'view' | 'edit'): Promise<string> {
     const response = await fetch(`${apiUrl}/api/local/access-grants`, {
@@ -129,6 +140,8 @@ async function startRelayStack() {
 
   return {
     file,
+    localToken: token,
+    webUrl,
     createRelayLink,
     stop: async () => {
       await stopChild(api);
@@ -136,6 +149,32 @@ async function startRelayStack() {
     },
   };
 }
+
+test('local Share creates hosted relay links without leaking local daemon access', async ({ page }) => {
+  test.setTimeout(90000);
+  const stack = await startRelayStack({ publicWebUrl: 'https://marklab-relay-alpha.example.test' });
+
+  try {
+    await page.goto(`${stack.webUrl}/local#token=${stack.localToken}`);
+    await expect(page.getByTestId('local-document-page')).toBeVisible();
+    await page.getByRole('button', { name: 'Share' }).click();
+    await expect(page.getByTestId('share-drawer')).toBeVisible();
+    await page.getByRole('button', { name: 'Create link' }).click();
+
+    const createdUrl = await page.getByTestId('created-access-url').textContent();
+    expect(createdUrl).toBeTruthy();
+    expect(createdUrl).toContain('https://marklab-relay-alpha.example.test/relay/');
+    expect(createdUrl).toContain('token=ml_relay_');
+    expect(createdUrl).toContain('mode=view');
+    expect(createdUrl).not.toContain('relay-local-token');
+    expect(createdUrl).not.toContain('localToken=');
+    expect(createdUrl).not.toContain('localDaemonToken=');
+    expect(createdUrl).not.toContain('#token=');
+    expect(createdUrl).not.toContain(stack.webUrl);
+  } finally {
+    await stack.stop();
+  }
+});
 
 test('edit relay browser joins by link and writes through the host local file', async ({ page }) => {
   test.setTimeout(90000);

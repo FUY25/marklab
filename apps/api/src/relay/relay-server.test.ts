@@ -9,7 +9,7 @@ import * as Y from 'yjs';
 import { createLocalFileServiceWithOptions, type LocalFileService } from '../local/local-file-service';
 import { createLocalRelayHostController, createLocalRelayMirrorController, type LocalRelayHostController, type LocalRelayMirrorController } from '../local/local-relay-client';
 import { createInMemoryRelayRoomService, type RelayRoomService } from './relay-room-service';
-import { createRelayServer, type RelayServerHandle } from './relay-server';
+import { createRelayServer, type CreateRelayServerOptions, type RelayServerHandle } from './relay-server';
 
 interface RelayStack {
   service: RelayRoomService;
@@ -31,9 +31,9 @@ function createState(text: string): Uint8Array {
   return state;
 }
 
-async function startRelayStack(): Promise<RelayStack> {
+async function startRelayStack(options: CreateRelayServerOptions = {}): Promise<RelayStack> {
   const service = createInMemoryRelayRoomService();
-  const relay = createRelayServer(service, { proposalTimeoutMs: 500, hostLeaseMs: 5000 });
+  const relay = createRelayServer(service, { proposalTimeoutMs: 500, hostLeaseMs: 5000, ...options });
   const server = http.createServer((_req, res) => {
     res.statusCode = 404;
     res.end();
@@ -171,6 +171,90 @@ describe('relay websocket authority bridge', () => {
     editor.send(JSON.stringify({ type: 'propose_update', proposalId: 'p1', updateBase64: 'AQID' }));
     await expect(nextMessage(editor)).resolves.toMatchObject({ type: 'rejected', reason: 'host_offline' });
     await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({ sharedRevision: 0 });
+  });
+
+  it('keeps view clients unable to write even while the host is online', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'view' });
+    await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const viewer = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      clientId: 'viewer',
+    });
+
+    viewer.send(JSON.stringify({ type: 'propose_update', proposalId: 'view-write', updateBase64: 'AQID' }));
+
+    await expect(nextMessage(viewer, 'view write rejection')).resolves.toMatchObject({
+      type: 'rejected',
+      reason: 'forbidden',
+    });
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({ sharedRevision: 0 });
+  });
+
+  it('rejects writes after the host lease expires before accepting a proposal', async () => {
+    const stack = await startRelayStack({ hostLeaseMs: 100 });
+    const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      clientId: 'editor',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    editor.send(JSON.stringify({ type: 'propose_update', proposalId: 'expired-host', updateBase64: 'AQID' }));
+
+    await expect(nextMessage(editor, 'host lease rejection')).resolves.toMatchObject({
+      type: 'rejected',
+      reason: 'host_lease_expired',
+    });
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({ sharedRevision: 0 });
+  });
+
+  it('rejects websocket messages over the configured byte limit', async () => {
+    const stack = await startRelayStack({ maxMessageBytes: 96 });
+    const socket = new WebSocket(stack.url);
+    await waitForOpen(socket);
+
+    const closed = once(socket, 'close');
+    socket.send(JSON.stringify({ type: 'hello', relayRoomId: 'room-too-large', token: 'x'.repeat(120) }));
+
+    const [code] = await closed;
+    expect(code).toBe(1009);
+  });
+
+  it('enforces a per-room connection limit', async () => {
+    const stack = await startRelayStack({ maxConnectionsPerRoom: 2 });
+    const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });
+    const grantA = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const grantB = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: grantA.token,
+      clientId: 'alice',
+    });
+
+    const bob = new WebSocket(stack.url);
+    await waitForOpen(bob);
+    bob.send(
+      JSON.stringify({
+        type: 'hello',
+        relayRoomId: room.relayRoomId,
+        token: grantB.token,
+        clientId: 'bob',
+        clientKind: 'browser',
+      }),
+    );
+
+    await expect(nextMessage(bob, 'connection limit')).resolves.toMatchObject({
+      type: 'error',
+      error: 'room_connection_limit_exceeded',
+    });
+    expect(stack.relay.connectionCount).toBe(2);
   });
 
   it('rejects websocket clients that claim host authority without the host token', async () => {
@@ -384,6 +468,31 @@ describe('relay websocket authority bridge', () => {
 
     expect(host.readyState).toBe(WebSocket.OPEN);
     expect(bob.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('stop sharing ends relay access without deleting the hosted local file', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nStill local.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      clientId: 'editor',
+    });
+
+    const closed = once(editor, 'close');
+    stack.relay.closeRoom(editLink.relayRoomId);
+    await closed;
+
+    await expect(readFile(hostLocal.file, 'utf8')).resolves.toContain('Still local.');
   });
 
   it('writes browser-like relay proposals through the host local Markdown file before broadcasting acceptance', async () => {

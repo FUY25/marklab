@@ -4,6 +4,7 @@ import {
   createOrUpdateRelaySession,
   createRelayGrant,
   createRelayRoom,
+  cleanupExpiredRelayState,
   getRelayShareState,
   hashRelayToken,
   revokeRelayGrant,
@@ -164,11 +165,50 @@ function createRelayPool(seed: {
       return { rows: rows as Row[], rowCount: rows.length };
     }
 
+    if (sql.includes('update relay_access_grants') && sql.includes('cleanup_last_run_at')) {
+      let rowCount = 0;
+      for (const grant of grants) {
+        if (!grant.expires_at || grant.revoked_at) continue;
+        if (new Date(grant.expires_at).getTime() > new Date(params?.[0] as Date).getTime()) continue;
+        grant.revoked_at = params?.[0] as Date;
+        rowCount += 1;
+      }
+      return { rows: [], rowCount };
+    }
+
     if (sql.includes('update relay_access_grants')) {
       const grant = grants.find((candidate) => candidate.id === params?.[0] && candidate.revoked_at === null);
       if (!grant) return { rows: [], rowCount: 0 };
       grant.revoked_at = updatedAt;
       return { rows: [{ id: grant.id, relay_room_id: grant.relay_room_id } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('delete from relay_access_sessions')) {
+      const now = new Date(params?.[0] as Date).getTime();
+      const staleBefore = new Date(params?.[1] as Date).getTime();
+      let rowCount = 0;
+      for (const session of [...sessions]) {
+        const grant = grants.find((candidate) => candidate.id === session.grant_id);
+        const grantExpired = Boolean(grant?.expires_at && new Date(grant.expires_at).getTime() <= now);
+        const grantRevoked = Boolean(grant?.revoked_at);
+        const stale = new Date(session.last_seen_at).getTime() < staleBefore;
+        if (!grantExpired && !grantRevoked && !stale) continue;
+        sessions.splice(sessions.indexOf(session), 1);
+        rowCount += 1;
+      }
+      return { rows: [], rowCount };
+    }
+
+    if (sql.includes('update relay_rooms') && sql.includes('cleanup_last_run_at')) {
+      let rowCount = 0;
+      const now = new Date(params?.[0] as Date).getTime();
+      for (const room of rooms as Array<RelayRoomRecord & { ephemeral_cache_expires_at?: Date | string | null }>) {
+        if (!room.ephemeral_cache_expires_at || new Date(room.ephemeral_cache_expires_at).getTime() > now) continue;
+        room.last_ephemeral_yjs_state = null;
+        room.ephemeral_cache_expires_at = null;
+        rowCount += 1;
+      }
+      return { rows: [], rowCount };
     }
 
     if (sql.includes('update relay_access_sessions') && sql.includes('where id = $1')) {
@@ -613,5 +653,97 @@ describe('relay-room service', () => {
     expect(JSON.stringify(state)).not.toContain(hashRelayToken(revokedToken));
     expect(JSON.stringify(state)).not.toContain(hashRelayToken(activeToken));
     expect(JSON.stringify(state)).not.toContain('token_hash');
+  });
+
+  it('cleanup revokes expired grants, removes stale sessions, and does not touch local file metadata', async () => {
+    const { pool, queries, grants, sessions, rooms } = createRelayPool({
+      rooms: [
+        {
+          id: 'room_1',
+          host_session_id: 'session_host',
+          state: 'host_offline',
+          last_ephemeral_yjs_state: new Uint8Array([1, 2, 3]),
+          last_shared_hash: 'sha256:canonical',
+          shared_revision: 4,
+          created_at: createdAt,
+          updated_at: '2026-05-01T11:00:00Z',
+          ephemeral_cache_expires_at: '2026-05-01T12:00:00Z',
+        } as RelayRoomRecord & { ephemeral_cache_expires_at: string },
+      ],
+      grants: [
+        {
+          id: 'grant_expired',
+          relay_room_id: 'room_1',
+          token_hash: hashRelayToken('ml_relay_expired'),
+          role: 'edit',
+          expires_at: '2026-05-01T12:00:00Z',
+          revoked_at: null,
+          created_at: createdAt,
+        },
+        {
+          id: 'grant_active',
+          relay_room_id: 'room_1',
+          token_hash: hashRelayToken('ml_relay_active'),
+          role: 'view',
+          expires_at: '2026-05-02T12:00:00Z',
+          revoked_at: null,
+          created_at: createdAt,
+        },
+      ],
+      sessions: [
+        {
+          id: 'session_expired',
+          grant_id: 'grant_expired',
+          client_id: 'old_editor',
+          client_kind: 'browser',
+          display_name: 'Old editor',
+          color: '#111111',
+          created_at: createdAt,
+          last_seen_at: '2026-05-01T12:05:00Z',
+        },
+        {
+          id: 'session_stale',
+          grant_id: 'grant_active',
+          client_id: 'stale_viewer',
+          client_kind: 'browser',
+          display_name: 'Stale viewer',
+          color: '#222222',
+          created_at: createdAt,
+          last_seen_at: '2026-05-01T10:00:00Z',
+        },
+        {
+          id: 'session_active',
+          grant_id: 'grant_active',
+          client_id: 'active_viewer',
+          client_kind: 'browser',
+          display_name: 'Active viewer',
+          color: '#333333',
+          created_at: createdAt,
+          last_seen_at: '2026-05-01T12:30:00Z',
+        },
+      ],
+    });
+
+    await expect(
+      cleanupExpiredRelayState(pool, {
+        now: new Date('2026-05-01T13:00:00Z'),
+        staleSessionTtlMs: 60 * 60 * 1000,
+      }),
+    ).resolves.toEqual({
+      expiredGrants: 1,
+      staleSessions: 2,
+      expiredEphemeralRooms: 1,
+    });
+
+    expect(grants.find((grant) => grant.id === 'grant_expired')?.revoked_at).toEqual(new Date('2026-05-01T13:00:00Z'));
+    expect(sessions.map((session) => session.id)).toEqual(['session_active']);
+    expect(rooms[0]?.last_ephemeral_yjs_state).toBeNull();
+    expect(rooms[0]?.last_shared_hash).toBe('sha256:canonical');
+    expect(rooms[0]?.shared_revision).toBe(4);
+
+    const sql = queries.map((query) => query.sql).join('\n');
+    expect(sql).not.toMatch(/local/i);
+    expect(sql).not.toMatch(/metadata/i);
+    expectNoCloudDocumentSql(queries);
   });
 });

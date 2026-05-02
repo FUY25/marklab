@@ -125,6 +125,18 @@ async function replaceLocalFileWithRelayState(localFileService: LocalFileService
   return currentLocalYjsState(localFileService);
 }
 
+function isBackingFileAvailable(localFileService: LocalFileService): boolean {
+  return localFileService.isBackingFileAvailable?.() ?? true;
+}
+
+async function pauseForMissingBackingFile(localFileService: LocalFileService, kind: 'host' | 'mirror'): Promise<void> {
+  if (localFileService.pauseForMissingBackingFile) {
+    await localFileService.pauseForMissingBackingFile(kind);
+    return;
+  }
+  await localFileService.pauseForRelayConflict(kind === 'host' ? 'host_file_missing' : 'mirror_file_missing');
+}
+
 class DefaultLocalRelayHostController implements LocalRelayHostController {
   private socket: WebSocket | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -239,6 +251,10 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
   private async publishLocalChangeIfNeeded(): Promise<void> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (this.handlingProposal) return;
+    if (!isBackingFileAvailable(this.options.localFileService)) {
+      await this.pauseHostForMissingBackingFile();
+      return;
+    }
     const summary = this.options.localFileService.getSummary();
     if (summary.conflict) return;
     if (summary.hash === this.lastPublishedHash) {
@@ -268,6 +284,17 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     if (message.type !== 'proposal' || !message.proposalId || !message.updateBase64) return;
 
     try {
+      if (!isBackingFileAvailable(this.options.localFileService)) {
+        await this.pauseHostForMissingBackingFile();
+        this.socket.send(
+          JSON.stringify({
+            type: 'host_reject',
+            proposalId: message.proposalId,
+            reason: 'host_file_missing',
+          }),
+        );
+        return;
+      }
       this.handlingProposal = true;
       const acceptedState = message.replace
         ? await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(message.updateBase64))
@@ -293,6 +320,17 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     } finally {
       this.handlingProposal = false;
     }
+  }
+
+  private async pauseHostForMissingBackingFile(): Promise<void> {
+    const relayRoomId = this.currentRelayRoomId;
+    await pauseForMissingBackingFile(this.options.localFileService, 'host');
+    if (relayRoomId) {
+      await this.options.relayService.markHostOffline(relayRoomId, this.currentHostSessionId);
+    }
+    this.socket?.close(4008, 'host_file_missing');
+    this.socket = null;
+    this.stopPublishingLocalChanges();
   }
 
   stop(): void {
@@ -623,6 +661,10 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (!this.hostOnline) return;
     if (this.pendingProposalId) return;
+    if (!isBackingFileAvailable(this.options.localFileService)) {
+      await this.pauseMirrorForMissingBackingFile();
+      return;
+    }
     const summary = this.options.localFileService.getSummary();
     if (summary.conflict) return;
     if (summary.hash === this.lastAcceptedLocalHash) {
@@ -744,6 +786,10 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
     input: { sharedRevision: number; sharedHash: string | null; hostSessionId: string | null },
   ): Promise<void> {
     if (this.options.localFileService.getCurrentConflict()) return;
+    if (!isBackingFileAvailable(this.options.localFileService)) {
+      await this.pauseMirrorForMissingBackingFile();
+      return;
+    }
     this.applyingRemote = true;
     try {
       await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(yjsStateBase64));
@@ -819,6 +865,14 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
         });
       }
     }
+  }
+
+  private async pauseMirrorForMissingBackingFile(): Promise<void> {
+    await pauseForMissingBackingFile(this.options.localFileService, 'mirror');
+    this.hostOnline = false;
+    this.stopPublishingLocalChanges();
+    this.socket?.close(4008, 'mirror_file_missing');
+    this.socket = null;
   }
 
   stop(): void {

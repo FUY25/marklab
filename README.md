@@ -71,6 +71,28 @@ Product journey docs:
 - [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
 - [AI Agent Guide](docs/agent/marklab-agent-guide.md)
 
+## Plan 04A Alpha Production Packaging
+
+The Plan 04A alpha production path is Fly.io plus Neon in Singapore:
+
+- Fly.io region: `sin`
+- Neon region: AWS Asia Pacific 1 Singapore, `aws-ap-southeast-1`
+- default Fly app name: `marklab-relay-alpha`
+
+Docker is the portability boundary, but Fly.io and Neon are the first documented operator path for the hosted relay. Start with:
+
+```bash
+fly launch --no-deploy --name marklab-relay-alpha --region sin
+```
+
+Then follow [infra/fly/README.md](infra/fly/README.md). Production operation and product semantics live in:
+
+- [Hosted Relay Operations](docs/production/relay-ops.md)
+- [Local Daemon Distribution](docs/production/local-daemon-distribution.md)
+- [Privacy And Storage](docs/production/privacy-and-storage.md)
+
+Plan 04A does not implement Homebrew distribution, a signed standalone app, a menubar manager, a native Markdown editor, a workspace/sidebar product, or a hosted AI write/edit path.
+
 ## Using MarkLab With Codex, Claude Code, Or Cursor
 
 Codex, Claude Code, Cursor, and similar agents should treat the local Markdown file as the write surface. MarkLab is process control and sync infrastructure around that file: agents can ask for status, create a safety snapshot, wait for convergence, inspect conflicts, and manage share links through the CLI.

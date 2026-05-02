@@ -1,0 +1,49 @@
+name: CLI Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish-cli:
+    name: Publish @marklab/cli
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: CLI package install smoke
+        run: pnpm test apps/cli/package-install-smoke.test.mjs
+
+      - name: Pack dry-run
+        working-directory: apps/cli
+        run: npm pack --dry-run
+
+      - name: Publish alpha CLI
+        working-directory: apps/cli
+        run: npm publish --access public --tag alpha
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,90 @@
+name: marklab-prod-smoke
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: marklab
+      POSTGRES_USER: marklab
+      POSTGRES_PASSWORD: marklab
+    ports:
+      - "54329:5432"
+    volumes:
+      - marklab-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marklab -d marklab"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: marklab
+    volumes:
+      - ../../apps/api/src/db/schema.sql:/schema.sql:ro
+    command:
+      - sh
+      - -lc
+      - psql "postgres://marklab:marklab@postgres:5432/marklab" -v ON_ERROR_STOP=1 -f /schema.sql
+    restart: "no"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DATABASE_URL: postgres://marklab:marklab@postgres:5432/marklab
+      MARKLAB_LOCAL_PRODUCTION_SMOKE: "true"
+      MARKLAB_ENABLE_RELAY: "true"
+      MARKLAB_REQUIRE_AUTH: "true"
+      MARKLAB_PUBLIC_WEB_URL: http://127.0.0.1:8080
+      MARKLAB_PUBLIC_API_URL: http://127.0.0.1:3001
+      MARKLAB_PUBLIC_RELAY_WS_URL: ws://127.0.0.1:3001/relay
+      MARKLAB_ALLOWED_ORIGINS: http://127.0.0.1:8080
+      MARKLAB_WEB_ORIGIN: http://127.0.0.1:8080
+      MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: "86400"
+      MARKLAB_RELAY_HOST_LEASE_SECONDS: "30"
+      MARKLAB_RELAY_MAX_ROOM_CONNECTIONS: "32"
+      MARKLAB_RELAY_MAX_MESSAGE_BYTES: "1048576"
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:3001/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 20s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        VITE_MARKLAB_API_URL: http://127.0.0.1:3001
+        VITE_MARKLAB_WS_URL: ws://127.0.0.1:3001/collab
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  marklab-postgres:

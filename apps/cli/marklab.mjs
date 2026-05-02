@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { basename, dirname, resolve, sep } from 'node:path';
@@ -34,9 +34,17 @@ import {
   readLocalConflictState,
   readLocalDocument,
 } from './recent-files.mjs';
+import { buildRelayJoinUrls, loadRelayConfig } from './relay-config.mjs';
 import { waitForSync } from './wait-for-sync.mjs';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const cliRoot = dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = resolve(cliRoot, '../..');
+const packagedRuntimeRoot = resolve(cliRoot, 'runtime');
+const repoRoot = existsSync(resolve(workspaceRoot, 'pnpm-workspace.yaml'))
+  ? workspaceRoot
+  : existsSync(resolve(packagedRuntimeRoot, 'pnpm-workspace.yaml'))
+    ? packagedRuntimeRoot
+    : cliRoot;
 const cliPath = fileURLToPath(import.meta.url);
 const defaultApiPort = 3011;
 const defaultWebPort = 5175;
@@ -63,6 +71,33 @@ export function printUsage() {
   marklab stop --all`);
 }
 
+export function printCommandUsage(command) {
+  if (command === 'open') {
+    console.log(`Usage:
+  marklab open <file.md>
+  marklab open <file.md> --background
+
+Open a local Markdown file in MarkLab. Foreground mode keeps the daemon attached to this terminal; background mode keeps it running until marklab stop.`);
+    return;
+  }
+  if (command === 'share') {
+    console.log(`Usage:
+  marklab share <file.md> [--json]
+
+Start sharing a local Markdown file. Foreground sharing stops when this terminal exits. Background hosting is available by opening the file with --background and creating links from that daemon.`);
+    return;
+  }
+  if (command === 'join') {
+    console.log(`Usage:
+  marklab join <edit-link> <file.md>
+  marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir]
+
+Join an edit link as a local Markdown mirror. View links and host-offline links are rejected before directories, files, watchers, or daemons are created.`);
+    return;
+  }
+  printUsage();
+}
+
 function parseFlagValue(args, name) {
   const index = args.indexOf(name);
   if (index === -1) return null;
@@ -87,6 +122,8 @@ function positionalArgs(args, flagsWithValues = []) {
 export function parseCliArgs(argv) {
   const [command, ...rest] = argv;
   const json = rest.includes('--json');
+  if (!command || command === 'help' || command === '--help' || command === '-h') return { command: 'help', json };
+  if (rest.includes('--help') || rest.includes('-h')) return { command: 'help', topic: command, json };
   if (command === 'open') {
     const file = positionalArgs(rest)[0] ?? null;
     return {
@@ -290,6 +327,10 @@ export function buildLocalUrls(apiPort, webPort, token) {
   };
 }
 
+function localRelayConfig(apiPort, webPort) {
+  return loadRelayConfig({ apiPort, webPort });
+}
+
 function isPortAvailable(port) {
   return new Promise((resolveCheck) => {
     const server = net.createServer();
@@ -347,6 +388,7 @@ async function stopChildrenAndExit(children, code) {
 export function serveLocalFile(input) {
   const token = input.token;
   const { apiUrl, webUrl, localUrl } = buildLocalUrls(input.apiPort, input.webPort, token);
+  const relayConfig = input.relayConfig ?? localRelayConfig(input.apiPort, input.webPort);
   const stdio = input.stdio ?? 'inherit';
   const metadataPath = input.metadataPath ?? defaultMetadataPath();
   const children = [
@@ -361,10 +403,10 @@ export function serveLocalFile(input) {
         MARKLAB_WEB_ORIGIN: webUrl,
         MARKLAB_REQUIRE_AUTH: 'false',
         ...(input.enableRelay !== false ? { MARKLAB_ENABLE_RELAY: 'true' } : {}),
-        MARKLAB_PUBLIC_API_URL: apiUrl,
-        MARKLAB_PUBLIC_WEB_URL: webUrl,
-        MARKLAB_PUBLIC_RELAY_WS_URL: `ws://127.0.0.1:${input.apiPort}/relay`,
-        MARKLAB_RELAY_WS_URL: `ws://127.0.0.1:${input.apiPort}/relay`,
+        MARKLAB_PUBLIC_API_URL: relayConfig.publicApiUrl,
+        MARKLAB_PUBLIC_WEB_URL: relayConfig.publicWebUrl,
+        MARKLAB_PUBLIC_RELAY_WS_URL: relayConfig.publicRelayWebSocketUrl,
+        MARKLAB_RELAY_WS_URL: relayConfig.relayWebSocketUrl,
         ...(input.relayJoin
           ? {
               MARKLAB_RELAY_ROOM_ID: input.relayJoin.relayRoomId,
@@ -467,11 +509,14 @@ async function shareForeground(file) {
   const markdownPath = await resolveMarkdownFile(file);
   const { apiPort, webPort } = await chooseLocalPorts();
   const token = randomBytes(24).toString('base64url');
-  const session = serveLocalFile({ markdownPath, apiPort, webPort, token, enableRelay: true });
+  const relayConfig = localRelayConfig(apiPort, webPort);
+  const session = serveLocalFile({ markdownPath, apiPort, webPort, token, enableRelay: true, relayConfig });
   await session.waitReady();
   const created = await createLocalRelayLink(session.apiUrl, token, 'edit');
   console.log(`Sharing ${markdownPath}`);
   console.log(`Edit link: ${created.url}`);
+  console.log('Host online means the MarkLab daemon is running and connected.');
+  console.log('This foreground share stops if this terminal closes. Closing the browser tab does not stop hosting.');
   console.log(`Local browser URL: ${session.localUrl}`);
   openBrowser(session.localUrl);
   await waitForSessionExit(session);
@@ -486,6 +531,7 @@ async function ensureBackgroundDaemon(file) {
   const { apiPort, webPort } = await chooseLocalPorts();
   const token = randomBytes(24).toString('base64url');
   const { apiUrl, webUrl, localUrl } = buildLocalUrls(apiPort, webPort, token);
+  const relayConfig = localRelayConfig(apiPort, webPort);
   const child = spawn(process.execPath, [cliPath, '__serve', markdownPath, '--api-port', String(apiPort), '--web-port', String(webPort), '--token', token], {
     cwd: repoRoot,
     detached: true,
@@ -494,6 +540,14 @@ async function ensureBackgroundDaemon(file) {
       ...process.env,
       MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
       MARKLAB_LOCAL_METADATA_PATH: defaultMetadataPath(),
+      ...(relayConfig.mode === 'production'
+        ? {
+            MARKLAB_PUBLIC_API_URL: relayConfig.publicApiUrl,
+            MARKLAB_PUBLIC_WEB_URL: relayConfig.publicWebUrl,
+            MARKLAB_PUBLIC_RELAY_WS_URL: relayConfig.publicRelayWebSocketUrl,
+            MARKLAB_RELAY_WS_URL: relayConfig.relayWebSocketUrl,
+          }
+        : {}),
     },
   });
   child.unref();
@@ -565,6 +619,7 @@ async function openBackground(file) {
   const { apiPort, webPort } = await chooseLocalPorts();
   const token = randomBytes(24).toString('base64url');
   const { apiUrl, webUrl, localUrl } = buildLocalUrls(apiPort, webPort, token);
+  const relayConfig = localRelayConfig(apiPort, webPort);
   const child = spawn(process.execPath, [cliPath, '__serve', markdownPath, '--api-port', String(apiPort), '--web-port', String(webPort), '--token', token], {
     cwd: repoRoot,
     detached: true,
@@ -573,6 +628,14 @@ async function openBackground(file) {
       ...process.env,
       MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
       MARKLAB_LOCAL_METADATA_PATH: defaultMetadataPath(),
+      ...(relayConfig.mode === 'production'
+        ? {
+            MARKLAB_PUBLIC_API_URL: relayConfig.publicApiUrl,
+            MARKLAB_PUBLIC_WEB_URL: relayConfig.publicWebUrl,
+            MARKLAB_PUBLIC_RELAY_WS_URL: relayConfig.publicRelayWebSocketUrl,
+            MARKLAB_RELAY_WS_URL: relayConfig.relayWebSocketUrl,
+          }
+        : {}),
     },
   });
   child.unref();
@@ -884,7 +947,7 @@ function parseRelayLink(link) {
   if (!match?.[1]) throw new Error('join requires a relay edit link');
   const token = url.searchParams.get('token');
   if (!token) throw new Error('join requires a relay token');
-  const apiUrl = url.searchParams.get('apiUrl') ?? `${url.protocol}//${url.hostname}:3011`;
+  const { apiUrl } = buildRelayJoinUrls(link);
   return {
     relayRoomId: decodeURIComponent(match[1]),
     token,
@@ -949,7 +1012,7 @@ async function joinCommand(input) {
   await writeFile(target, access.markdown ?? '', 'utf8');
   const { apiPort, webPort } = await chooseLocalPorts();
   const localToken = randomBytes(24).toString('base64url');
-  const wsUrl = new URL(input.link).searchParams.get('wsUrl') ?? link.apiUrl.replace(/^http/u, 'ws').replace(/\/$/u, '') + '/relay';
+  const { wsUrl } = buildRelayJoinUrls(input.link);
   const session = serveLocalFile({
     markdownPath: target,
     apiPort,
@@ -1091,6 +1154,11 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (input.command === 'help') {
+    printCommandUsage(input.topic);
+    return;
+  }
+
   if (input.command === '__serve') {
     await serveCommand(input);
     return;
@@ -1103,7 +1171,16 @@ export async function main(argv = process.argv.slice(2)) {
   process.exit(input.command === 'help' ? 0 : 2);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+function isDirectCliInvocation() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectCliInvocation()) {
   void main().catch((error) => {
     const wantsJson = process.argv.slice(2).includes('--json');
     if (wantsJson) {

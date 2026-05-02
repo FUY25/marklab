@@ -126,6 +126,8 @@ export interface LocalFileService extends LocalRoomStore {
   getSummary(): LocalFileDocumentSummary;
   getRelayJoinState(): StoredLocalRelayJoinState | null;
   saveRelayJoinState(state: StoredLocalRelayJoinState): Promise<void>;
+  isBackingFileAvailable?(): boolean;
+  pauseForMissingBackingFile?(kind: 'host' | 'mirror'): Promise<void>;
   pauseForRelayConflict(message: string): Promise<void>;
   getCurrentConflict(): ReconnectConflict | null;
   getConflict(conflictId: string): Promise<ReconnectConflict | null>;
@@ -571,6 +573,14 @@ export async function createLocalFileServiceWithOptions(
     async saveRelayJoinState(state) {
       relayJoinState = { ...state };
       await metadataStore.saveRelayJoin(relayJoinState);
+    },
+    isBackingFileAvailable() {
+      return existsSync(absolutePath);
+    },
+    async pauseForMissingBackingFile(kind) {
+      conflict = kind === 'host' ? 'host_file_missing' : 'mirror_file_missing';
+      await createConflictRecoverySnapshot();
+      await persistCurrentDocument();
     },
     async pauseForRelayConflict(message) {
       conflict = message;

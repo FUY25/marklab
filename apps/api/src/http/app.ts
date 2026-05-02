@@ -31,9 +31,18 @@ export interface HttpAppOptions {
   localMode?: boolean;
   relayService?: RelayRoomService;
   relayServer?: RelayServerHandle;
+  allowedOrigins?: readonly string[];
+  enforceAllowedOrigins?: boolean;
+  health?: HttpHealthOptions;
   localRelayHost?: LocalRelayHostController;
   localRelayMirror?: LocalRelayMirrorController;
   enableLegacyDocAiRoutes?: boolean;
+}
+
+export interface HttpHealthOptions {
+  databaseRequired?: boolean;
+  relayRequired?: boolean;
+  schemaTables?: readonly string[];
 }
 
 export interface HttpRequestAuth {
@@ -73,9 +82,13 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
-function configuredCorsOrigins(): Set<string> {
+function configuredCorsOrigins(customOrigins: readonly string[] = []): Set<string> {
   const origins = new Set(defaultCorsOrigins);
-  for (const envName of ['MARKLAB_WEB_ORIGIN', 'MARKLAB_CORS_ORIGIN']) {
+  for (const customOrigin of customOrigins) {
+    const origin = normalizeOrigin(customOrigin);
+    if (origin) origins.add(origin);
+  }
+  for (const envName of ['MARKLAB_WEB_ORIGIN', 'MARKLAB_CORS_ORIGIN', 'MARKLAB_ALLOWED_ORIGINS']) {
     const rawValue = process.env[envName];
     if (!rawValue) continue;
 
@@ -87,8 +100,8 @@ function configuredCorsOrigins(): Set<string> {
   return origins;
 }
 
-function createCorsMiddleware() {
-  const allowedOrigins = configuredCorsOrigins();
+function createCorsMiddleware(input: { allowedOrigins?: readonly string[]; enforceAllowedOrigins?: boolean } = {}) {
+  const allowedOrigins = configuredCorsOrigins(input.allowedOrigins);
 
   return (req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin;
@@ -98,6 +111,9 @@ function createCorsMiddleware() {
       res.setHeader('Access-Control-Allow-Methods', corsMethods);
       res.setHeader('Access-Control-Allow-Headers', corsHeaders);
       res.setHeader('Access-Control-Expose-Headers', exposedCorsHeaders);
+    } else if (origin && input.enforceAllowedOrigins) {
+      res.status(403).json({ error: 'origin_not_allowed' });
+      return;
     }
 
     if (req.method === 'OPTIONS') {
@@ -106,6 +122,59 @@ function createCorsMiddleware() {
     }
 
     next();
+  };
+}
+
+async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefined, input: HttpHealthOptions = {}) {
+  const database = { required: Boolean(input.databaseRequired), ready: false, error: null as string | null };
+  const schema = { required: Boolean(input.databaseRequired), ready: false, missing: [] as string[], error: null as string | null };
+  const relay = {
+    required: Boolean(input.relayRequired),
+    ready: !input.relayRequired || Boolean(relayServer),
+    connectionCount: relayServer?.connectionCount ?? 0,
+  };
+
+  if (!input.databaseRequired) {
+    return {
+      ok: relay.ready,
+      process: { ready: true },
+      database,
+      schema,
+      relay,
+    };
+  }
+
+  try {
+    await pool.query('select 1');
+    database.ready = true;
+  } catch (error) {
+    database.error = error instanceof Error ? error.message : 'database_unavailable';
+  }
+
+  if (database.ready) {
+    try {
+      const tables = input.schemaTables ?? ['relay_rooms', 'relay_access_grants', 'relay_access_sessions'];
+      const result = await pool.query<{ table_name: string }>(
+        `select table_name
+           from information_schema.tables
+          where table_schema = 'public'
+            and table_name = any($1::text[])`,
+        [tables],
+      );
+      const present = new Set(result.rows.map((row) => row.table_name));
+      schema.missing = tables.filter((table) => !present.has(table));
+      schema.ready = schema.missing.length === 0;
+    } catch (error) {
+      schema.error = error instanceof Error ? error.message : 'schema_unavailable';
+    }
+  }
+
+  return {
+    ok: database.ready && schema.ready && relay.ready,
+    process: { ready: true },
+    database,
+    schema,
+    relay,
   };
 }
 
@@ -299,11 +368,19 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   if (options.relayService) relayRouteOptions.relayService = options.relayService;
   if (options.relayServer) relayRouteOptions.relayServer = options.relayServer;
   const localMode = options.localMode ?? Boolean(options.localFileService);
-  app.use(createCorsMiddleware());
+  app.use(createCorsMiddleware({
+    ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
+    enforceAllowedOrigins: options.enforceAllowedOrigins ?? false,
+  }));
   app.use(express.json({ limit: '2mb' }));
 
-  app.get('/healthz', (_req: Request, res: Response) => {
-    res.json({ ok: true });
+  app.get('/healthz', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const health = await readHealth(pool, options.relayServer, options.health);
+      res.status(health.ok ? 200 : 503).json(health);
+    } catch (error) {
+      next(error);
+    }
   });
 
   if (localMode) {

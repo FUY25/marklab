@@ -131,19 +131,43 @@ create table if not exists relay_rooms (
   last_ephemeral_yjs_state bytea,
   last_shared_hash text,
   shared_revision integer not null default 0,
+  accepted_shared_revision integer,
+  accepted_shared_hash text,
+  ephemeral_cache_expires_at timestamptz,
+  ephemeral_last_updated_at timestamptz,
+  cleanup_last_run_at timestamptz,
+  host_lease_expires_at timestamptz,
+  host_offline_reason text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table relay_rooms
+  add column if not exists accepted_shared_revision integer,
+  add column if not exists accepted_shared_hash text,
+  add column if not exists ephemeral_cache_expires_at timestamptz,
+  add column if not exists ephemeral_last_updated_at timestamptz,
+  add column if not exists cleanup_last_run_at timestamptz,
+  add column if not exists host_lease_expires_at timestamptz,
+  add column if not exists host_offline_reason text;
 
 create table if not exists relay_access_grants (
   id uuid primary key default gen_random_uuid(),
   relay_room_id uuid not null references relay_rooms(id) on delete cascade,
   token_hash text not null unique,
   role text not null check (role in ('view', 'edit')),
+  accepted_shared_revision integer,
+  accepted_shared_hash text,
   expires_at timestamptz,
   revoked_at timestamptz,
+  cleanup_last_run_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table relay_access_grants
+  add column if not exists accepted_shared_revision integer,
+  add column if not exists accepted_shared_hash text,
+  add column if not exists cleanup_last_run_at timestamptz;
 
 create table if not exists relay_access_sessions (
   id uuid primary key default gen_random_uuid(),
@@ -152,17 +176,43 @@ create table if not exists relay_access_sessions (
   client_kind text not null default 'browser' check (client_kind in ('browser', 'daemon', 'agent')),
   display_name text not null,
   color text not null,
+  expires_at timestamptz,
   last_seen_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+
+alter table relay_access_sessions
+  add column if not exists expires_at timestamptz;
 
 create index if not exists relay_access_grants_room_active_idx
   on relay_access_grants (relay_room_id, created_at desc)
   where revoked_at is null;
 
+create index if not exists relay_access_grants_token_hash_idx
+  on relay_access_grants (token_hash);
+
+create index if not exists relay_access_grants_expiration_idx
+  on relay_access_grants (expires_at)
+  where revoked_at is null and expires_at is not null;
+
 create index if not exists relay_access_sessions_grant_seen_idx
   on relay_access_sessions (grant_id, last_seen_at desc);
+
+create index if not exists relay_access_sessions_expiration_idx
+  on relay_access_sessions (expires_at)
+  where expires_at is not null;
+
+create index if not exists relay_access_sessions_seen_idx
+  on relay_access_sessions (last_seen_at);
 
 create unique index if not exists relay_access_sessions_grant_client_idx
   on relay_access_sessions (grant_id, client_id)
   where grant_id is not null;
+
+create index if not exists relay_rooms_host_lease_expiration_idx
+  on relay_rooms (host_lease_expires_at)
+  where state = 'host_online' and host_lease_expires_at is not null;
+
+create index if not exists relay_rooms_ephemeral_expiration_idx
+  on relay_rooms (ephemeral_cache_expires_at)
+  where ephemeral_cache_expires_at is not null;
