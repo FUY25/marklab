@@ -8,6 +8,7 @@ import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import {
   createJsonLocalMetadataStore,
   type LocalMetadataStore,
+  type StoredLocalRelayHostState,
   type StoredLocalRelayJoinState,
   type StoredLocalVersion,
   type StoredLocalVersionOperation,
@@ -124,6 +125,9 @@ interface LocalVersionRecord {
 export interface LocalFileService extends LocalRoomStore {
   readonly roomName: string;
   getSummary(): LocalFileDocumentSummary;
+  getRelayHostState(): StoredLocalRelayHostState | null;
+  saveRelayHostState(state: StoredLocalRelayHostState): Promise<void>;
+  clearRelayHostState(): Promise<void>;
   getRelayJoinState(): StoredLocalRelayJoinState | null;
   saveRelayJoinState(state: StoredLocalRelayJoinState): Promise<void>;
   isBackingFileAvailable?(): boolean;
@@ -249,6 +253,7 @@ export async function createLocalFileServiceWithOptions(
   let currentOpenConflict: ReconnectConflict | null = null;
   let historyLoadError: string | null = null;
   let lastConflictRecoveryHash: string | null = null;
+  let relayHostState: StoredLocalRelayHostState | null = null;
   let relayJoinState: StoredLocalRelayJoinState | null = null;
   let watcher: FSWatcher | null = null;
   let watcherTimer: NodeJS.Timeout | null = null;
@@ -258,6 +263,7 @@ export async function createLocalFileServiceWithOptions(
   let versions: LocalVersionRecord[] = [];
   try {
     await metadataStore.loadDocument(absolutePath);
+    relayHostState = await metadataStore.loadRelayHost(absolutePath);
     relayJoinState = await metadataStore.loadRelayJoin(absolutePath);
     const storedVersions = await metadataStore.listVersions(localDocId);
     versions = storedVersions.map((version) => ({
@@ -566,6 +572,17 @@ export async function createLocalFileServiceWithOptions(
         conflict,
         historyLoadError,
       };
+    },
+    getRelayHostState() {
+      return relayHostState ? { ...relayHostState } : null;
+    },
+    async saveRelayHostState(state) {
+      relayHostState = { ...state };
+      await metadataStore.saveRelayHost(relayHostState);
+    },
+    async clearRelayHostState() {
+      relayHostState = null;
+      await metadataStore.clearRelayHost(localDocId);
     },
     getRelayJoinState() {
       return relayJoinState ? { ...relayJoinState } : null;

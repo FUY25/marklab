@@ -51,12 +51,30 @@ function relayWebSocketUrlFromCollabUrl(collabUrl: string): string {
   return normalizeRelayWebSocketUrl(collabUrl);
 }
 
+function sameOriginHttpUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.location.origin;
+}
+
+function sameOriginWebSocketUrl(path: '/collab' | '/relay'): string | null {
+  if (typeof window === 'undefined') return null;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${path}`;
+}
+
 export function readWebConfig(env: ImportMetaEnv = import.meta.env): WebConfig {
-  const apiUrl = trimTrailingSlash(env.VITE_MARKLAB_API_URL ?? 'http://127.0.0.1:3001');
-  const websocketUrl = normalizeWebsocketUrl(env.VITE_MARKLAB_WS_URL ?? 'ws://127.0.0.1:3001/collab');
+  const productionSameOrigin = !env.DEV;
+  const apiUrl = trimTrailingSlash(
+    env.VITE_MARKLAB_API_URL ?? (productionSameOrigin ? sameOriginHttpUrl() : null) ?? 'http://127.0.0.1:3001',
+  );
+  const websocketUrl = normalizeWebsocketUrl(
+    env.VITE_MARKLAB_WS_URL ?? (productionSameOrigin ? sameOriginWebSocketUrl('/collab') : null) ?? 'ws://127.0.0.1:3001/collab',
+  );
   const relayWebSocketUrl = env.VITE_MARKLAB_RELAY_WS_URL
     ? normalizeRelayWebSocketUrl(env.VITE_MARKLAB_RELAY_WS_URL)
-    : relayWebSocketUrlFromCollabUrl(websocketUrl);
+    : productionSameOrigin
+      ? sameOriginWebSocketUrl('/relay') ?? relayWebSocketUrlFromCollabUrl(websocketUrl)
+      : relayWebSocketUrlFromCollabUrl(websocketUrl);
 
   return {
     apiUrl,

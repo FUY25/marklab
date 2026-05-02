@@ -6,7 +6,7 @@ import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import type {
   CreatedRelayAccessGrant,
   RelayAccessRole,
-  RelayRoomService,
+  RelayRoomHostService,
   RelayShareState,
 } from '../relay/relay-room-service';
 
@@ -29,6 +29,7 @@ export interface LocalRelayJoinState {
 
 export interface LocalRelayHostController {
   readonly relayRoomId: string | null;
+  resumeHosted(): Promise<boolean>;
   ensureHosted(): Promise<{ relayRoomId: string; hostSessionId: string }>;
   start(): Promise<void>;
   stop(): void;
@@ -51,7 +52,7 @@ export interface LocalRelayMirrorController {
 
 export interface CreateLocalRelayHostControllerOptions {
   localFileService: LocalFileService;
-  relayService: RelayRoomService;
+  relayService: RelayRoomHostService;
   relayWebSocketUrl: string;
   publicWebUrl: string;
   publicApiUrl?: string;
@@ -95,6 +96,21 @@ function buildRelayUrl(input: {
 
 function relaySharedHash(value: string | null | undefined): string {
   return value ?? '';
+}
+
+function relayWebSocketOrigin(relayWebSocketUrl: string): string | undefined {
+  try {
+    const url = new URL(relayWebSocketUrl);
+    const protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+    return `${protocol}//${url.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function connectRelayWebSocket(relayWebSocketUrl: string): WebSocket {
+  const origin = relayWebSocketOrigin(relayWebSocketUrl);
+  return new WebSocket(relayWebSocketUrl, origin ? { headers: { Origin: origin } } : undefined);
 }
 
 async function currentLocalYjsState(localFileService: LocalFileService): Promise<Uint8Array> {
@@ -153,9 +169,65 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     return this.currentRelayRoomId;
   }
 
-  async ensureHosted(): Promise<{ relayRoomId: string; hostSessionId: string }> {
+  private async saveCurrentHostState(): Promise<void> {
+    const relayRoomId = this.currentRelayRoomId;
+    const hostToken = this.currentHostToken;
+    if (!relayRoomId || !hostToken) return;
+    const summary = this.options.localFileService.getSummary();
+    await this.options.localFileService.saveRelayHostState({
+      schemaVersion: 1,
+      relayRoomId,
+      hostAuthToken: hostToken,
+      localDocId: summary.localDocId,
+      absolutePath: summary.absolutePath,
+      lastHostSessionId: this.currentHostSessionId,
+      lastPublishedHash: this.lastPublishedHash,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  private loadSavedHostState(): boolean {
+    const saved = this.options.localFileService.getRelayHostState();
+    if (!saved?.relayRoomId || !saved.hostAuthToken) return false;
+    this.currentRelayRoomId = saved.relayRoomId;
+    this.currentHostSessionId = `host_${randomUUID()}`;
+    this.currentHostToken = saved.hostAuthToken;
+    this.lastPublishedHash = null;
+    this.options.relayService.rememberHostToken?.(saved.relayRoomId, saved.hostAuthToken);
+    return true;
+  }
+
+  private clearHostState(): void {
+    this.currentRelayRoomId = null;
+    this.currentHostSessionId = null;
+    this.currentHostToken = null;
+    this.lastPublishedHash = null;
+  }
+
+  async resumeHosted(): Promise<boolean> {
     if (this.currentRelayRoomId && this.currentHostSessionId) {
-      return { relayRoomId: this.currentRelayRoomId, hostSessionId: this.currentHostSessionId };
+      await this.start();
+      return true;
+    }
+
+    if (this.loadSavedHostState()) {
+      try {
+        await this.start();
+        await this.saveCurrentHostState();
+        return true;
+      } catch {
+        this.stop();
+        this.clearHostState();
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  async ensureHosted(): Promise<{ relayRoomId: string; hostSessionId: string }> {
+    if (await this.resumeHosted()) {
+      return { relayRoomId: this.currentRelayRoomId!, hostSessionId: this.currentHostSessionId! };
     }
 
     const hostSessionId = `host_${randomUUID()}`;
@@ -173,6 +245,7 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     this.currentHostToken = hostToken;
     this.lastPublishedHash = summary.hash;
     await this.start();
+    await this.saveCurrentHostState();
     return { relayRoomId: room.relayRoomId, hostSessionId };
   }
 
@@ -182,7 +255,7 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     const hostToken = this.currentHostToken;
     if (!relayRoomId || !hostSessionId || !hostToken || this.socket) return;
 
-    const socket = new WebSocket(this.options.relayWebSocketUrl);
+    const socket = connectRelayWebSocket(this.options.relayWebSocketUrl);
     this.socket = socket;
     socket.on('open', () => {
       socket.send(
@@ -270,6 +343,7 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       }),
     );
     this.lastPublishedHash = summary.hash;
+    await this.saveCurrentHostState();
   }
 
   private async handleMessage(raw: string): Promise<void> {
@@ -301,6 +375,7 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
         : await applyRelayUpdateToLocalFile(this.options.localFileService, decodeBase64(message.updateBase64));
       const summary = this.options.localFileService.getSummary();
       this.lastPublishedHash = summary.hash;
+      await this.saveCurrentHostState();
       this.socket.send(
         JSON.stringify({
           type: 'host_ack',
@@ -379,6 +454,11 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
   }
 
   async revokeLink(grantId: string): Promise<void> {
+    if (this.currentRelayRoomId) {
+      await this.options.relayService
+        .listShareState(this.currentRelayRoomId, this.options.localFileService.getSummary().absolutePath)
+        .catch(() => undefined);
+    }
     await this.options.relayService.revokeAccessGrant(grantId);
   }
 }
@@ -452,7 +532,7 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
 
   async verifySharedState(input: { expectedSharedRevision: number; expectedSharedHash: string }): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(this.options.relayWebSocketUrl);
+      const socket = connectRelayWebSocket(this.options.relayWebSocketUrl);
       let settled = false;
       const finish = (error?: unknown) => {
         if (settled) return;
@@ -499,7 +579,7 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
     expectedSharedHash: string;
   }): Promise<{ sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.options.relayWebSocketUrl);
+      const socket = connectRelayWebSocket(this.options.relayWebSocketUrl);
       const proposalId = randomUUID();
       let settled = false;
       let sentProposal = false;
@@ -592,7 +672,7 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
   async start(): Promise<void> {
     if (this.socket) return;
     this.lastAcceptedLocalHash = this.options.localFileService.getSummary().hash;
-    const socket = new WebSocket(this.options.relayWebSocketUrl);
+    const socket = connectRelayWebSocket(this.options.relayWebSocketUrl);
     this.socket = socket;
     socket.on('open', () => {
       socket.send(JSON.stringify(this.mirrorHelloMessage()));

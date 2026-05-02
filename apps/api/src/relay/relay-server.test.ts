@@ -532,6 +532,67 @@ describe('relay websocket authority bridge', () => {
     });
   });
 
+  it('reconnects a restarted host daemon to the same relay room so existing edit links resume', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+
+    hostController.stop();
+    hostLocal.service.stopWatcher();
+    await waitForCondition(async () => {
+      await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({ state: 'host_offline' });
+    });
+
+    const restartedService = await createLocalFileServiceWithOptions(hostLocal.file, {
+      metadataPath: hostLocal.metadataPath,
+    });
+    restartedService.startWatcher({
+      flushRoom: async () => undefined,
+      applyRoomState: async () => undefined,
+    });
+    localServices.push(restartedService);
+    const restartedHost = createLocalRelayHostController({
+      localFileService: restartedService,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(restartedHost);
+
+    await expect(restartedHost.resumeHosted()).resolves.toBe(true);
+    expect(restartedHost.relayRoomId).toBe(editLink.relayRoomId);
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      clientId: 'browser_after_restart',
+    });
+    const proposedState = await localServiceState('# Shared\n\nAccepted after restart.\n');
+    editor.send(
+      JSON.stringify({
+        type: 'propose_update',
+        proposalId: 'after-restart',
+        updateBase64: Buffer.from(proposedState).toString('base64'),
+      }),
+    );
+
+    await expect(nextMessage(editor, 'accepted after restart')).resolves.toMatchObject({
+      type: 'accepted_update',
+      proposalId: 'after-restart',
+    });
+    await waitForCondition(async () => {
+      await expect(readFile(hostLocal.file, 'utf8')).resolves.toContain('Accepted after restart.');
+    });
+  });
+
   it('keeps two daemon local files mirrored for online edits in both directions', async () => {
     const stack = await startRelayStack();
     const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');

@@ -57,6 +57,17 @@ export interface StoredLocalRelayJoinState {
   updatedAt: string;
 }
 
+export interface StoredLocalRelayHostState {
+  schemaVersion: 1;
+  relayRoomId: string;
+  hostAuthToken: string;
+  localDocId: string;
+  absolutePath: string;
+  lastHostSessionId: string | null;
+  lastPublishedHash: string | null;
+  updatedAt: string;
+}
+
 export interface LocalMetadataStore {
   loadDocument(absolutePath: string): Promise<StoredLocalDocument | null>;
   saveDocument(document: StoredLocalDocument): Promise<void>;
@@ -65,6 +76,9 @@ export interface LocalMetadataStore {
   loadRelayJoin(absolutePath: string): Promise<StoredLocalRelayJoinState | null>;
   saveRelayJoin(state: StoredLocalRelayJoinState): Promise<void>;
   clearRelayJoin(localDocId: string): Promise<void>;
+  loadRelayHost(absolutePath: string): Promise<StoredLocalRelayHostState | null>;
+  saveRelayHost(state: StoredLocalRelayHostState): Promise<void>;
+  clearRelayHost(localDocId: string): Promise<void>;
   getLastLoadError?(): string | null;
 }
 
@@ -73,6 +87,7 @@ interface LocalMetadataFile {
   documents: Record<string, StoredLocalDocument>;
   versions: StoredLocalVersion[];
   relayJoins: Record<string, StoredLocalRelayJoinState>;
+  relayHosts: Record<string, StoredLocalRelayHostState>;
 }
 
 const lockRetryIntervalMs = 10;
@@ -84,6 +99,7 @@ function emptyMetadataFile(): LocalMetadataFile {
     documents: {},
     versions: [],
     relayJoins: {},
+    relayHosts: {},
   };
 }
 
@@ -101,6 +117,7 @@ function parseMetadataFile(value: unknown): LocalMetadataFile {
     documents: value.documents as Record<string, StoredLocalDocument>,
     versions: value.versions as StoredLocalVersion[],
     relayJoins: isRecord(value.relayJoins) ? (value.relayJoins as Record<string, StoredLocalRelayJoinState>) : {},
+    relayHosts: isRecord(value.relayHosts) ? (value.relayHosts as Record<string, StoredLocalRelayHostState>) : {},
   };
 }
 
@@ -234,6 +251,20 @@ export function createJsonLocalMetadataStore(metadataPath = defaultLocalMetadata
     async clearRelayJoin(localDocId) {
       await updateMetadataFile((metadata) => {
         delete metadata.relayJoins[localDocId];
+      });
+    },
+    async loadRelayHost(absolutePath) {
+      const metadata = await readMetadataFile();
+      return Object.values(metadata.relayHosts).find((state) => state.absolutePath === absolutePath) ?? null;
+    },
+    async saveRelayHost(state) {
+      await updateMetadataFile((metadata) => {
+        metadata.relayHosts[state.localDocId] = state;
+      });
+    },
+    async clearRelayHost(localDocId) {
+      await updateMetadataFile((metadata) => {
+        delete metadata.relayHosts[localDocId];
       });
     },
     getLastLoadError() {

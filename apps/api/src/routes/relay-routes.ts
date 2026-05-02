@@ -11,6 +11,7 @@ export interface RelayRoutesOptions {
 
 const createRelayRoomSchema = z.object({
   hostSessionId: z.string().min(1).nullable().optional(),
+  hostAuthToken: z.string().min(1).nullable().optional(),
   lastEphemeralYjsStateBase64: z.string().nullable().optional(),
   lastSharedHash: z.string().nullable().optional(),
 });
@@ -51,6 +52,20 @@ function requireRelayManagement(req: Request): void {
   if (bearerToken(req) !== expected) throw new Error('forbidden');
 }
 
+function hasRelayManagement(req: Request): boolean {
+  const expected = process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN;
+  return Boolean(expected && bearerToken(req) === expected);
+}
+
+async function requireRelayManagementOrRoomHost(
+  req: Request,
+  service: RelayRoomService,
+  relayRoomId: string,
+): Promise<void> {
+  if (hasRelayManagement(req)) return;
+  await service.verifyHost(relayRoomId, bearerToken(req));
+}
+
 function decodeBase64(value: string | null | undefined): Uint8Array | null {
   if (!value) return null;
   return new Uint8Array(Buffer.from(value, 'base64'));
@@ -82,7 +97,7 @@ function requireRelayService(service: RelayRoomService | undefined): RelayRoomSe
 const runtime = createHeadlessMilkdownRuntime();
 
 function relayUrlFor(req: Request, relayRoomId: string, token: string, role: RelayAccessRole): string {
-  const configuredWebUrl = process.env.MARKLAB_WEB_ORIGIN?.split(',')[0]?.trim();
+  const configuredWebUrl = process.env.MARKLAB_PUBLIC_WEB_URL?.trim() ?? process.env.MARKLAB_WEB_ORIGIN?.split(',')[0]?.trim();
   const baseUrl = configuredWebUrl || `${req.protocol}://${req.get('host') ?? 'localhost'}`;
   const url = new URL(`/relay/${encodeURIComponent(relayRoomId)}`, baseUrl);
   url.searchParams.set('token', token);
@@ -97,11 +112,11 @@ export function createRelayRoutes(options: RelayRoutesOptions = {}) {
 
   router.post('/relay/rooms', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireRelayManagement(req);
       const service = requireRelayService(options.relayService);
       const body = createRelayRoomSchema.parse(req.body);
       const room = await service.createRoom({
         hostSessionId: body.hostSessionId ?? null,
+        hostAuthToken: body.hostAuthToken ?? null,
         lastEphemeralYjsState: decodeBase64(body.lastEphemeralYjsStateBase64),
         lastSharedHash: body.lastSharedHash ?? null,
       });
@@ -153,9 +168,9 @@ export function createRelayRoutes(options: RelayRoutesOptions = {}) {
 
   router.post('/relay/rooms/:relayRoomId/access-grants', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireRelayManagement(req);
       const service = requireRelayService(options.relayService);
       const relayRoomId = requiredParam(req, 'relayRoomId');
+      await requireRelayManagementOrRoomHost(req, service, relayRoomId);
       const body = createRelayGrantSchema.parse(req.body);
       const grant = await service.createAccessGrant({
         relayRoomId,
@@ -178,9 +193,9 @@ export function createRelayRoutes(options: RelayRoutesOptions = {}) {
 
   router.get('/relay/rooms/:relayRoomId/share-state', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireRelayManagement(req);
       const service = requireRelayService(options.relayService);
       const relayRoomId = requiredParam(req, 'relayRoomId');
+      await requireRelayManagementOrRoomHost(req, service, relayRoomId);
       res.json(await service.listShareState(relayRoomId));
     } catch (error) {
       next(error);
@@ -213,6 +228,33 @@ export function createRelayRoutes(options: RelayRoutesOptions = {}) {
         canRead: true,
         canWrite: session.role === 'edit',
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/relay/rooms/:relayRoomId/host-offline', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const service = requireRelayService(options.relayService);
+      const relayRoomId = requiredParam(req, 'relayRoomId');
+      await requireRelayManagementOrRoomHost(req, service, relayRoomId);
+      const room = await service.markHostOffline(relayRoomId);
+      res.json({ relayRoomId, hostOnline: false, state: room?.state ?? 'host_offline' });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/relay/rooms/:relayRoomId/access-grants/:grantId', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const service = requireRelayService(options.relayService);
+      const relayRoomId = requiredParam(req, 'relayRoomId');
+      const grantId = requiredParam(req, 'grantId');
+      await requireRelayManagementOrRoomHost(req, service, relayRoomId);
+      const revoked = await service.revokeAccessGrant(grantId);
+      if (revoked.relayRoomId !== relayRoomId) throw new Error('relay_access_grant_not_found');
+      options.relayServer?.disconnectGrant(revoked.grantId);
+      res.status(204).end();
     } catch (error) {
       next(error);
     }

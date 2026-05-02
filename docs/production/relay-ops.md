@@ -78,6 +78,14 @@ Operational interpretation:
 
 The local Docker smoke sets `MARKLAB_LOCAL_PRODUCTION_SMOKE=true` so it can use loopback HTTP/WS URLs while still exercising the production image, database, schema, and relay readiness path. Do not set that flag in Fly.
 
+## Alpha Host Authorization
+
+Plan 04A uses anonymous public relay hosting for the first npm alpha. A local daemon may create a relay room without a MarkLab account, then receives a per-room host token that is kept inside the local daemon process. That host token can create view/edit grants, read share state, revoke grants for the same room, and mark that room host-offline.
+
+This is intentionally not the final account model. A later hosted-login plan should replace anonymous room creation with account/session authorization while preserving the same local-file canonical model and the same public link shape.
+
+Do not expose `MARKLAB_RELAY_MANAGEMENT_TOKEN` to user CLIs. That token, when configured, is for operator-only maintenance. The Plan 04A user path must not require it.
+
 ## Host Online Semantics
 
 Host online means the MarkLab daemon is running and connected to the hosted relay. It does not mean only that the host computer is powered on.

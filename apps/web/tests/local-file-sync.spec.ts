@@ -215,7 +215,9 @@ test('syncs one local Markdown file across disk, browser windows, snapshots, and
     await pageA.keyboard.press('Enter');
     await pageA.keyboard.type('Browser conflict draft.');
     await writeFile(stack.file, '# Local E2E\n\nExternal conflicting save stays on disk.\n', 'utf8');
-    await expect(pageA.getByText('File changed outside MarkLab. Review needed.')).toBeVisible({ timeout: 10000 });
+    await expect(
+      pageA.getByTestId('local-conflict-paused').getByText('File changed outside MarkLab. Review needed.'),
+    ).toBeVisible({ timeout: 10000 });
     await expect.poll(async () => readFile(stack.file, 'utf8')).toContain('External conflicting save stays on disk.');
   } finally {
     await Promise.allSettled([contextA.close(), contextB.close()]);

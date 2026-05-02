@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import express, { type ErrorRequestHandler, type NextFunction, type Request, type Response } from 'express';
 import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
@@ -37,12 +39,18 @@ export interface HttpAppOptions {
   localRelayHost?: LocalRelayHostController;
   localRelayMirror?: LocalRelayMirrorController;
   enableLegacyDocAiRoutes?: boolean;
+  staticWeb?: StaticWebOptions;
 }
 
 export interface HttpHealthOptions {
   databaseRequired?: boolean;
   relayRequired?: boolean;
+  relayReady?: boolean;
   schemaTables?: readonly string[];
+}
+
+export interface StaticWebOptions {
+  distDir: string;
 }
 
 export interface HttpRequestAuth {
@@ -130,7 +138,7 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
   const schema = { required: Boolean(input.databaseRequired), ready: false, missing: [] as string[], error: null as string | null };
   const relay = {
     required: Boolean(input.relayRequired),
-    ready: !input.relayRequired || Boolean(relayServer),
+    ready: !input.relayRequired || input.relayReady === true || Boolean(relayServer),
     connectionCount: relayServer?.connectionCount ?? 0,
   };
 
@@ -361,6 +369,18 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   res.status(500).json({ error: 'internal_error' });
 };
 
+function mountStaticWeb(app: express.Express, staticWeb: StaticWebOptions | undefined): void {
+  if (!staticWeb?.distDir || !existsSync(staticWeb.distDir)) return;
+
+  const indexHtml = join(staticWeb.distDir, 'index.html');
+  if (!existsSync(indexHtml)) return;
+
+  app.use(express.static(staticWeb.distDir, { index: false }));
+  app.get(/^\/(?!api\/|healthz$).*/u, (_req, res) => {
+    res.sendFile(indexHtml);
+  });
+}
+
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
   const routeOptions = { ...options, auth: options.auth ?? createRequestAuth(pool) };
@@ -397,6 +417,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }
 
+  mountStaticWeb(app, options.staticWeb);
   app.use(errorHandler);
 
   return app;

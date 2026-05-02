@@ -83,6 +83,24 @@ export interface RelayCleanupResult {
   expiredEphemeralRooms: number;
 }
 
+export interface RelayRoomHostService {
+  rememberHostToken?(relayRoomId: string, hostAuthToken: string): void;
+  createRoom(input?: {
+    hostSessionId?: string | null;
+    hostAuthToken?: string | null;
+    lastEphemeralYjsState?: Uint8Array | null;
+    lastSharedHash?: string | null;
+  }): Promise<RelayRoom>;
+  createAccessGrant(input: {
+    relayRoomId: string;
+    role: RelayAccessRole;
+    expiresAt?: string | null;
+  }): Promise<CreatedRelayAccessGrant>;
+  listShareState(relayRoomId: string, localPath?: string | null): Promise<RelayShareState>;
+  revokeAccessGrant(grantId: string): Promise<{ grantId: string; relayRoomId: string } | void>;
+  markHostOffline(relayRoomId: string, hostSessionId?: string | null): Promise<RelayRoom | null>;
+}
+
 export interface VerifiedRelayAccess {
   grantId: string;
   relayRoomId: string;

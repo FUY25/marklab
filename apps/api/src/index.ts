@@ -8,6 +8,7 @@ import { createPool, type DbPool } from './db/client';
 import { createHttpApp } from './http/app';
 import { createLocalFileServiceWithOptions } from './local/local-file-service';
 import { createLocalRelayHostController, createLocalRelayMirrorController } from './local/local-relay-client';
+import { createRemoteRelayRoomService } from './relay/relay-remote-service';
 import { createInMemoryRelayRoomService, createRelayRoomService } from './relay/relay-room-service';
 import { createRelayServer } from './relay/relay-server';
 import { isLoopbackLocalRequest } from './routes/local-file-routes';
@@ -17,6 +18,15 @@ const env = loadApiEnv();
 const port = env.port;
 const localMode = Boolean(process.env.MARKLAB_LOCAL_FILE);
 const host = process.env.MARKLAB_HOST ?? process.env.HOST ?? (localMode ? '127.0.0.1' : undefined);
+
+function isLoopbackPublicApiUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
 
 function createLocalOnlyPool(): DbPool {
   async function unavailable(): Promise<never> {
@@ -41,14 +51,17 @@ async function main() {
     : undefined;
   const useDatabase = !localFileService || process.env.MARKLAB_LOCAL_USE_DATABASE === 'true';
   const pool = useDatabase ? createPool(env.databaseUrl) : createLocalOnlyPool();
-  const relayService =
-    useDatabase && env.databaseUrl
+  const localHostedRelay = Boolean(localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
+  const hostedRelayService = localHostedRelay ? createRemoteRelayRoomService({ publicApiUrl: env.publicApiUrl }) : undefined;
+  const localRelayService =
+    !localHostedRelay && useDatabase && env.databaseUrl
       ? createRelayRoomService(pool)
-      : process.env.MARKLAB_ENABLE_RELAY === 'true'
+      : !localHostedRelay && process.env.MARKLAB_ENABLE_RELAY === 'true'
         ? createInMemoryRelayRoomService()
         : undefined;
-  const relay = relayService
-    ? createRelayServer(relayService, {
+  const relayService = hostedRelayService ?? localRelayService;
+  const relay = localRelayService
+    ? createRelayServer(localRelayService, {
         hostLeaseMs: env.relayHostLeaseSeconds * 1000,
         maxConnectionsPerRoom: env.relayMaxRoomConnections,
         maxMessageBytes: env.relayMaxMessageBytes,
@@ -104,22 +117,25 @@ async function main() {
           ...(localRelayMirror ? { localRelayMirror } : {}),
         }
       : {}),
-    ...(relayService && relay
+    ...(localRelayService && relay
       ? {
-          relayService,
+          relayService: localRelayService,
           relayServer: relay,
         }
       : {}),
     allowedOrigins: env.allowedOrigins,
     enforceAllowedOrigins: env.mode === 'production',
+    ...(process.env.MARKLAB_WEB_DIST_DIR ? { staticWeb: { distDir: process.env.MARKLAB_WEB_DIST_DIR } } : {}),
     health: {
       databaseRequired: env.mode === 'production',
       relayRequired: Boolean(relayService),
+      relayReady: localHostedRelay,
       schemaTables: ['relay_rooms', 'relay_access_grants', 'relay_access_sessions'],
     },
   });
   const httpServer = http.createServer(app);
   let isShuttingDown = false;
+  let localRelayMirrorRetryTimer: NodeJS.Timeout | null = null;
 
   type ClientConnection = ReturnType<typeof collab.server.handleConnection>;
   type PeerWithConnection = {
@@ -177,6 +193,8 @@ async function main() {
     if (isShuttingDown) return;
     isShuttingDown = true;
     try {
+      if (localRelayMirrorRetryTimer) clearTimeout(localRelayMirrorRetryTimer);
+      localRelayMirrorRetryTimer = null;
       if (localFileService) {
         await collab.flushDocument(localFileService.roomName);
         localFileService.stopWatcher();
@@ -196,6 +214,17 @@ async function main() {
     process.exit(exitCode);
   }
 
+  function startLocalRelayMirrorWithRetry(): void {
+    if (!localRelayMirror || isShuttingDown) return;
+    void localRelayMirror.start().catch((error: unknown) => {
+      if (isShuttingDown) return;
+      console.error(error);
+      localRelayMirror.stop();
+      localRelayMirrorRetryTimer = setTimeout(startLocalRelayMirrorWithRetry, 2000);
+      localRelayMirrorRetryTimer.unref();
+    });
+  }
+
   process.on('SIGINT', () => {
     void shutdown(130);
   });
@@ -208,9 +237,10 @@ async function main() {
       flushRoom: collab.flushDocument,
       applyRoomState: collab.applyDocumentState,
     });
-    void localRelayMirror?.start().catch((error: unknown) => {
+    void localRelayHost?.resumeHosted().catch((error: unknown) => {
       console.error(error);
     });
+    startLocalRelayMirrorWithRetry();
     console.log(`api listening on ${host ?? '0.0.0.0'}:${port}`);
     if (localFileService) {
       console.log(`local file: ${localFileService.getSummary().absolutePath}`);

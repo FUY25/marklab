@@ -109,6 +109,29 @@ describe('JsonLocalMetadataStore', () => {
     expect(raw).not.toContain('token_hash');
   });
 
+  it('persists local relay host state so an existing share can resume after daemon restart', async () => {
+    const metadataPath = await createMetadataPath();
+    const store = createJsonLocalMetadataStore(metadataPath);
+
+    await store.saveRelayHost({
+      schemaVersion: 1,
+      relayRoomId: 'relay_room_1',
+      hostAuthToken: 'ml_relay_host_secret',
+      localDocId: 'doc_local',
+      absolutePath: '/tmp/local.md',
+      lastHostSessionId: 'host_1',
+      lastPublishedHash: 'sha256:shared',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    });
+
+    const reloaded = createJsonLocalMetadataStore(metadataPath);
+    await expect(reloaded.loadRelayHost('/tmp/local.md')).resolves.toMatchObject({
+      relayRoomId: 'relay_room_1',
+      hostAuthToken: 'ml_relay_host_secret',
+      lastHostSessionId: 'host_1',
+    });
+  });
+
   it('preserves updates from two store instances writing the same metadata path concurrently', async () => {
     const metadataPath = await createMetadataPath();
     const firstStore = createJsonLocalMetadataStore(metadataPath);

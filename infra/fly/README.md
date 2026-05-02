@@ -19,6 +19,18 @@ Create or confirm access to:
 
 The default Fly app name is `marklab-relay-alpha`. Use it unless Fly reports the name is unavailable. If you choose another app name, replace every URL and every `<fly-app>` placeholder in this document with the chosen name.
 
+The Plan 04A Fly image serves the API, relay websocket, and built web app from the same Fly hostname. Browser relay links such as `/relay/<room>` must resolve on this app; do not deploy an API-only image for the alpha.
+
+Plan 04A uses anonymous public relay room creation for the npm alpha. The daemon gets a per-room host token and uses that token for room-scoped link creation, share-state reads, grant revocation, and host-offline marking. Do not give ordinary users a global relay management token. Account login is a later hosted-auth plan.
+
+Run the Plan 04A alpha as one Fly machine:
+
+```bash
+fly scale count 1 -a marklab-relay-alpha --yes
+```
+
+Relay websocket sessions, host-online state, and immediate revoke disconnects are in-process for Plan 04A. Scaling to multiple machines requires a later sticky-routing or shared relay fanout change.
+
 ## 2. Install And Authenticate Fly CLI
 
 ```bash
