@@ -1,6 +1,6 @@
 {
   "name": "@marklab/cli",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "private": false,
   "type": "module",
   "description": "Local-first MarkLab CLI for opening, sharing, and joining Markdown collaboration sessions.",
@@ -8,7 +8,7 @@
     "marklab": "marklab.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@hocuspocus/provider": "^4.0.0",
@@ -22,7 +22,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "crossws": "^0.3.5",
     "express": "^5.0.0",
-    "jsdom": "^25.0.0",
+    "jsdom": "^27.4.0",
     "lucide-react": "^1.14.0",
     "pg": "^8.13.0",
     "prettier": "^3.3.0",

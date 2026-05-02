@@ -18,7 +18,7 @@
     "@milkdown/plugin-collab": "^7.20.0",
     "crossws": "^0.3.5",
     "express": "^5.0.0",
-    "jsdom": "^25.0.0",
+    "jsdom": "^27.4.0",
     "pg": "^8.13.0",
     "ws": "^8.18.0",
     "y-prosemirror": "^1.2.15",

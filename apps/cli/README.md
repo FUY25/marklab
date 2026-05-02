@@ -10,7 +10,7 @@ npx -y @marklab/cli join <edit-link> --dir ./docs --name README.md
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 20.19 or newer, Node.js 22.12 or newer, or Node.js 24 or newer.
 - A modern browser.
 - For this alpha package, local `open`, `share`, and `join` daemon commands still expect the package-managed MarkLab API and web app runtime used by this repository. The packed CLI is verified to parse commands and print help from a clean install without a repository checkout.
 
