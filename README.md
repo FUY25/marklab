@@ -1,62 +1,281 @@
-# `marklab open README.md`
+# MarkLab
 
-MarkLab is a local-first Markdown collaboration tool. The local `.md` file is canonical, and the browser editor is a live view/editor over that file.
+MarkLab is a local-first Markdown collaboration tool.
 
-AI agents work the same way as any other local tool: they edit the Markdown file on disk. MarkLab watches the file, syncs browser edits back to disk, and keeps local snapshots for recovery. Old cloud mutation endpoints are historical reference material, not the current local-first workflow.
+The product idea is simple: keep the real document as a normal `.md` file on disk, then add live browser editing, share links, local mirrors, conflict review, and AI-agent coordination around that file. No cloud document workspace. No hosted document database. No special editor lock-in.
 
-## Start
+If an AI agent, VS Code, Typora, Vim, or a human edits the Markdown file directly, MarkLab treats that file change as the product event.
 
-From this repo:
+## Current Alpha
 
-```bash
-npx -y pnpm@10.0.0 marklab open README.md
+The current alpha is the Plan 04A hosted-relay release.
+
+- Public CLI package: `@marklab/cli@0.1.0-alpha.4`
+- npm dist tag: `latest`
+- Hosted relay: [https://marklab-relay-alpha.fly.dev](https://marklab-relay-alpha.fly.dev)
+- Fly.io app: `marklab-relay-alpha`
+- Fly.io region: Singapore, `sin`
+- Database: Neon Postgres
+- Neon region: AWS Asia Pacific 1 Singapore, `aws-ap-southeast-1`
+- Relay websocket: `wss://marklab-relay-alpha.fly.dev/relay`
+
+The hosted service is live relay infrastructure. It stores relay metadata and ephemeral sync state. It is not the canonical document store.
+
+## Quick Start
+
+Open a local Markdown file:
+
+```sh
+npx -y @marklab/cli open README.md
 ```
 
-That starts a loopback-only local daemon, opens the browser editor, and keeps `README.md` synchronized with browser edits and external editor saves.
+Open it in the background:
 
-Foreground mode stays attached to the terminal:
-
-```bash
-marklab open README.md
+```sh
+npx -y @marklab/cli open README.md --background
+npx -y @marklab/cli status
 ```
 
-Closing that terminal stops the local daemon.
+Create a hosted edit link:
 
-Background mode keeps the daemon running after the launch command returns:
+```sh
+export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
+export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
+export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
 
-```bash
-marklab open README.md --background
-marklab status
-marklab stop README.md
-marklab stop --all
+npx -y @marklab/cli share README.md
 ```
 
-Background daemons are recorded in the user app-support directory. A second background open for the same canonical file reuses the existing daemon instead of starting a competing watcher.
+The printed edit link opens in a browser. Browser editing works without installing MarkLab.
 
-## Local URL And Relay URL
+For a collaborator who wants a local file mirror that keeps listening in the background, send the edit link plus this one-liner:
 
-`marklab open` prints a local browser URL such as:
+```sh
+npx -y @marklab/cli join '<edit-link>' --pick-dir --background
+```
+
+That command installs/runs the CLI through `npx`, opens a folder picker, creates the shared Markdown file with the host filename, starts the local mirror daemon, opens the local browser view, and returns after the background sync starts.
+
+## Product Model
+
+MarkLab has one source of truth for host-side collaboration: the local Markdown file.
+
+- The host local `.md` file is canonical.
+- Browser edits are written back to that local file.
+- AI agents edit the local file directly.
+- Local mirrors created with `marklab join` are local files, not cloud documents.
+- The relay coordinates rooms, links, sessions, permissions, host leases, revisions, hashes, and ephemeral Yjs state.
+- Relay cache expiry is not document deletion.
+- Stop sharing does not delete local files.
+- Revoking a link removes access for that grant only.
+- If the host file disappears, sync pauses and remote writes reject. MarkLab does not silently recreate the file.
+
+View links are browser-only and read-only. Edit links can be used in the browser or with `marklab join`.
+
+## Architecture
+
+```text
+Host machine
+  README.md                         canonical Markdown file
+  marklab local daemon              watches disk, owns local token, talks to relay
+  local browser editor              http://127.0.0.1:<port>/local#token=...
+
+Hosted relay on Fly.io
+  Express API                       health, relay access, share-state routes
+  WebSocket relay                   /relay
+  static web app                    /relay/<room>
+  Neon Postgres                     relay metadata and ephemeral state TTL
+
+Collaborators
+  browser edit link                 live online editing while host is online
+  browser view link                 read-only, no local mirror creation
+  marklab join <edit-link>          optional local Markdown mirror
+```
+
+The local browser URL is private. It looks like:
 
 ```text
 http://127.0.0.1:5175/local#token=...
 ```
 
-That URL is private to the local daemon. It contains daemon access in the fragment so the browser can read and edit the opened file through loopback-only APIs. Do not share it.
+Do not share it. It contains local daemon access in the URL fragment.
 
-Relay URLs are a later product surface for sharing. A relay URL is the shareable collaboration address; it does not make the local browser URL public. See [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md).
+The relay URL is shareable. It looks like:
 
-## Current Product Model
+```text
+https://marklab-relay-alpha.fly.dev/relay/<room>?token=...
+```
 
-- The local Markdown file is the source of truth.
-- Browser edits are serialized through the Milkdown/Yjs runtime and written back to the file.
-- External saves from VS Code, Typora, Vim, Codex, Claude Code, or another local tool update the browser without refresh.
-- Two local browser windows connected to the same daemon converge through the one local room.
-- Manual snapshots and restore are local safety tools.
-- If disk and browser edits conflict, Plan 01 protects both sides and shows: `File changed outside MarkLab. Review needed.`
+Relay links never expose the local daemon token or localhost URL.
 
-## Active Local-First Plans
+## What Is Implemented
 
-The active execution plans are:
+Plan 01 through Plan 04A are the current implemented product path:
+
+- Local file open/sync from disk to browser and browser to disk.
+- Background daemon lifecycle with `marklab status`, `marklab stop <file>`, and `marklab stop --all`.
+- Local snapshots, versions, and conflict review.
+- AI-agent commands for status, wait, save-version, conflict inspection, and instructions.
+- Hosted relay rooms, grants, sessions, host leases, revision/hash tracking, and cleanup metadata.
+- Production env validation, public URL construction, allowed origins, WebSocket limits, and `/healthz` readiness checks.
+- Fly.io deployment packaging and Docker-compatible production smoke files.
+- npm alpha CLI package, published as `@marklab/cli`.
+- Hosted edit links and view links.
+- `marklab join` local mirror flow, including `--pick-dir --background`.
+- Hosted browser presence for online editors: name, cursor, and color are relayed live and not persisted.
+- Lifecycle safety for host offline, revoked links, relay expiry, and missing local files.
+
+## What Is Not In This Alpha
+
+These are intentionally not part of Plan 04A:
+
+- No native Markdown editor.
+- No document workspace/sidebar.
+- No hosted document storage.
+- No hosted AI write/edit API.
+- No Homebrew distribution yet.
+- No signed standalone app yet.
+- No menubar manager yet.
+- No hosted Share/Versions/Conflict controls on the relay edit page yet.
+
+The next planned polish bucket is Plan 04B. It may add hosted web Share, Versions, and Conflict Review controls, but those controls must still use the existing local canonical file/version path. The hosted relay should coordinate. It should not become the document or version store.
+
+## Common Workflows
+
+Host a file in foreground mode:
+
+```sh
+npx -y @marklab/cli share README.md
+```
+
+Host a file in background mode and create links:
+
+```sh
+npx -y @marklab/cli open README.md --background
+npx -y @marklab/cli create-link README.md --role edit
+npx -y @marklab/cli create-link README.md --role view
+```
+
+Join an edit link as a local mirror:
+
+```sh
+npx -y @marklab/cli join '<edit-link>' --pick-dir --background
+```
+
+Check share state:
+
+```sh
+npx -y @marklab/cli share-state README.md --json
+```
+
+Create a safety snapshot before a large local or AI edit:
+
+```sh
+npx -y @marklab/cli save-version README.md --message "Before broad edit" --json
+```
+
+Wait for sync after editing the file directly:
+
+```sh
+npx -y @marklab/cli wait README.md --synced --timeout 10000 --json
+```
+
+Inspect conflict state:
+
+```sh
+npx -y @marklab/cli conflict README.md --json
+```
+
+## For AI Agents
+
+Codex, Claude Code, Cursor, and similar agents should treat the local Markdown file as the write surface.
+
+Use MarkLab for coordination:
+
+- `marklab status <file> --json`
+- `marklab save-version <file> --message "Before AI edit" --json`
+- `marklab wait <file> --synced --timeout 10000 --json`
+- `marklab conflict <file> --json`
+- `marklab create-link <file> --role edit --json`
+- `marklab revoke-link <file> <grant-id> --json`
+
+Do not mutate hosted Yjs state, database rows, or relay internals directly. There is no supported hosted AI write path in the alpha.
+
+Install agent instructions into a repo:
+
+```sh
+npx -y @marklab/cli agent instructions --target codex
+npx -y @marklab/cli agent install --target codex --write AGENTS.md
+```
+
+## Operations
+
+The Plan 04A hosted deployment uses one Fly machine for the alpha because relay WebSocket sessions and immediate revoke disconnects are process-local. Scaling beyond one machine requires sticky routing or shared relay fanout.
+
+Runtime defaults:
+
+```text
+MARKLAB_REQUIRE_AUTH=true
+MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
+MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
+MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
+MARKLAB_ALLOWED_ORIGINS=https://marklab-relay-alpha.fly.dev
+MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS=86400
+MARKLAB_RELAY_HOST_LEASE_SECONDS=30
+MARKLAB_RELAY_MAX_ROOM_CONNECTIONS=32
+MARKLAB_RELAY_MAX_MESSAGE_BYTES=1048576
+```
+
+Health check:
+
+```sh
+curl https://marklab-relay-alpha.fly.dev/healthz
+```
+
+`/healthz` separates process liveness from database readiness, schema readiness, and relay readiness.
+
+Operator docs:
+
+- [Fly.io And Neon Alpha Relay Setup](infra/fly/README.md)
+- [Hosted Relay Operations](docs/production/relay-ops.md)
+- [Privacy And Storage](docs/production/privacy-and-storage.md)
+- [Local Daemon Distribution](docs/production/local-daemon-distribution.md)
+
+User docs:
+
+- [MarkLab Alpha User Guide](docs/product/marklab-alpha-user-guide.md)
+- [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
+- [Local-First User Journeys](docs/product/local-first-user-journeys.md)
+- [AI Agent Guide](docs/agent/marklab-agent-guide.md)
+
+## Development
+
+From this repository:
+
+```sh
+npx -y pnpm@10.0.0 install
+npx -y pnpm@10.0.0 typecheck
+npx -y pnpm@10.0.0 test
+```
+
+Run the local CLI from the repo:
+
+```sh
+npx -y pnpm@10.0.0 marklab open README.md
+```
+
+Run focused Plan 04A checks:
+
+```sh
+npx -y pnpm@10.0.0 test apps/api/src/config/env.test.ts apps/api/src/relay/relay-limits.test.ts apps/api/src/relay/relay-room-service.test.ts apps/api/src/relay/relay-server.test.ts apps/api/src/relay/relay-observability.test.ts
+npx -y pnpm@10.0.0 test apps/cli/marklab-cli.test.mjs apps/cli/relay-config.test.mjs apps/cli/package-install-smoke.test.mjs
+npx -y pnpm@10.0.0 --filter @marklab/cli pack --dry-run
+npx -y pnpm@10.0.0 --filter @marklab/web exec playwright test tests/relay-collaboration.spec.ts tests/local-conflict-review.spec.ts
+```
+
+## Plans And Historical Reference
+
+Active implementation plans:
 
 - [Plan 01: Local File Sync MVP](plans/01_local_file_sync_mvp_plan.md)
 - [Plan 02: Local Collaboration Relay MVP](plans/02_local_collaboration_relay_mvp_plan.md)
@@ -65,66 +284,4 @@ The active execution plans are:
 - [Plan 05: AI Agent Operating Layer](plans/05_ai_agent_operating_layer_plan.md)
 - [Plan 06: Legacy Cloud AI Write Cleanup](plans/06_legacy_cloud_ai_write_cleanup_plan.md)
 
-Product journey docs:
-
-- [Local-First User Journeys](docs/product/local-first-user-journeys.md)
-- [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
-- [AI Agent Guide](docs/agent/marklab-agent-guide.md)
-
-## Plan 04A Alpha Production Packaging
-
-The Plan 04A alpha production path is Fly.io plus Neon in Singapore:
-
-- Fly.io region: `sin`
-- Neon region: AWS Asia Pacific 1 Singapore, `aws-ap-southeast-1`
-- default Fly app name: `marklab-relay-alpha`
-
-Docker is the portability boundary, but Fly.io and Neon are the first documented operator path for the hosted relay. Start with:
-
-```bash
-fly launch --no-deploy --name marklab-relay-alpha --region sin
-```
-
-Then follow [infra/fly/README.md](infra/fly/README.md). Production operation and product semantics live in:
-
-- [Hosted Relay Operations](docs/production/relay-ops.md)
-- [Local Daemon Distribution](docs/production/local-daemon-distribution.md)
-- [Privacy And Storage](docs/production/privacy-and-storage.md)
-
-Plan 04A does not implement Homebrew distribution, a signed standalone app, a menubar manager, a native Markdown editor, a workspace/sidebar product, or a hosted AI write/edit path.
-
-## Using MarkLab With Codex, Claude Code, Or Cursor
-
-Codex, Claude Code, Cursor, and similar agents should treat the local Markdown file as the write surface. MarkLab is process control and sync infrastructure around that file: agents can ask for status, create a safety snapshot, wait for convergence, inspect conflicts, and manage share links through the CLI.
-
-MarkLab does not offer a cloud-side content mutation API for agents. Agents should not change Yjs state or database rows themselves.
-
-Small edit:
-
-```bash
-marklab status README.md --json
-# agent edits README.md locally
-marklab wait README.md --synced --timeout 10000 --json
-```
-
-Large edit:
-
-```bash
-marklab status README.md --json
-marklab save-version README.md --message "Before AI edit: broad README update" --json
-# agent edits README.md locally
-marklab wait README.md --synced --timeout 10000 --json
-```
-
-Install or inspect agent instructions:
-
-```bash
-marklab agent instructions --target codex
-marklab agent install --target codex --write AGENTS.md
-```
-
-## Historical Reference
-
-Root files named `00_*.md` through `09_*.md` and the files under `plans/Archive/cloud-first-reference/` are historical cloud-first reference material. They are retained because they explain prior Milkdown/Yjs decisions, but they are superseded by Plans 01 through 06 for current implementation work.
-
-Do not revive cloud document dashboards, hosted mutation workflows, sidebars, workspace managers, or production relay behavior while executing Plan 01.
+Root files named `00_*.md` through `09_*.md` and files under `plans/Archive/cloud-first-reference/` are historical cloud-first reference material. They explain prior Milkdown/Yjs decisions, but the current implementation path is local-first.
