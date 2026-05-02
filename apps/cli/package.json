@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Local-first MarkLab CLI for opening, sharing, and joining Markdown collaboration sessions.",
   "bin": {
-    "marklab": "./marklab.mjs"
+    "marklab": "marklab.mjs"
   },
   "engines": {
     "node": ">=20"
