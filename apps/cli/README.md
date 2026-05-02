@@ -3,8 +3,8 @@
 Alpha CLI package for running MarkLab's local-first Markdown collaboration flow.
 
 ```sh
-npx -y @marklab/cli open README.md
-npx -y @marklab/cli share README.md
+npx -y @marklab/cli open README.md --background
+npx -y @marklab/cli create-link README.md --role edit
 npx -y @marklab/cli join '<edit-link>' --pick-dir --background
 ```
 
@@ -12,7 +12,7 @@ npx -y @marklab/cli join '<edit-link>' --pick-dir --background
 
 - Node.js 20.19 or newer, Node.js 22.12 or newer, or Node.js 24 or newer.
 - A modern browser.
-- For this alpha package, local `open`, `share`, and `join` daemon commands still expect the package-managed MarkLab API and web app runtime used by this repository. The packed CLI is verified to parse commands and print help from a clean install without a repository checkout.
+- The npm package includes the CLI runtime for `open`, `share`, and `join`. Developers working from the repository checkout can still use pnpm for local development.
 
 Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pnpm, Git, or a specific Markdown editor.
 
@@ -21,6 +21,8 @@ Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pn
 ```sh
 marklab open <file.md>
 marklab open <file.md> --background
+marklab create-link <file.md> --role edit
+marklab create-link <file.md> --role view
 marklab share <file.md>
 marklab join <edit-link> <file.md>
 marklab join <edit-link> --pick-dir --background
@@ -30,13 +32,22 @@ marklab stop <file.md>
 marklab stop --all
 ```
 
-Use `marklab --help`, `marklab open --help`, `marklab share --help`, or `marklab join --help` for command help.
+Use `marklab --help`, `marklab open --help`, `marklab create-link --help`, `marklab share --help`, or `marklab join --help` for command help.
 
 ## Host Online Behavior
 
 Host online means the MarkLab daemon is running and connected.
 
-When `marklab share <file.md>` runs in the foreground, closing that terminal stops hosting. Closing the browser tab does not stop hosting as long as the daemon process is still running. If you use `marklab open <file.md> --background` and then create a share link, hosting continues after the terminal command exits until you run `marklab stop <file.md>` or `marklab stop --all`.
+Use persistent background hosting for normal collaboration:
+
+```sh
+marklab open <file.md> --background
+marklab create-link <file.md> --role edit
+```
+
+Hosting continues after the terminal command exits until you run `marklab stop <file.md>` or `marklab stop --all`. Closing the browser tab does not stop hosting as long as the daemon process is still running.
+
+`marklab share <file.md>` is temporary foreground sharing. Closing that terminal stops hosting, so use it for quick tests rather than persistent collaboration.
 
 Browser edit and view links work without installing MarkLab. A pure web link cannot install or run a local CLI, create local files, or inspect whether local software is available, because browsers do not have that access. The current safe alpha path is one relay link plus a copyable one-line `npx` command for collaborators who want a local mirror.
 
@@ -58,15 +69,15 @@ The collaborator chooses the destination folder; MarkLab uses the host file name
 
 ## Relay URL Configuration
 
-Development defaults use local loopback URLs:
+The packaged alpha CLI defaults share links to the hosted Fly relay:
 
 ```text
-MARKLAB_PUBLIC_WEB_URL=http://127.0.0.1:<web-port>
-MARKLAB_PUBLIC_API_URL=http://127.0.0.1:<api-port>
-MARKLAB_PUBLIC_RELAY_WS_URL=ws://127.0.0.1:<api-port>/relay
+MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
+MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
+MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
 ```
 
-Production share links should be built with all three public URLs:
+Normal users do not need to set those variables. Operators and self-hosted testers can override the public relay URLs by setting all three values together:
 
 ```sh
 MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev \
@@ -76,3 +87,9 @@ marklab share README.md
 ```
 
 When public URLs are configured, MarkLab requires all three values together and rejects loopback public URLs. Production relay WebSocket URLs must use `wss://`.
+
+To force local loopback relay URLs while developing from this repository, set:
+
+```sh
+MARKLAB_RELAY_MODE=development
+```

@@ -10,7 +10,7 @@ If an AI agent, VS Code, Typora, Vim, or a human edits the Markdown file directl
 
 The current alpha is the Plan 04A hosted-relay release.
 
-- Public CLI package: `@marklab/cli@0.1.0-alpha.4`
+- Public CLI package: `@marklab/cli@0.1.0-alpha.5`
 - npm dist tag: `latest`
 - Hosted relay: [https://marklab-relay-alpha.fly.dev](https://marklab-relay-alpha.fly.dev)
 - Fly.io app: `marklab-relay-alpha`
@@ -23,13 +23,7 @@ The hosted service is live relay infrastructure. It stores relay metadata and ep
 
 ## Quick Start
 
-Open a local Markdown file:
-
-```sh
-npx -y @marklab/cli open README.md
-```
-
-Open it in the background:
+Start persistent watching in the background:
 
 ```sh
 npx -y @marklab/cli open README.md --background
@@ -39,14 +33,18 @@ npx -y @marklab/cli status
 Create a hosted edit link:
 
 ```sh
-export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
+npx -y @marklab/cli create-link README.md --role edit
+```
 
+The packaged alpha CLI defaults to the hosted relay at `marklab-relay-alpha.fly.dev`, so normal users do not need to export public relay URLs before sharing.
+
+For a temporary foreground share, use:
+
+```sh
 npx -y @marklab/cli share README.md
 ```
 
-The printed edit link opens in a browser. Browser editing works without installing MarkLab.
+Foreground sharing stops when that terminal closes. Use it for quick tests, not persistent hosting.
 
 For a collaborator who wants a local file mirror that keeps listening in the background, send the edit link plus this one-liner:
 
@@ -142,19 +140,21 @@ The next planned polish bucket is Plan 04B. It may add hosted web Share, Version
 
 ## Common Workflows
 
-Host a file in foreground mode:
-
-```sh
-npx -y @marklab/cli share README.md
-```
-
-Host a file in background mode and create links:
+Host a file persistently in background mode and create links:
 
 ```sh
 npx -y @marklab/cli open README.md --background
 npx -y @marklab/cli create-link README.md --role edit
 npx -y @marklab/cli create-link README.md --role view
 ```
+
+Host a file temporarily in foreground mode:
+
+```sh
+npx -y @marklab/cli share README.md
+```
+
+Foreground sharing stops when that terminal closes.
 
 Join an edit link as a local mirror:
 
@@ -224,6 +224,12 @@ MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS=86400
 MARKLAB_RELAY_HOST_LEASE_SECONDS=30
 MARKLAB_RELAY_MAX_ROOM_CONNECTIONS=32
 MARKLAB_RELAY_MAX_MESSAGE_BYTES=1048576
+```
+
+The npm CLI includes the alpha hosted relay URLs by default. Use the env vars above only for operators, custom deployments, or self-hosted relay testing. To force loopback relay URLs during local development, set:
+
+```sh
+MARKLAB_RELAY_MODE=development
 ```
 
 Health check:

@@ -2,6 +2,12 @@ function trimTrailingSlash(value) {
   return value.replace(/\/+$/u, '');
 }
 
+export const defaultAlphaRelayConfig = {
+  publicWebUrl: 'https://marklab-relay-alpha.fly.dev',
+  publicApiUrl: 'https://marklab-relay-alpha.fly.dev',
+  publicRelayWebSocketUrl: 'wss://marklab-relay-alpha.fly.dev/relay',
+};
+
 function parseUrl(value, name) {
   try {
     return new URL(value);
@@ -39,13 +45,16 @@ export function loadRelayConfig(input = {}) {
   const env = input.env ?? process.env;
   const apiPort = input.apiPort;
   const webPort = input.webPort;
-  const configured = {
+  const envConfigured = {
     publicWebUrl: env.MARKLAB_PUBLIC_WEB_URL,
     publicApiUrl: env.MARKLAB_PUBLIC_API_URL,
     publicRelayWebSocketUrl: env.MARKLAB_PUBLIC_RELAY_WS_URL,
   };
-  const configuredCount = Object.values(configured).filter((value) => value && value.trim()).length;
-  const publicMode = configuredCount > 0 || env.MARKLAB_RELAY_MODE === 'production';
+  const configuredCount = Object.values(envConfigured).filter((value) => value && value.trim()).length;
+  const forceDevelopment = env.MARKLAB_RELAY_MODE === 'development';
+  const useDefaultPublicRelay = Boolean(input.defaultPublicRelay) && !forceDevelopment && configuredCount === 0;
+  const configured = useDefaultPublicRelay ? defaultAlphaRelayConfig : envConfigured;
+  const publicMode = configuredCount > 0 || env.MARKLAB_RELAY_MODE === 'production' || useDefaultPublicRelay;
 
   if (publicMode) {
     const envNames = {

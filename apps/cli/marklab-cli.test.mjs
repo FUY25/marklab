@@ -369,6 +369,7 @@ describe('marklab CLI', () => {
       ['share', markdownPath],
       {
         MARKLAB_APP_SUPPORT_DIR: join(directory, 'app-support'),
+        MARKLAB_RELAY_MODE: 'development',
         MARKLAB_NO_OPEN: 'true',
         MARKLAB_API_PORT: String(await freePort()),
         MARKLAB_WEB_PORT: String(await freePort()),
@@ -390,6 +391,7 @@ describe('marklab CLI', () => {
 
     const env = {
       MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_RELAY_MODE: 'development',
       MARKLAB_NO_OPEN: 'true',
       MARKLAB_API_PORT: String(await freePort()),
       MARKLAB_WEB_PORT: String(await freePort()),

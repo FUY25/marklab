@@ -8,7 +8,7 @@ Current public package:
 npx -y @marklab/cli --help
 ```
 
-As of this alpha, npm installs `@marklab/cli@0.1.0-alpha.4` from the `latest` tag.
+As of this alpha, npm installs `@marklab/cli@0.1.0-alpha.5` from the `latest` tag.
 
 ## What MarkLab Does
 
@@ -59,7 +59,9 @@ Relay view link:
 
 The host is the person who owns the canonical local Markdown file.
 
-Set the hosted relay URLs in the terminal where you will run MarkLab:
+The packaged alpha CLI defaults to the hosted relay at `marklab-relay-alpha.fly.dev`. Normal users do not need to export relay URLs before sharing.
+
+Operators and self-hosted testers can override the public relay URLs:
 
 ```sh
 export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
@@ -67,7 +69,7 @@ export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
 export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
 ```
 
-If you want this to persist for future terminals:
+If you want this override to persist for future terminals:
 
 ```sh
 cat >> ~/.zshrc <<'EOF'
@@ -79,21 +81,9 @@ EOF
 source ~/.zshrc
 ```
 
-## Host A File In Foreground Mode
-
-This is the simplest share flow. It installs the CLI if needed, starts MarkLab, creates an edit link, and keeps hosting while the terminal stays open:
-
-```sh
-npx -y @marklab/cli share README.md
-```
-
-Copy the printed `Edit link:` and send it to collaborators.
-
-Keep that terminal open. Closing the terminal stops the host daemon and remote collaborators will be unable to write until the host opens MarkLab again.
-
 ## Host A File In Background Mode
 
-Use background mode when you want the host daemon to keep running after the command returns:
+Use background mode for normal collaboration. It keeps the host daemon running after the command returns:
 
 ```sh
 npx -y @marklab/cli open README.md --background
@@ -128,6 +118,18 @@ Stop all local MarkLab daemons:
 ```sh
 npx -y @marklab/cli stop --all
 ```
+
+## Temporary Foreground Sharing
+
+Use foreground sharing for quick tests only. It installs the CLI if needed, starts MarkLab, creates an edit link, and keeps hosting while that terminal stays open:
+
+```sh
+npx -y @marklab/cli share README.md
+```
+
+Copy the printed `Edit link:` and send it to collaborators.
+
+Keep that terminal open. Closing the terminal stops the host daemon and remote collaborators will be unable to write until the host opens MarkLab again.
 
 ## One-Line Collaborator Join
 
@@ -222,29 +224,31 @@ Revoked links:
 
 ## Useful Commands
 
-Open a local file:
-
-```sh
-npx -y @marklab/cli open README.md
-```
-
-Open a local file in background mode:
+Open a local file in persistent background mode:
 
 ```sh
 npx -y @marklab/cli open README.md --background
 ```
 
-Share a local file with a foreground host daemon:
+Open a local file in temporary foreground mode:
+
+```sh
+npx -y @marklab/cli open README.md
+```
+
+Create an edit link for an already-open file:
+
+```sh
+npx -y @marklab/cli create-link README.md --role edit
+```
+
+Create a temporary foreground share:
 
 ```sh
 npx -y @marklab/cli share README.md
 ```
 
-Create another edit link for an already-open file:
-
-```sh
-npx -y @marklab/cli create-link README.md --role edit
-```
+Foreground sharing stops when that terminal closes.
 
 Create a view-only browser link:
 
@@ -288,13 +292,13 @@ The first `npx -y @marklab/cli ...` command can take a minute because npm downlo
 
 If a command prints a local `127.0.0.1` browser URL, that URL is for your machine only. Do not send it to another person. Send relay edit/view links only.
 
-If a share link points at `localhost` or `127.0.0.1`, stop the daemon, set the hosted relay environment variables, and start again:
+Share links created by the packaged alpha should point at `https://marklab-relay-alpha.fly.dev`. Local `localhost` or `127.0.0.1` relay links are for development only.
+
+If you intentionally want local relay links while working from this repository, force development mode:
 
 ```sh
 npx -y @marklab/cli stop --all
-export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
+export MARKLAB_RELAY_MODE=development
 npx -y @marklab/cli open README.md --background
 ```
 

@@ -431,7 +431,7 @@ export function buildLocalUrls(apiPort, webPort, token) {
 }
 
 function localRelayConfig(apiPort, webPort) {
-  return loadRelayConfig({ apiPort, webPort });
+  return loadRelayConfig({ apiPort, webPort, defaultPublicRelay: true });
 }
 
 function isPortAvailable(port) {

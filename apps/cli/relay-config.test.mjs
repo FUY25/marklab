@@ -28,6 +28,33 @@ describe('loadRelayConfig', () => {
     });
   });
 
+  it('uses packaged alpha relay URLs when requested without env exports', () => {
+    expect(loadRelayConfig({ apiPort: 3011, webPort: 5175, env: {}, defaultPublicRelay: true })).toEqual({
+      mode: 'production',
+      publicWebUrl: 'https://marklab-relay-alpha.fly.dev',
+      publicApiUrl: 'https://marklab-relay-alpha.fly.dev',
+      publicRelayWebSocketUrl: 'wss://marklab-relay-alpha.fly.dev/relay',
+      relayWebSocketUrl: 'wss://marklab-relay-alpha.fly.dev/relay',
+    });
+  });
+
+  it('can force local development relay URLs instead of the packaged alpha default', () => {
+    expect(loadRelayConfig({
+      apiPort: 3011,
+      webPort: 5175,
+      defaultPublicRelay: true,
+      env: {
+        MARKLAB_RELAY_MODE: 'development',
+      },
+    })).toEqual({
+      mode: 'development',
+      publicWebUrl: 'http://127.0.0.1:5175',
+      publicApiUrl: 'http://127.0.0.1:3011',
+      publicRelayWebSocketUrl: 'ws://127.0.0.1:3011/relay',
+      relayWebSocketUrl: 'ws://127.0.0.1:3011/relay',
+    });
+  });
+
   it('rejects partial public URL configuration to avoid mixed local and hosted links', () => {
     expect(() => loadRelayConfig({
       apiPort: 3011,
