@@ -22,6 +22,7 @@ interface PendingProposal {
   relayRoomId: string;
   proposer: RelayConnection;
   updateBase64: string;
+  replace: boolean;
   timer: NodeJS.Timeout;
 }
 
@@ -50,7 +51,7 @@ type RelayClientMessage =
       hostToken?: string;
       asHost?: boolean;
     }
-  | { type: 'propose_update'; proposalId?: string; updateBase64: string }
+  | { type: 'propose_update'; proposalId?: string; updateBase64: string; replace?: boolean }
   | { type: 'host_ack'; proposalId: string; yjsStateBase64: string; sharedHash: string }
   | { type: 'host_reject'; proposalId: string; reason?: string }
   | { type: 'host_update'; yjsStateBase64: string; sharedHash: string }
@@ -234,6 +235,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       relayRoomId: connection.relayRoomId,
       proposer: connection,
       updateBase64: message.updateBase64,
+      replace: Boolean(message.replace),
       timer: setTimeout(() => {
         const current = pendingByProposalId.get(proposalId);
         if (current) rejectPending(current, 'host_offline');
@@ -246,6 +248,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       proposalId,
       fromSessionId: connection.sessionId,
       updateBase64: message.updateBase64,
+      replace: pending.replace,
     });
   }
 
@@ -278,6 +281,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       type: 'accepted_update',
       proposalId,
       updateBase64: yjsStateBase64,
+      replace: pending?.replace ?? false,
       sharedRevision: room.sharedRevision,
       sharedHash: room.lastSharedHash,
       hostSessionId: connection.hostSessionId,

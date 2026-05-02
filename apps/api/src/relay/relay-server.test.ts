@@ -241,6 +241,50 @@ describe('relay websocket authority bridge', () => {
     });
   });
 
+  it('forwards replace proposals and marks the accepted broadcast as replacement state', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const host = await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      clientId: 'editor',
+    });
+
+    const proposal = nextMessageOfType(host, 'proposal');
+    editor.send(
+      JSON.stringify({
+        type: 'propose_update',
+        proposalId: 'replace-resolution',
+        updateBase64: Buffer.from(createState('resolved')).toString('base64'),
+        replace: true,
+      }),
+    );
+    await expect(proposal).resolves.toMatchObject({
+      type: 'proposal',
+      proposalId: 'replace-resolution',
+      replace: true,
+    });
+
+    const accepted = nextMessage(editor);
+    host.send(
+      JSON.stringify({
+        type: 'host_ack',
+        proposalId: 'replace-resolution',
+        yjsStateBase64: Buffer.from(createState('resolved')).toString('base64'),
+        sharedHash: 'sha256:resolved',
+      }),
+    );
+    await expect(accepted).resolves.toMatchObject({
+      type: 'accepted_update',
+      proposalId: 'replace-resolution',
+      replace: true,
+      sharedRevision: 1,
+      sharedHash: 'sha256:resolved',
+    });
+  });
+
   it('does not advance shared revision or broadcast accepted updates when host write fails', async () => {
     const stack = await startRelayStack();
     const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });

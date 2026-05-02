@@ -66,6 +66,7 @@ export interface RelayShareSessionSummary {
 }
 
 export interface RelayShareState {
+  mode?: 'local' | 'relay-host' | 'relay-mirror';
   localPath: string | null;
   relayRoomId: string | null;
   hostOnline: boolean;

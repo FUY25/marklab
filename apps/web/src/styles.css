@@ -883,6 +883,175 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.conflict-review-drawer {
+  width: min(560px, 100vw);
+}
+
+.conflict-review-body {
+  padding-bottom: 0;
+}
+
+.conflict-review-summary p,
+.conflict-resolution-intro p,
+.conflict-action-card p,
+.local-conflict-paused p {
+  margin: 0;
+  color: var(--workspace-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.conflict-review-lede,
+.local-conflict-paused p:first-of-type {
+  color: var(--workspace-ink);
+  font-weight: 600;
+}
+
+.conflict-review-meta {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.conflict-review-meta div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.conflict-review-meta dt,
+.conflict-action-card label {
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 650;
+}
+
+.conflict-review-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--workspace-ink);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conflict-review-actions {
+  grid-template-columns: 1fr;
+}
+
+.conflict-review-actions button,
+.conflict-action-card button,
+.conflict-review-footer button,
+.local-conflict-paused button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  color: var(--workspace-ink);
+  background: var(--workspace-control-bg);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.conflict-review-actions button:hover,
+.conflict-action-card button:hover,
+.conflict-review-footer button:hover,
+.local-conflict-paused button:hover {
+  background: var(--workspace-control-hover);
+}
+
+.conflict-action-card {
+  align-items: stretch;
+}
+
+.conflict-resolution-intro {
+  background: #fbfbfa;
+}
+
+.conflict-action-card h3 {
+  margin: 0 0 4px;
+  color: var(--workspace-ink);
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.conflict-action-card input,
+.conflict-resolved-markdown {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+  color: var(--workspace-ink);
+  background: #ffffff;
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.conflict-action-card input:focus,
+.conflict-resolved-markdown:focus {
+  border-color: var(--workspace-border-strong);
+}
+
+.conflict-resolved-markdown {
+  min-height: 150px;
+  resize: vertical;
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.conflict-ai-merge-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.conflict-preview-section pre {
+  box-sizing: border-box;
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  color: var(--workspace-ink);
+  background: #fbfbfa;
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conflict-preview-section code {
+  color: var(--workspace-soft);
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", Courier, monospace;
+  font-size: 11px;
+}
+
+.conflict-review-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--workspace-border);
+}
+
+.conflict-review-drawer .document-drawer-status {
+  white-space: normal;
+  text-overflow: clip;
+}
+
 .share-drawer-role-segments {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1564,6 +1733,32 @@ button:disabled {
   border-radius: 8px;
   font-size: 14px;
   line-height: 1.4;
+}
+
+.local-conflict-paused {
+  box-sizing: border-box;
+  display: grid;
+  min-height: 520px;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  color: var(--workspace-ink);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.local-conflict-paused h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.local-conflict-paused-detail {
+  max-width: 520px;
 }
 
 .read-only-heading {

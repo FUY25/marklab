@@ -303,6 +303,7 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
         updateBase64?: string | null;
         proposalId?: string | null;
         hostOnline?: boolean;
+        replace?: boolean;
         reason?: string;
       };
       if (typeof message.hostOnline === 'boolean') {
@@ -315,6 +316,12 @@ export function RelayDocumentPage({ relayRoomId }: RelayDocumentPageProps) {
       }
       const nextState = message.updateBase64 ?? message.yjsStateBase64;
       if ((message.type === 'hello_ack' || message.type === 'accepted_update') && nextState) {
+        if (message.type === 'accepted_update' && message.replace) {
+          setStatus('Reloading resolved document');
+          setStatusKind('status');
+          window.location.reload();
+          return;
+        }
         Y.applyUpdate(ydoc, decodeBrowserBase64(nextState), relayOrigin);
         if (message.type === 'accepted_update' && message.proposalId && message.proposalId === pendingProposalIdRef.current) {
           pendingProposalIdRef.current = null;

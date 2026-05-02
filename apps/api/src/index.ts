@@ -46,8 +46,11 @@ async function main() {
         ? createInMemoryRelayRoomService()
         : undefined;
   const relay = relayService ? createRelayServer(relayService) : undefined;
+  const shouldStartLocalRelayMirror = Boolean(
+    localFileService && process.env.MARKLAB_RELAY_ROOM_ID && process.env.MARKLAB_RELAY_TOKEN,
+  );
   const localRelayHost =
-    localFileService && relayService
+    localFileService && relayService && !shouldStartLocalRelayMirror
       ? createLocalRelayHostController({
           localFileService,
           relayService,
@@ -58,7 +61,7 @@ async function main() {
         })
       : undefined;
   const localRelayMirror =
-    localFileService && process.env.MARKLAB_RELAY_ROOM_ID && process.env.MARKLAB_RELAY_TOKEN
+    shouldStartLocalRelayMirror && localFileService && process.env.MARKLAB_RELAY_ROOM_ID && process.env.MARKLAB_RELAY_TOKEN
       ? createLocalRelayMirrorController({
           localFileService,
           relayRoomId: process.env.MARKLAB_RELAY_ROOM_ID,
@@ -89,6 +92,7 @@ async function main() {
           localDaemonToken: localDaemonToken ?? '',
           localMode: true,
           ...(localRelayHost ? { localRelayHost } : {}),
+          ...(localRelayMirror ? { localRelayMirror } : {}),
         }
       : {}),
     ...(relayService && relay

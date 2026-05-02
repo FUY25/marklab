@@ -165,7 +165,7 @@ describe('marklab CLI', () => {
       file: 'README.md',
       background: true,
     });
-    expect(parseCliArgs(['status'])).toEqual({ command: 'status' });
+    expect(parseCliArgs(['status'])).toEqual({ command: 'status', file: null, json: false });
     expect(parseCliArgs(['stop', 'README.md'])).toEqual({
       command: 'stop',
       file: 'README.md',
@@ -179,6 +179,7 @@ describe('marklab CLI', () => {
     expect(parseCliArgs(['share', 'README.md'])).toEqual({
       command: 'share',
       file: 'README.md',
+      json: false,
     });
     expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir'])).toEqual({
       command: 'join',
@@ -200,11 +201,13 @@ describe('marklab CLI', () => {
       command: 'create-link',
       file: 'README.md',
       role: 'view',
+      json: false,
     });
     expect(parseCliArgs(['revoke-link', 'README.md', 'grant_1'])).toEqual({
       command: 'revoke-link',
       file: 'README.md',
       grantId: 'grant_1',
+      json: false,
     });
   });
 
@@ -390,7 +393,7 @@ describe('marklab CLI', () => {
 
       const shareState = await runCli(['share-state', markdownPath, '--json'], env);
       expectCliOk(shareState);
-      const parsedShareState = JSON.parse(shareState.stdout);
+      const parsedShareState = JSON.parse(shareState.stdout).shareState;
       expect(parsedShareState).toMatchObject({
         localPath: canonicalMarkdownPath,
         hostOnline: true,

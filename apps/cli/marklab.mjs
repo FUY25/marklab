@@ -7,6 +7,13 @@ import net from 'node:net';
 import { basename, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  AgentCommandError,
+  agentSuccess,
+  writeAgentError,
+  writeAgentJson,
+} from './agent-json.mjs';
+import { installAgentInstructions, readAgentInstructions } from './agent-instructions.mjs';
+import {
   canonicalRealpath,
   cleanupStaleRegistryEntries,
   createDaemonEntry,
@@ -18,6 +25,16 @@ import {
   stopDaemons,
   unregisterDaemonEntry,
 } from './daemon-supervisor.mjs';
+import { runDoctor, printDoctorHuman } from './doctor.mjs';
+import {
+  buildAgentStatus,
+  fetchLocalJson,
+  findWatchedDaemon,
+  listRecentFiles,
+  readLocalConflictState,
+  readLocalDocument,
+} from './recent-files.mjs';
+import { waitForSync } from './wait-for-sync.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cliPath = fileURLToPath(import.meta.url);
@@ -27,13 +44,21 @@ const defaultWebPort = 5175;
 export function printUsage() {
   console.log(`Usage:
   marklab open <file.md> [--background]
-  marklab share <file.md>
+  marklab share <file.md> [--json]
   marklab join <edit-link> <file.md>
   marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir]
   marklab share-state <file.md> [--json]
-  marklab create-link <file.md> --role <view|edit>
-  marklab revoke-link <file.md> <grant-id>
-  marklab status
+  marklab create-link <file.md> --role <view|edit> [--json]
+  marklab revoke-link <file.md> <grant-id> [--json]
+  marklab status [file.md] [--json]
+  marklab recent --json
+  marklab wait <file.md> --synced --timeout 10000 --json
+  marklab save-version <file.md> --message "Before AI edit" --json
+  marklab versions <file.md> --json
+  marklab conflict <file.md> --json
+  marklab doctor [file.md] --json
+  marklab agent instructions --target <codex|claude|cursor>
+  marklab agent install --target codex --write AGENTS.md [--force]
   marklab stop <file.md>
   marklab stop --all`);
 }
@@ -61,6 +86,7 @@ function positionalArgs(args, flagsWithValues = []) {
 
 export function parseCliArgs(argv) {
   const [command, ...rest] = argv;
+  const json = rest.includes('--json');
   if (command === 'open') {
     const file = positionalArgs(rest)[0] ?? null;
     return {
@@ -72,12 +98,12 @@ export function parseCliArgs(argv) {
 
   if (command === 'share') {
     const file = positionalArgs(rest)[0] ?? null;
-    return { command, file };
+    return { command, file, json };
   }
 
   if (command === 'share-state') {
     const file = positionalArgs(rest)[0] ?? null;
-    return { command, file, json: rest.includes('--json') };
+    return { command, file, json };
   }
 
   if (command === 'create-link') {
@@ -86,6 +112,7 @@ export function parseCliArgs(argv) {
       command,
       file,
       role: parseFlagValue(rest, '--role') ?? 'edit',
+      json,
     };
   }
 
@@ -93,7 +120,7 @@ export function parseCliArgs(argv) {
     const positional = positionalArgs(rest);
     const file = positional[0] ?? null;
     const grantId = positional[1] ?? null;
-    return { command, file, grantId };
+    return { command, file, grantId, json };
   }
 
   if (command === 'join') {
@@ -120,7 +147,64 @@ export function parseCliArgs(argv) {
     };
   }
 
-  if (command === 'status') return { command };
+  if (command === 'status') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file, json };
+  }
+
+  if (command === 'recent') return { command, json };
+
+  if (command === 'wait') {
+    const file = positionalArgs(rest, ['--timeout'])[0] ?? null;
+    return {
+      command,
+      file,
+      synced: rest.includes('--synced'),
+      timeoutMs: Number(parseFlagValue(rest, '--timeout') ?? 10000),
+      json,
+    };
+  }
+
+  if (command === 'save-version') {
+    const file = positionalArgs(rest, ['--message'])[0] ?? null;
+    return {
+      command,
+      file,
+      message: parseFlagValue(rest, '--message'),
+      json,
+    };
+  }
+
+  if (command === 'versions') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file, json };
+  }
+
+  if (command === 'doctor') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file, json };
+  }
+
+  if (command === 'conflict') {
+    const file = positionalArgs(rest)[0] ?? null;
+    return { command, file, json };
+  }
+
+  if (command === 'agent') {
+    const [agentCommand, ...agentRest] = rest;
+    return {
+      command,
+      agentCommand: agentCommand ?? null,
+      target: parseFlagValue(agentRest, '--target'),
+      writePath: parseFlagValue(agentRest, '--write'),
+      force: agentRest.includes('--force'),
+      json: rest.includes('--json'),
+    };
+  }
+
+  if (['write', 'edit', 'hosted-write', 'hosted-edit'].includes(command)) {
+    return { command, forbiddenAgentWrite: true, json };
+  }
 
   if (command === '__serve') {
     const file = positionalArgs(rest, ['--api-port', '--web-port', '--token'])[0] ?? null;
@@ -133,7 +217,7 @@ export function parseCliArgs(argv) {
     };
   }
 
-  return { command: command ?? 'help' };
+  return { command: command ?? 'help', json };
 }
 
 function waitForHttp(url, timeoutMs = 30000) {
@@ -169,6 +253,10 @@ function waitForChildExit(child) {
   return new Promise((resolveWait) => {
     child.once('exit', () => resolveWait());
   });
+}
+
+async function waitForSessionExit(session) {
+  await Promise.all(session.children.map(waitForChildExit));
 }
 
 function spawnPnpm(argsToRun, env, stdio = 'inherit') {
@@ -353,6 +441,7 @@ async function openForeground(file) {
   await session.waitReady();
   console.log(`Opening ${session.localUrl}`);
   openBrowser(session.localUrl);
+  await waitForSessionExit(session);
 }
 
 async function createLocalRelayLink(apiUrl, token, role) {
@@ -365,7 +454,12 @@ async function createLocalRelayLink(apiUrl, token, role) {
     body: JSON.stringify({ role }),
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(`Unable to create relay link: ${body}`);
+  if (!response.ok) {
+    throw new AgentCommandError('relay_unavailable', 'Unable to create relay link.', {
+      status: response.status,
+      body,
+    });
+  }
   return JSON.parse(body);
 }
 
@@ -380,6 +474,80 @@ async function shareForeground(file) {
   console.log(`Edit link: ${created.url}`);
   console.log(`Local browser URL: ${session.localUrl}`);
   openBrowser(session.localUrl);
+  await waitForSessionExit(session);
+}
+
+async function ensureBackgroundDaemon(file) {
+  const markdownPath = await resolveMarkdownFile(file);
+  const registryPath = defaultDaemonRegistryPath();
+  const existing = await findDaemonByRealpath(markdownPath, registryPath);
+  if (existing) return { daemon: existing, reused: true };
+
+  const { apiPort, webPort } = await chooseLocalPorts();
+  const token = randomBytes(24).toString('base64url');
+  const { apiUrl, webUrl, localUrl } = buildLocalUrls(apiPort, webPort, token);
+  const child = spawn(process.execPath, [cliPath, '__serve', markdownPath, '--api-port', String(apiPort), '--web-port', String(webPort), '--token', token], {
+    cwd: repoRoot,
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
+      MARKLAB_LOCAL_METADATA_PATH: defaultMetadataPath(),
+    },
+  });
+  child.unref();
+
+  const entry = createDaemonEntry({
+    realpath: markdownPath,
+    pid: child.pid,
+    apiPort,
+    webPort,
+    apiUrl,
+    webUrl,
+    localUrl,
+    token,
+  });
+
+  const registered = await registerDaemonEntry(entry, registryPath);
+  if (!registered.registered) {
+    try {
+      process.kill(child.pid, 'SIGTERM');
+    } catch {
+      // Already gone.
+    }
+    return { daemon: registered.existing, reused: true };
+  }
+
+  try {
+    await Promise.all([waitForHttp(`${apiUrl}/healthz`), waitForHttp(webUrl)]);
+  } catch (error) {
+    try {
+      process.kill(child.pid, 'SIGTERM');
+    } catch {
+      // Already gone.
+    }
+    await unregisterDaemonEntry(entry.id, registryPath);
+    throw error;
+  }
+
+  return { daemon: entry, reused: false };
+}
+
+async function shareJsonCommand(file) {
+  const { daemon, reused } = await ensureBackgroundDaemon(file);
+  const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, 'edit');
+  writeAgentJson(agentSuccess({
+    path: daemon.realpath,
+    reusedDaemon: reused,
+    browserUrl: daemon.localUrl ?? null,
+    relayRoomId: created.relayRoomId,
+    grantId: created.grantId,
+    role: created.role,
+    url: created.url,
+    expiresAt: created.expiresAt ?? null,
+    createdAt: created.createdAt ?? null,
+  }));
 }
 
 async function openBackground(file) {
@@ -483,37 +651,62 @@ async function printStatus() {
   }
 }
 
-async function requireRunningDaemon(file) {
-  const registryPath = defaultDaemonRegistryPath();
-  const markdownPath = await resolveMarkdownFile(file);
-  const daemon = await findDaemonByRealpath(markdownPath, registryPath);
-  if (!daemon) throw new Error('No running MarkLab daemon found for that file. Start one with marklab share <file.md>.');
-  return daemon;
-}
-
-async function shareStateCommand(input) {
-  const daemon = await requireRunningDaemon(input.file);
-  const response = await fetch(`${daemon.apiUrl}/api/local/share-state`, {
-    headers: { Authorization: `Bearer ${daemon.token}` },
-  });
-  const body = await response.text();
-  if (!response.ok) throw new Error(`Unable to read share state: ${body}`);
-  const state = JSON.parse(body);
+async function statusCommand(input) {
   if (input.json) {
-    console.log(JSON.stringify(state, null, 2));
+    writeAgentJson(await buildAgentStatus({ file: input.file }));
     return;
   }
+  await printStatus();
+}
+
+async function requireRunningDaemon(file) {
+  try {
+    return await findWatchedDaemon(file);
+  } catch (error) {
+    if (error instanceof AgentCommandError && error.code === 'file_not_watched') {
+      throw new AgentCommandError('daemon_not_running', 'No running MarkLab daemon found for that file. Start one with marklab open <file.md> --background.', error.details);
+    }
+    throw error;
+  }
+}
+
+function printHumanShareState(state) {
   console.log(`Relay room: ${state.relayRoomId ?? 'not shared'}`);
   console.log(`Host: ${state.hostOnline ? 'online' : 'offline'}`);
-  for (const link of state.links) {
+  for (const link of state.links ?? []) {
     console.log(`${link.role} ${link.grantId} sessions=${link.activeSessionCount}`);
   }
 }
 
+async function shareStateCommand(input) {
+  const daemon = await requireRunningDaemon(input.file);
+  const state = await fetchLocalJson(daemon, '/api/local/share-state', {
+    errorCode: 'relay_unavailable',
+    errorMessage: 'Unable to read share state.',
+  });
+  if (input.json) {
+    writeAgentJson(agentSuccess({ path: daemon.realpath, shareState: state }));
+    return;
+  }
+  printHumanShareState(state);
+}
+
 async function createLinkCommand(input) {
-  if (input.role !== 'view' && input.role !== 'edit') throw new Error('--role must be view or edit');
+  if (input.role !== 'view' && input.role !== 'edit') throw new AgentCommandError('invalid_target', '--role must be view or edit');
   const daemon = await requireRunningDaemon(input.file);
   const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, input.role);
+  if (input.json) {
+    writeAgentJson(agentSuccess({
+      path: daemon.realpath,
+      role: created.role,
+      grantId: created.grantId,
+      relayRoomId: created.relayRoomId,
+      url: created.url,
+      expiresAt: created.expiresAt ?? null,
+      createdAt: created.createdAt ?? null,
+    }));
+    return;
+  }
   console.log(created.url);
 }
 
@@ -523,8 +716,161 @@ async function revokeLinkCommand(input) {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${daemon.token}` },
   });
-  if (!response.ok) throw new Error(`Unable to revoke relay link: ${await response.text()}`);
+  if (!response.ok) {
+    throw new AgentCommandError('relay_unavailable', 'Unable to revoke relay link.', {
+      path: daemon.realpath,
+      status: response.status,
+      body: await response.text(),
+    });
+  }
+  if (input.json) {
+    writeAgentJson(agentSuccess({ path: daemon.realpath, grantId: input.grantId, revoked: true }));
+    return;
+  }
   console.log(`Revoked ${input.grantId}`);
+}
+
+async function recentCommand(input) {
+  const result = await listRecentFiles();
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  if (result.files.length === 0) {
+    console.log('No recent MarkLab files.');
+    return;
+  }
+  for (const file of result.files) {
+    console.log(`${file.path} (${file.syncState})`);
+  }
+}
+
+async function waitCommand(input) {
+  const result = await waitForSync(input);
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(`${result.path} is synced (${result.observedHash}, waited ${result.waitedMs}ms).`);
+}
+
+async function saveVersionCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'save-version requires a Markdown file path.');
+  if (!input.message) throw new AgentCommandError('invalid_target', 'save-version requires --message.');
+  const daemon = await requireRunningDaemon(input.file);
+  const saved = await fetchLocalJson(daemon, '/api/local/versions/manual-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: 'agent', message: input.message }),
+    errorCode: 'daemon_not_running',
+    errorMessage: 'Unable to save a local version.',
+  });
+  const result = agentSuccess({
+    path: daemon.realpath,
+    source: 'agent',
+    message: input.message,
+    created: Boolean(saved?.created),
+    versionId: saved?.versionId ?? null,
+    versionNumber: Number.isInteger(saved?.versionNumber) ? saved.versionNumber : null,
+    observedHash: saved?.hash ?? null,
+  });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(`Saved version ${result.versionId ?? '(unknown)'} for ${daemon.realpath}`);
+}
+
+async function versionsCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'versions requires a Markdown file path.');
+  const daemon = await requireRunningDaemon(input.file);
+  const versions = await fetchLocalJson(daemon, '/api/local/versions', {
+    errorCode: 'daemon_not_running',
+    errorMessage: 'Unable to list local versions.',
+  });
+  const result = agentSuccess({ path: daemon.realpath, versions: versions?.versions ?? [] });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  for (const version of result.versions) {
+    console.log(`${version.versionNumber} ${version.versionId} ${version.operation} ${version.hash}`);
+  }
+}
+
+async function conflictCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'conflict requires a Markdown file path.');
+  const daemon = await requireRunningDaemon(input.file);
+  const documentState = await readLocalDocument(daemon);
+  const conflictState = await readLocalConflictState(daemon);
+  const conflictPackage = conflictState?.conflict && typeof conflictState.conflict === 'object' ? conflictState.conflict : null;
+  const message =
+    conflictPackage?.status === 'open'
+      ? 'Relay reconnect conflict. Review needed before syncing resumes.'
+      : conflictState?.message ?? (typeof conflictState?.conflict === 'string' ? conflictState.conflict : null) ?? conflictState?.reason ?? documentState.conflict ?? null;
+  if (!conflictState && !message) {
+    throw new AgentCommandError('conflict_unavailable', 'Conflict review state is not available for this file yet.', {
+      path: daemon.realpath,
+    });
+  }
+  const result = agentSuccess({
+    path: daemon.realpath,
+    hasConflict: Boolean(message || conflictState?.hasConflict || conflictState?.open),
+    syncState: message ? 'paused' : 'synced',
+    conflict: message
+      ? {
+          message,
+          source: conflictState ? 'conflict-api' : 'local-document',
+          state: conflictPackage ?? conflictState ?? null,
+        }
+      : null,
+    nextStep: message
+      ? 'Stop editing the watched file and ask the user to resolve the conflict in MarkLab, or write a separate resolved draft.'
+      : 'No open conflict was reported.',
+  });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(result.conflict?.message ?? result.nextStep);
+}
+
+async function doctorCommand(input) {
+  const result = await runDoctor(input);
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  printDoctorHuman(result);
+}
+
+async function agentCommand(input) {
+  if (input.agentCommand === 'instructions') {
+    const result = await readAgentInstructions(input.target);
+    if (input.json) {
+      writeAgentJson(agentSuccess(result));
+      return;
+    }
+    process.stdout.write(result.instructions);
+    if (!result.instructions.endsWith('\n')) process.stdout.write('\n');
+    return;
+  }
+
+  if (input.agentCommand === 'install') {
+    const result = await installAgentInstructions(input);
+    if (input.json) {
+      writeAgentJson(result);
+      return;
+    }
+    console.log(`Installed ${result.target} instructions at ${result.path}`);
+    return;
+  }
+
+  throw new AgentCommandError('invalid_target', 'agent requires instructions or install.');
+}
+
+async function forbiddenAgentWriteCommand(input) {
+  throw new AgentCommandError('forbidden_agent_write', `marklab ${input.command} is forbidden for agents. Edit the local Markdown file directly, then use marklab wait/save-version/status for coordination.`);
 }
 
 function parseRelayLink(link) {
@@ -621,6 +967,7 @@ async function joinCommand(input) {
   console.log(`Joined relay room ${link.relayRoomId}`);
   console.log(`Local mirror file: ${target}`);
   console.log(`Local browser URL: ${session.localUrl}`);
+  await waitForSessionExit(session);
 }
 
 async function stopCommand(input) {
@@ -657,10 +1004,16 @@ async function serveCommand(input) {
     stdio: 'ignore',
   });
   await session.waitReady();
+  await waitForSessionExit(session);
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const input = parseCliArgs(argv);
+  if (input.forbiddenAgentWrite) {
+    await forbiddenAgentWriteCommand(input);
+    return;
+  }
+
   if (input.command === 'open' && input.file) {
     if (input.background) await openBackground(input.file);
     else await openForeground(input.file);
@@ -668,7 +1021,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (input.command === 'share' && input.file) {
-    await shareForeground(input.file);
+    if (input.json) await shareJsonCommand(input.file);
+    else await shareForeground(input.file);
     return;
   }
 
@@ -687,13 +1041,48 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (input.command === 'recent') {
+    await recentCommand(input);
+    return;
+  }
+
+  if (input.command === 'wait') {
+    await waitCommand(input);
+    return;
+  }
+
+  if (input.command === 'save-version') {
+    await saveVersionCommand(input);
+    return;
+  }
+
+  if (input.command === 'versions') {
+    await versionsCommand(input);
+    return;
+  }
+
+  if (input.command === 'conflict') {
+    await conflictCommand(input);
+    return;
+  }
+
+  if (input.command === 'doctor') {
+    await doctorCommand(input);
+    return;
+  }
+
+  if (input.command === 'agent') {
+    await agentCommand(input);
+    return;
+  }
+
   if (input.command === 'join') {
     await joinCommand(input);
     return;
   }
 
   if (input.command === 'status') {
-    await printStatus();
+    await statusCommand(input);
     return;
   }
 
@@ -707,12 +1096,24 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (input.json) {
+    throw new AgentCommandError('invalid_target', `Invalid marklab command or target: ${input.command}`);
+  }
   printUsage();
-  process.exit(input.command === 'help' ? 0 : 1);
+  process.exit(input.command === 'help' ? 0 : 2);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   void main().catch((error) => {
+    const wantsJson = process.argv.slice(2).includes('--json');
+    if (wantsJson) {
+      const exitCode = writeAgentError(error, { json: true, fallbackCode: 'invalid_target' });
+      process.exit(exitCode);
+    }
+    if (error instanceof AgentCommandError) {
+      console.error(error.message);
+      process.exit(error.exitCode);
+    }
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
   });

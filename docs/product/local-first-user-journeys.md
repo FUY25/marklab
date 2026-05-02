@@ -65,3 +65,24 @@ AI agents edit Markdown files directly in the filesystem. That keeps MarkLab ali
 4. If the browser also has unsaved edits, MarkLab surfaces the conflict state instead of replacing either side.
 
 Agents do not need a hosted document mutation surface for Plan 01.
+
+See the [MarkLab Agent Guide](../agent/marklab-agent-guide.md) for the CLI contract and target-specific instructions.
+
+## Agent Small Edit
+
+1. The agent runs `marklab status README.md --json`.
+2. The agent edits `README.md` with normal local file operations.
+3. The agent runs `marklab wait README.md --synced --timeout 10000 --json`.
+4. The agent reports the changed file and final sync state.
+
+The local Markdown file remains first; MarkLab only coordinates watching, browser sync, versions, and share state.
+
+## Agent Large Edit
+
+1. The agent runs `marklab status README.md --json`.
+2. The agent runs `marklab save-version README.md --message "Before AI edit: broad update" --json`.
+3. The agent edits `README.md` locally.
+4. The agent runs `marklab wait README.md --synced --timeout 10000 --json`.
+5. The agent reports the version id and sync state.
+
+If `status` reports `syncState: "paused"` or `hasConflict: true`, the agent stops editing the watched file and asks the user to resolve the conflict in MarkLab. It may prepare a separate draft, but it should not keep changing the paused watched file.

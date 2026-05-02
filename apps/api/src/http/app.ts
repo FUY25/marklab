@@ -4,6 +4,7 @@ import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
+import { createLocalConflictRoutes } from '../routes/local-conflict-routes';
 import { createLocalFileRoutes } from '../routes/local-file-routes';
 import { createRelayRoutes } from '../routes/relay-routes';
 import { createVersionRoutes } from '../routes/version-routes';
@@ -16,7 +17,7 @@ import {
 } from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 import type { LocalFileService } from '../local/local-file-service';
-import type { LocalRelayHostController } from '../local/local-relay-client';
+import type { LocalRelayHostController, LocalRelayMirrorController } from '../local/local-relay-client';
 import type { RelayRoomService } from '../relay/relay-room-service';
 import type { RelayServerHandle } from '../relay/relay-server';
 
@@ -31,6 +32,8 @@ export interface HttpAppOptions {
   relayService?: RelayRoomService;
   relayServer?: RelayServerHandle;
   localRelayHost?: LocalRelayHostController;
+  localRelayMirror?: LocalRelayMirrorController;
+  enableLegacyDocAiRoutes?: boolean;
 }
 
 export interface HttpRequestAuth {
@@ -251,6 +254,31 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'conflict_required') {
+    res.status(409).json({ error: 'conflict_required' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'conflict_not_found') {
+    res.status(404).json({ error: 'conflict_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'conflict_already_resolved') {
+    res.status(409).json({ error: 'conflict_already_resolved' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'stale_conflict_shared_state') {
+    res.status(409).json({ error: 'stale_conflict_shared_state' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'markdown_too_large') {
+    res.status(413).json({ error: 'markdown_too_large' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'local_state_changed') {
     res.status(409).json({ error: 'local_state_changed' });
     return;
@@ -280,12 +308,14 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
 
   if (localMode) {
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+    app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
     app.use('/api', createRelayRoutes(relayRouteOptions));
   } else {
     app.use('/api', createAccessRoutes(pool, routeOptions));
-    if (legacyHostedDocAiEnabled()) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
+    if (options.enableLegacyDocAiRoutes ?? legacyHostedDocAiEnabled()) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
     app.use('/api', createImportExportRoutes(pool, routeOptions));
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
+    app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
     app.use('/api', createRelayRoutes(relayRouteOptions));
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }

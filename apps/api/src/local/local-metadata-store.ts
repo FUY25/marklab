@@ -8,7 +8,10 @@ export type StoredLocalVersionOperation =
   | 'manual_save'
   | 'pre_restore'
   | 'rollback'
-  | 'conflict_recovery';
+  | 'conflict_recovery'
+  | 'conflict_opened'
+  | 'conflict_resolved'
+  | 'conflict_cancelled';
 
 export interface StoredLocalDocument {
   schemaVersion: 1;
@@ -31,6 +34,8 @@ export interface StoredLocalVersion {
   markdownSnapshot: string;
   yjsStateBase64: string;
   hash: string;
+  source?: 'agent' | 'user' | 'system';
+  message?: string | null;
   createdAt: string;
 }
 
@@ -44,8 +49,11 @@ export interface StoredLocalRelayJoinState {
   lastAcceptedLocalHash: string;
   lastAcceptedSharedHash: string;
   lastAcceptedSharedRevision: number;
+  lastAcceptedYjsStateBase64?: string | null;
+  lastAcceptedStateFingerprint?: string | null;
   lastHostSessionId: string | null;
   disconnectedCleanly: boolean;
+  relayRole?: 'view' | 'edit';
   updatedAt: string;
 }
 

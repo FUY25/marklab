@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WebSocketStatus, type onStatusParameters } from '@hocuspocus/provider';
 import { X } from 'lucide-react';
+import { ConflictReviewDrawer } from '../components/ConflictReviewDrawer';
 import { DocumentActionRail, type DocumentDrawerKind } from '../components/DocumentActionRail';
 import { MilkdownEditor } from '../components/MilkdownEditor';
 import { ShareDrawer, type AccessGrantApi, type AccessGrantsResponse } from '../components/ShareDrawer';
@@ -8,9 +9,11 @@ import { readWebConfig } from '../config';
 import {
   MarklabWebApi,
   readLocalDaemonToken,
+  type ConflictResolutionResponse,
   type LocalDocumentResponse,
   type LocalVersionDetail,
   type LocalVersionSummary,
+  type ReconnectConflict,
 } from '../lib/api-client';
 import { createEditorCollab } from '../lib/editor-collab';
 
@@ -26,6 +29,7 @@ interface LocalVersionsDrawerProps {
   open: boolean;
   onClose: () => void;
   onStatusChange: (status: string, kind: 'status' | 'alert') => void;
+  disabledReason?: string | null;
 }
 
 function readableError(error: unknown, fallback: string): string {
@@ -57,7 +61,7 @@ function hasSameCollabIdentity(current: LocalDocumentResponse | null, next: Loca
   return current?.localDocId === next.localDocId && current.roomName === next.roomName;
 }
 
-function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersionsDrawerProps) {
+function LocalVersionsDrawer({ api, open, onClose, onStatusChange, disabledReason = null }: LocalVersionsDrawerProps) {
   const [versions, setVersions] = useState<LocalVersionSummary[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [preview, setPreview] = useState<LocalVersionDetail | null>(null);
@@ -103,6 +107,11 @@ function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersio
   }, [api, open, selectedVersionId]);
 
   async function handleManualSave() {
+    if (disabledReason) {
+      setError(disabledReason);
+      onStatusChange(disabledReason, 'alert');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -121,6 +130,11 @@ function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersio
 
   async function handleRestore() {
     if (!selectedVersionId) return;
+    if (disabledReason) {
+      setError(disabledReason);
+      onStatusChange(disabledReason, 'alert');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -150,13 +164,14 @@ function LocalVersionsDrawer({ api, open, onClose, onStatusChange }: LocalVersio
         <div className="document-drawer-body">
           <section className="document-drawer-section">
             <div className="document-drawer-action-row">
-              <button type="button" onClick={() => void handleManualSave()} disabled={busy}>
+              <button type="button" onClick={() => void handleManualSave()} disabled={busy || Boolean(disabledReason)}>
                 Save snapshot
               </button>
-              <button type="button" onClick={() => void handleRestore()} disabled={busy || !selectedVersion}>
+              <button type="button" onClick={() => void handleRestore()} disabled={busy || Boolean(disabledReason) || !selectedVersion}>
                 Restore
               </button>
             </div>
+            {disabledReason ? <p className="versions-drawer-empty">{disabledReason}</p> : null}
             {error ? (
               <p className="document-drawer-status" role="alert">
                 {error}
@@ -211,14 +226,20 @@ export function LocalDocumentPage() {
   const api = useMemo(() => new MarklabWebApi({ localDaemonToken }), [localDaemonToken]);
   const [document, setDocument] = useState<LocalDocumentResponse | null>(null);
   const [documentIssue, setDocumentIssue] = useState<LocalDocumentIssue>({ conflict: null, historyLoadError: null });
+  const [currentConflict, setCurrentConflict] = useState<ReconnectConflict | null>(null);
+  const [conflictDrawerOpen, setConflictDrawerOpen] = useState(false);
+  const [closedConflictId, setClosedConflictId] = useState<string | null>(null);
   const [collab, setCollab] = useState<EditorCollab | null>(null);
   const [activeDrawer, setActiveDrawer] = useState<DocumentDrawerKind | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'status' | 'alert'>('status');
   const flushTimerRef = useRef<number | null>(null);
   const documentIssueRef = useRef<LocalDocumentIssue>({ conflict: null, historyLoadError: null });
+  const currentConflictRef = useRef<ReconnectConflict | null>(null);
   const localDocId = document?.localDocId ?? null;
   const roomName = document?.roomName ?? null;
+  const conflictOpen = Boolean(documentIssue.conflict || currentConflict?.status === 'open');
+  const localPauseReason = 'Sync paused. Resolve the conflict before saving or restoring snapshots.';
   const localRelayAccessApi = useMemo<AccessGrantApi>(() => {
     function toAccessGrantsResponse(state: Awaited<ReturnType<MarklabWebApi['getLocalShareState']>>): AccessGrantsResponse {
       return {
@@ -299,6 +320,27 @@ export function LocalDocumentPage() {
     setStatusKind(nextKind);
   }, []);
 
+  const applyCurrentConflict = useCallback(
+    (nextConflict: ReconnectConflict | null) => {
+      const openConflict = nextConflict?.status === 'open' ? nextConflict : null;
+      currentConflictRef.current = openConflict;
+      setCurrentConflict(openConflict);
+      if (!openConflict) {
+        setConflictDrawerOpen(false);
+        setClosedConflictId(null);
+        return;
+      }
+      if (openConflict.conflictId !== closedConflictId) setConflictDrawerOpen(true);
+    },
+    [closedConflictId],
+  );
+
+  const refreshCurrentConflict = useCallback(async () => {
+    const response = await api.getCurrentLocalConflict();
+    applyCurrentConflict(response.conflict);
+    return response.conflict;
+  }, [api, applyCurrentConflict]);
+
   const applyLocalDocumentState = useCallback((nextDocument: LocalDocumentResponse) => {
     const nextIssue = localDocumentIssue(nextDocument);
     documentIssueRef.current = nextIssue;
@@ -326,7 +368,7 @@ export function LocalDocumentPage() {
 
   useEffect(() => {
     if (documentIssue.conflict) {
-      setSaveStatus(documentIssue.conflict, 'alert');
+      setSaveStatus('Sync paused', 'alert');
       return;
     }
     if (documentIssue.historyLoadError) {
@@ -335,7 +377,18 @@ export function LocalDocumentPage() {
   }, [documentIssue, setSaveStatus]);
 
   useEffect(() => {
-    if (!roomName) return undefined;
+    if (!documentIssue.conflict) {
+      applyCurrentConflict(null);
+      return;
+    }
+
+    void refreshCurrentConflict().catch((error: unknown) => {
+      setSaveStatus(readableError(error, 'Unable to load conflict review.'), 'alert');
+    });
+  }, [applyCurrentConflict, documentIssue.conflict, refreshCurrentConflict, setSaveStatus]);
+
+  useEffect(() => {
+    if (!roomName || conflictOpen) return undefined;
 
     let nextCollab: EditorCollab;
     try {
@@ -385,7 +438,7 @@ export function LocalDocumentPage() {
       setCollab(null);
       nextCollab.destroy();
     };
-  }, [config.websocketUrl, localDaemonToken, localDocId, roomName, setSaveStatus]);
+  }, [config.websocketUrl, conflictOpen, localDaemonToken, localDocId, roomName, setSaveStatus]);
 
   useEffect(() => {
     if (!localDocId) return undefined;
@@ -417,6 +470,12 @@ export function LocalDocumentPage() {
   const handleMarkdownChange = useCallback(
     (markdown: string, previousMarkdown: string) => {
       if (markdown === previousMarkdown) return;
+      if (documentIssueRef.current.conflict || currentConflictRef.current) {
+        if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+        setSaveStatus('Sync paused. Resolve the conflict before editing this local file.', 'alert');
+        return;
+      }
       if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
       setSaveStatus('Writing to file');
       flushTimerRef.current = window.setTimeout(() => {
@@ -435,10 +494,45 @@ export function LocalDocumentPage() {
     [api, applyLocalDocumentState, setSaveStatus],
   );
 
+  const handleConflictDrawerClose = useCallback(() => {
+    if (currentConflictRef.current) setClosedConflictId(currentConflictRef.current.conflictId);
+    setConflictDrawerOpen(false);
+    setSaveStatus('Sync paused', 'alert');
+  }, [setSaveStatus]);
+
+  const handleConflictResolved = useCallback(
+    async (_response: ConflictResolutionResponse) => {
+      currentConflictRef.current = null;
+      setCurrentConflict(null);
+      setConflictDrawerOpen(false);
+      setClosedConflictId(null);
+      const nextDocument = await api.getLocalDocument();
+      applyLocalDocumentState(nextDocument);
+      await refreshCurrentConflict().catch(() => undefined);
+      setSaveStatus('Conflict resolved. Sync resumed.', 'status');
+    },
+    [api, applyLocalDocumentState, refreshCurrentConflict, setSaveStatus],
+  );
+
   return (
     <main className="remote-document-shell" data-testid="local-document-page">
       <section className="remote-document-canvas" aria-label="Local Markdown editor">
-        {collab && !documentIssue.conflict ? (
+        {conflictOpen ? (
+          <div className="local-conflict-paused" data-testid="local-conflict-paused" role="status">
+            <h1>Sync paused</h1>
+            <p>This file changed locally while the shared session also changed.</p>
+            <p>Both original versions were snapshotted and remain recoverable.</p>
+            {currentConflict ? (
+              <button type="button" onClick={() => setConflictDrawerOpen(true)}>
+                Review conflict
+              </button>
+            ) : (
+              <p className="local-conflict-paused-detail">
+                {documentIssue.conflict ?? 'Conflict review is loading.'}
+              </p>
+            )}
+          </div>
+        ) : collab ? (
           <MilkdownEditor
             initialMarkdown=""
             ydoc={collab.ydoc}
@@ -466,6 +560,7 @@ export function LocalDocumentPage() {
         open={activeDrawer === 'versions'}
         onClose={() => setActiveDrawer(null)}
         onStatusChange={setSaveStatus}
+        disabledReason={conflictOpen ? localPauseReason : null}
       />
 
       {document ? (
@@ -478,6 +573,15 @@ export function LocalDocumentPage() {
           accessApi={localRelayAccessApi}
         />
       ) : null}
+
+      <ConflictReviewDrawer
+        api={api}
+        conflict={currentConflict}
+        open={conflictDrawerOpen}
+        onClose={handleConflictDrawerClose}
+        onResolved={handleConflictResolved}
+        onStatusChange={setSaveStatus}
+      />
 
       {status ? (
         <div className="remote-save-status" role={statusKind}>

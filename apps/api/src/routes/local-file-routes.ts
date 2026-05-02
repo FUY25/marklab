@@ -58,7 +58,7 @@ export function isLoopbackLocalRequest(headers: { host?: HeaderValue; origin?: H
   return isLoopbackHostHeader(headers.host) && isLoopbackOrigin(headers.origin);
 }
 
-function createLocalTokenGuard(options: HttpAppOptions) {
+export function createLocalTokenGuard(options: HttpAppOptions) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!isLoopbackLocalRequest(req.headers)) {
       res.status(403).json({ error: 'forbidden' });
@@ -94,6 +94,7 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     if (!service) return;
 
     try {
+      if (service.getCurrentConflict()) throw new Error('conflict_required');
       await options.flushCollabDocument?.(service.roomName);
       res.json(service.getSummary());
     } catch (error) {
@@ -120,13 +121,24 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     }
   });
 
-  router.post('/local/versions/manual-save', async (_req: Request, res: Response, next: NextFunction) => {
+  router.post('/local/versions/manual-save', async (req: Request, res: Response, next: NextFunction) => {
     const service = requireLocalFileService(localFileService, res);
     if (!service) return;
 
     try {
+      if (service.getCurrentConflict()) throw new Error('conflict_required');
       await options.flushCollabDocument?.(service.roomName);
-      res.json(await service.createManualVersion());
+      const body = z
+        .object({
+          source: z.enum(['agent', 'user', 'system']).optional(),
+          message: z.string().trim().min(1).optional(),
+        })
+        .optional()
+        .parse(req.body);
+      const versionInput: { source?: 'agent' | 'user' | 'system'; message?: string | null } = {};
+      if (body?.source) versionInput.source = body.source;
+      if (body?.message) versionInput.message = body.message;
+      res.json(await service.createManualVersion(versionInput));
     } catch (error) {
       next(error);
     }
@@ -138,6 +150,7 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
 
     try {
       const input = restoreLocalVersionSchema.parse(req.body);
+      if (service.getCurrentConflict()) throw new Error('conflict_required');
       await options.flushCollabDocument?.(service.roomName);
       const restored = await service.restoreVersion(input.versionId);
       await options.applyCollabDocumentState?.(service.roomName, restored.yjsState);
@@ -156,18 +169,26 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     if (!service) return;
 
     try {
-      if (!options.localRelayHost) {
-        res.json({
-          localPath: service.getSummary().absolutePath,
-          relayRoomId: null,
-          hostOnline: false,
-          hostSessionId: null,
-          links: [],
-          sessions: [],
-        });
+      if (options.localRelayHost) {
+        res.json(await options.localRelayHost.shareState());
         return;
       }
-      res.json(await options.localRelayHost.shareState());
+
+      if (options.localRelayMirror) {
+        res.json(await options.localRelayMirror.shareState());
+        return;
+      }
+
+      res.json({
+        localPath: service.getSummary().absolutePath,
+        relayRoomId: null,
+        hostOnline: false,
+        hostSessionId: null,
+        sharedRevision: null,
+        lastSharedHash: null,
+        links: [],
+        sessions: [],
+      });
     } catch (error) {
       next(error);
     }
@@ -208,7 +229,7 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     if (!service) return;
 
     try {
-      await options.flushCollabDocument?.(service.roomName);
+      if (!service.getCurrentConflict()) await options.flushCollabDocument?.(service.roomName);
       service.stopWatcher();
       res.json({ ok: true });
       setTimeout(() => {

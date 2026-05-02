@@ -35,6 +35,32 @@ function createFakeLocalFileService(): LocalFileService {
     getRelayJoinState: () => null,
     saveRelayJoinState: vi.fn(async () => undefined),
     pauseForRelayConflict: vi.fn(async () => undefined),
+    getCurrentConflict: () => null,
+    getConflict: vi.fn(async () => null),
+    openReconnectConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_open');
+    }),
+    prepareUseSharedConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    prepareUseLocalConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    prepareResolvedConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    completeConflictResolution: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    useSharedConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    useLocalConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    resolveConflict: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
     listVersions: () => [],
     getVersion: () => {
       throw new Error('local_version_not_found');
@@ -44,6 +70,8 @@ function createFakeLocalFileService(): LocalFileService {
       versionId: 'test-v1',
       versionNumber: 1,
       hash: 'sha256:test',
+      source: 'user' as const,
+      message: null,
     })),
     restoreVersion: vi.fn(async () => ({
       versionId: 'test-v1',
@@ -101,6 +129,50 @@ describe('local file routes', () => {
 
     await request(app).post('/api/local/flush').set('Authorization', 'Bearer local-secret').expect(200);
     expect(flushCollabDocument).toHaveBeenCalledWith('local:file:test');
+  });
+
+  it('reports relay mirror share state when the local daemon joined a relay room', async () => {
+    const service = createFakeLocalFileService();
+    const shareState = vi.fn(async () => ({
+      mode: 'relay-mirror' as const,
+      localPath: '/tmp/README.md',
+      relayRoomId: 'relay-room-1',
+      hostOnline: false,
+      hostSessionId: 'host-1',
+      sharedRevision: 3,
+      lastSharedHash: 'sha256:shared',
+      links: [],
+      sessions: [],
+    }));
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      localFileService: service,
+      localDaemonToken: 'local-secret',
+      localMode: true,
+      localRelayMirror: {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(),
+        shareState,
+        verifySharedState: vi.fn(async () => undefined),
+        publishResolvedState: vi.fn(async () => ({
+          sharedRevision: 4,
+          sharedHash: 'sha256:shared',
+          hostSessionId: 'host-1',
+        })),
+      },
+    });
+
+    const response = await request(app)
+      .get('/api/local/share-state')
+      .set('Authorization', 'Bearer local-secret')
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      mode: 'relay-mirror',
+      relayRoomId: 'relay-room-1',
+      hostOnline: false,
+      sharedRevision: 3,
+    });
+    expect(shareState).toHaveBeenCalledOnce();
   });
 
   it('does not mount cloud document or hosted AI write routes in local mode', async () => {

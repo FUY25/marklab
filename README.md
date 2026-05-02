@@ -69,6 +69,37 @@ Product journey docs:
 
 - [Local-First User Journeys](docs/product/local-first-user-journeys.md)
 - [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
+- [AI Agent Guide](docs/agent/marklab-agent-guide.md)
+
+## Using MarkLab With Codex, Claude Code, Or Cursor
+
+Codex, Claude Code, Cursor, and similar agents should treat the local Markdown file as the write surface. MarkLab is process control and sync infrastructure around that file: agents can ask for status, create a safety snapshot, wait for convergence, inspect conflicts, and manage share links through the CLI.
+
+MarkLab does not offer a cloud-side content mutation API for agents. Agents should not change Yjs state or database rows themselves.
+
+Small edit:
+
+```bash
+marklab status README.md --json
+# agent edits README.md locally
+marklab wait README.md --synced --timeout 10000 --json
+```
+
+Large edit:
+
+```bash
+marklab status README.md --json
+marklab save-version README.md --message "Before AI edit: broad README update" --json
+# agent edits README.md locally
+marklab wait README.md --synced --timeout 10000 --json
+```
+
+Install or inspect agent instructions:
+
+```bash
+marklab agent instructions --target codex
+marklab agent install --target codex --write AGENTS.md
+```
 
 ## Historical Reference
 

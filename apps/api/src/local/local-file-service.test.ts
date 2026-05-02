@@ -7,13 +7,14 @@ import { createLocalFileServiceWithOptions, type LocalFileService } from './loca
 
 const runtime = createHeadlessMilkdownRuntime();
 
-async function createTempMarkdown(markdown: string): Promise<{ directory: string; file: string; metadataPath: string }> {
+async function createTempMarkdown(markdown: string): Promise<{ directory: string; file: string; metadataPath: string; conflictPath: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'marklab-local-file-'));
   const file = join(directory, 'note.md');
   const metadataPath = join(directory, 'metadata', 'marklab-local.json');
+  const conflictPath = join(directory, 'metadata', 'marklab-conflicts.json');
   await mkdir(join(directory, 'metadata'), { recursive: true });
   await writeFile(file, markdown, 'utf8');
-  return { directory, file, metadataPath };
+  return { directory, file, metadataPath, conflictPath };
 }
 
 async function readFixture(name: string): Promise<string> {
@@ -125,6 +126,39 @@ describe('LocalFileService', () => {
     expect(service.getSummary().conflict).toBe('File changed outside MarkLab. Review needed.');
     expect(service.listVersions().some((version) => version.operation === 'conflict_recovery')).toBe(true);
     service.stopWatcher();
+  });
+
+  it('keeps relay reconnect sync paused after recreating the daemon service', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Local offline\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    const shared = await runtime.initializeFromMarkdown('# Shared online\n');
+
+    const conflict = await service.openReconnectConflict({
+      relayRoomId: 'relay_1',
+      sharedRevision: 3,
+      sharedHash: shared.hash,
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      baseMarkdown: null,
+      baseYjsStateBase64: null,
+      baseHash: null,
+    });
+    expect(conflict.status).toBe('open');
+    service.stopWatcher();
+
+    const restarted = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    expect(restarted.getCurrentConflict()).toMatchObject({
+      conflictId: conflict.conflictId,
+      status: 'open',
+      localMarkdown: '# Local offline\n',
+      sharedMarkdown: '# Shared online\n',
+    });
+
+    const loaded = await restarted.loadRoomState(restarted.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    await expect(restarted.storeRoomState(restarted.roomName, loaded.yjsState, loaded.stateFingerprint)).rejects.toThrow(
+      'conflict_required',
+    );
+    restarted.stopWatcher();
   });
 
   it('round-trips supported Markdown through external edit, room state, and disk save', async () => {

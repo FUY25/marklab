@@ -4,13 +4,26 @@ import { canonicalizeMarkdown } from '@marklab/markdown/src/canonicalize';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
-import { createHttpApp, type HttpRequestAuth } from '../http/app';
+import { createHttpApp, type HttpAppOptions, type HttpRequestAuth } from '../http/app';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import type { AppliedLiveMarkdownTransaction, LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createPostgresLiveMarkdownWriter } from '../services/postgres-live-writer';
 import { toRoomName } from '../collab/persistence';
 import { verifyAdminToken, verifyDocumentAccess } from '../services/access-control';
+
+const openAuth: HttpRequestAuth = {
+  requireAdminAccess: async () => undefined,
+  requireDocumentAccess: async () => ({ actorType: 'user' }),
+};
+
+function createDocAiTestApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
+  return createHttpApp(pool, liveWriter, {
+    enableLegacyDocAiRoutes: true,
+    auth: openAuth,
+    ...options,
+  });
+}
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -304,7 +317,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       versionIds: ['ver_002'],
     });
     const flushedRooms: string[] = [];
-    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+    const app = createDocAiTestApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
       async flushCollabDocument(roomName) {
         flushedRooms.push(roomName);
         await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
@@ -331,7 +344,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: stale.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+    const app = createDocAiTestApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
       async flushCollabDocument(roomName) {
         expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
         await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
@@ -359,7 +372,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: stale.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createHttpApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
+    const app = createDocAiTestApp(fakePool.pool, createPostgresLiveMarkdownWriter(fakePool.pool), {
       async flushCollabDocument(roomName) {
         expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
         await updateFakePoolFromMarkdown(fakePool, active.markdown, active.hash, active.yjsState);
@@ -389,7 +402,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: seeded.yjsState,
       versionIds: ['ver_002'],
     });
-    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
 
@@ -411,7 +424,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       appliedTransactionCount: 1,
     });
     const appliedRooms: Array<{ roomName: string; yjsState: Uint8Array }> = [];
-    const app = createHttpApp(pool, liveWriter, {
+    const app = createDocAiTestApp(pool, liveWriter, {
       async applyCollabDocumentState(roomName, yjsState) {
         appliedRooms.push({ roomName, yjsState });
       },
@@ -466,7 +479,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -499,7 +512,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -530,7 +543,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: live.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -554,7 +567,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: live.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createHttpApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -581,7 +594,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -595,7 +608,7 @@ describe('doc AI routes minimal transaction e2e', () => {
 
   it('fails closed without mirror or version writes when the live writer is not configured', async () => {
     const { pool, queries } = createFakePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -614,7 +627,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -631,7 +644,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       currentHash: 'sha256:dirty',
       headHash: 'sha256:head',
     });
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -650,7 +663,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -669,7 +682,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -696,7 +709,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -742,7 +755,7 @@ describe('doc AI routes minimal transaction e2e', () => {
 
   it('rejects read_doc without a document token when auth is required', async () => {
     const { pool } = createFakePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
 
     await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(403, { error: 'forbidden' });
   });
@@ -759,7 +772,7 @@ describe('doc AI routes minimal transaction e2e', () => {
         },
       ],
     });
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
 
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -788,7 +801,7 @@ describe('doc AI routes minimal transaction e2e', () => {
         },
       ],
     });
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
 
     await request(app)
       .get('/api/docs/doc_001/branches/br_main/read')
@@ -842,7 +855,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
 
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -877,7 +890,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createHttpApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, liveWriter, { auth: createRequiredAuth(pool) });
 
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -888,7 +901,7 @@ describe('doc AI routes minimal transaction e2e', () => {
 
   it('requires the admin token for create and import when auth is required', async () => {
     const { pool } = createFakePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createRequiredAuth(pool) });
 
     await request(app).post('/api/docs').send({ title: 'Locked' }).expect(403, { error: 'forbidden' });
     await request(app)

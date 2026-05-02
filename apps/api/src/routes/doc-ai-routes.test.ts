@@ -1,11 +1,24 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { createHttpApp } from '../http/app';
+import { createHttpApp, type HttpAppOptions, type HttpRequestAuth } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import type { LiveMarkdownTransaction, LiveMarkdownWriter } from '../services/live-writer';
+
+const openAuth: HttpRequestAuth = {
+  requireAdminAccess: async () => undefined,
+  requireDocumentAccess: async () => ({ actorType: 'user' }),
+};
+
+function createDocAiTestApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
+  return createHttpApp(pool, liveWriter, {
+    enableLegacyDocAiRoutes: true,
+    auth: openAuth,
+    ...options,
+  });
+}
 
 interface FakePoolOptions {
   currentMarkdown?: string;
@@ -118,7 +131,7 @@ describe('doc AI routes', () => {
       headHash: seeded.hash,
       yjsState: seeded.yjsState,
     });
-    const app = createHttpApp(pool, createEchoLiveWriter());
+    const app = createDocAiTestApp(pool, createEchoLiveWriter());
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
 
@@ -132,7 +145,7 @@ describe('doc AI routes', () => {
 
   it('rejects stale full writes with current version metadata', async () => {
     const { pool } = createFakePool();
-    const app = createHttpApp(pool, createEchoLiveWriter());
+    const app = createDocAiTestApp(pool, createEchoLiveWriter());
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -149,7 +162,7 @@ describe('doc AI routes', () => {
   it('applies accepted full writes through the live writer transaction before persisting a version', async () => {
     const { pool, queries } = createFakePool();
     const liveWriter = createEchoLiveWriter();
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -171,7 +184,7 @@ describe('doc AI routes', () => {
 
   it('returns 503 when the live writer is not configured', async () => {
     const { pool } = createFakePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const app = createDocAiTestApp(pool, createUnavailableLiveMarkdownWriter());
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -190,7 +203,7 @@ describe('doc AI routes', () => {
       headHash: seeded.hash,
       yjsState: seeded.yjsState,
     });
-    const app = createHttpApp(pool, createEchoLiveWriter());
+    const app = createDocAiTestApp(pool, createEchoLiveWriter());
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -210,7 +223,7 @@ describe('doc AI routes', () => {
       yjsState: seeded.yjsState,
     });
     const liveWriter = createEchoLiveWriter();
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -244,7 +257,7 @@ describe('doc AI routes', () => {
       currentVersionId: 'ver_current',
     });
     const liveWriter = createEchoLiveWriter();
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -264,7 +277,7 @@ describe('doc AI routes', () => {
   it('does not expose a public multi-edit route', async () => {
     const { pool } = createFakePool({ currentMarkdown: 'A old\nB old\n' });
     const liveWriter = createEchoLiveWriter();
-    const app = createHttpApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter);
 
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/multi-edit')
