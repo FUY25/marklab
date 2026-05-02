@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { basename, dirname, resolve, sep } from 'node:path';
@@ -296,7 +296,29 @@ async function waitForSessionExit(session) {
   await Promise.all(session.children.map(waitForChildExit));
 }
 
+export function ensurePackagedRuntimeWorkspaceLinks(activeRepoRoot = repoRoot, runtimeRoot = packagedRuntimeRoot) {
+  if (activeRepoRoot !== runtimeRoot) return false;
+  const scopeRoot = resolve(runtimeRoot, 'node_modules/@marklab');
+  mkdirSync(scopeRoot, { recursive: true });
+
+  for (const name of ['shared', 'markdown']) {
+    const linkPath = resolve(scopeRoot, name);
+    const target = `../../packages/${name}`;
+    try {
+      const existing = lstatSync(linkPath);
+      if (existing.isSymbolicLink() && readlinkSync(linkPath) === target) continue;
+      rmSync(linkPath, { recursive: true, force: true });
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+
+  return true;
+}
+
 function spawnPnpm(argsToRun, env, stdio = 'inherit') {
+  ensurePackagedRuntimeWorkspaceLinks();
   return spawn('npx', ['-y', 'pnpm@10.0.0', ...argsToRun], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
