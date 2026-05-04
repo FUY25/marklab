@@ -1,0 +1,10 @@
+{
+  "id": "marklab",
+  "name": "MarkLab",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Share the active Markdown note through MarkLab while keeping the vault file canonical.",
+  "author": "MarkLab",
+  "authorUrl": "https://github.com",
+  "isDesktopOnly": true
+}

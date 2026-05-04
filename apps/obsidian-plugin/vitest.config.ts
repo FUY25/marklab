@@ -4,11 +4,11 @@ import { resolve } from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      obsidian: resolve(import.meta.dirname, 'apps/obsidian-plugin/tests/obsidian-mock.ts'),
+      obsidian: resolve(import.meta.dirname, 'tests/obsidian-mock.ts'),
     },
   },
   test: {
-    include: ['packages/**/*.test.ts', 'apps/**/*.test.ts', 'apps/**/*.test.mjs', 'src/**/*.test.ts'],
+    include: ['tests/**/*.test.ts'],
     environment: 'node',
   },
 });
