@@ -27,7 +27,11 @@ export function resolveActiveMarkdownFilePath(app: Pick<App, 'workspace' | 'vaul
     throw new ActiveNoteError('no_active_file', 'Open a Markdown note before using MarkLab.');
   }
 
-  if (activeFile.extension.toLowerCase() !== 'md') {
+  return resolveMarkdownFilePath(app, activeFile);
+}
+
+export function resolveMarkdownFilePath(app: Pick<App, 'vault'>, file: Pick<TFile, 'path' | 'extension'>): string {
+  if (file.extension.toLowerCase() !== 'md') {
     throw new ActiveNoteError('not_markdown', 'MarkLab can only share Markdown notes.');
   }
 
@@ -36,7 +40,7 @@ export function resolveActiveMarkdownFilePath(app: Pick<App, 'workspace' | 'vaul
     throw new ActiveNoteError('unsupported_vault_adapter', 'This vault adapter cannot provide a desktop file path.');
   }
 
-  return adapter.getFullPath(normalizePath(activeFile.path));
+  return adapter.getFullPath(normalizePath(file.path));
 }
 
 export function humanizeActiveNoteError(error: unknown): string {

@@ -323,8 +323,10 @@ export class MarkLabCliAdapter {
     return this.runJson<MarkLabCreatedLinkResponse>(['create-link', filePath, '--role', role, '--json']);
   }
 
-  async openBackground(filePath: string): Promise<void> {
-    await this.runText(['open', filePath, '--background']);
+  async openBackground(filePath: string, options: { openBrowser?: boolean } = {}): Promise<void> {
+    const args = ['open', filePath, '--background'];
+    if (options.openBrowser === false) args.push('--no-browser');
+    await this.runText(args);
   }
 
   async stop(filePath: string): Promise<void> {

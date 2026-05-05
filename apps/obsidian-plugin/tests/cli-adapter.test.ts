@@ -118,4 +118,17 @@ describe('MarkLabCliAdapter', () => {
     });
     await adapter.status('/tmp/a.md');
   });
+
+  it('can start background hosting without opening a browser tab', async () => {
+    const calls: string[][] = [];
+    const executor: CommandExecutor = vi.fn(async (_command, args) => {
+      calls.push(args);
+      return { exitCode: 0, signal: null, stdout: '', stderr: '' };
+    });
+
+    const adapter = new MarkLabCliAdapter({ command: 'marklab', executor });
+    await adapter.openBackground('/tmp/a.md', { openBrowser: false });
+
+    expect(calls[0]).toEqual(['open', '/tmp/a.md', '--background', '--no-browser']);
+  });
 });

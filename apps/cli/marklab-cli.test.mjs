@@ -159,11 +159,19 @@ describe('marklab CLI', () => {
       command: 'open',
       file: 'README.md',
       background: false,
+      noBrowser: false,
     });
     expect(parseCliArgs(['open', 'README.md', '--background'])).toEqual({
       command: 'open',
       file: 'README.md',
       background: true,
+      noBrowser: false,
+    });
+    expect(parseCliArgs(['open', 'README.md', '--background', '--no-browser'])).toEqual({
+      command: 'open',
+      file: 'README.md',
+      background: true,
+      noBrowser: true,
     });
     expect(parseCliArgs(['status'])).toEqual({ command: 'status', file: null, json: false });
     expect(parseCliArgs(['stop', 'README.md'])).toEqual({

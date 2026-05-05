@@ -6,6 +6,7 @@ The vault Markdown file remains the canonical document. The plugin does not port
 
 ## Commands
 
+- `MarkLab: Open sharing panel`
 - `MarkLab: Check setup`
 - `MarkLab: Share current note`
 - `MarkLab: Create edit link for current note`
@@ -14,6 +15,10 @@ The vault Markdown file remains the canonical document. The plugin does not port
 - `MarkLab: Open current note in MarkLab`
 - `MarkLab: Copy AI handoff instructions`
 - `MarkLab: Stop sharing current note`
+
+The left ribbon MarkLab icon opens the sharing panel. The panel can create edit or view links for any selected Markdown note in the vault, selected Markdown notes, or all Markdown notes in the vault.
+
+Multi-page and whole-vault sharing currently create a link set: one MarkLab relay link per Markdown file. Attachments and non-Markdown files are excluded. A later MarkLab collection-link feature can replace the link set with a single share URL once the CLI, relay, and browser UI support true multi-file collections.
 
 ## Requirements
 
@@ -37,7 +42,7 @@ The local browser editor URL can contain a local daemon token. The plugin does n
 - No self-update mechanism is included.
 - No code is obfuscated to hide its purpose.
 - No vault content is uploaded or shared without an explicit command.
-- Starting persistent background hosting requires confirmation.
+- Starting persistent background hosting requires confirmation. Multi-page and whole-vault sharing ask once before creating the batch of relay links.
 
 The MVP does not require a MarkLab account and does not require payment. If hosted relay accounts, paid capacity, or server-side telemetry are introduced later, this README must be updated before release.
 

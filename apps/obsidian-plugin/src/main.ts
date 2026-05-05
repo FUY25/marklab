@@ -1,6 +1,6 @@
 import { Modal, Notice, Plugin } from 'obsidian';
-import type { App } from 'obsidian';
-import { resolveActiveMarkdownFilePath, humanizeActiveNoteError } from './active-note';
+import type { App, TFile } from 'obsidian';
+import { resolveActiveMarkdownFilePath, resolveMarkdownFilePath, humanizeActiveNoteError } from './active-note';
 import {
   MarkLabCliAdapter,
   humanizeCliError,
@@ -12,6 +12,31 @@ import {
 import { buildAiHandoffInstructions } from './handoff';
 import { DEFAULT_SETTINGS, MarkLabSettingTab, normalizeSettings, type MarkLabPluginSettings } from './settings';
 import { sharingBlockReason } from './share-guard';
+import {
+  MarkLabSharingModal,
+  type MarkLabBatchShareScope,
+  type MarkLabShareableMarkdownFile,
+} from './sharing-modal';
+
+interface MarkLabLinkSetEntry {
+  label: string;
+  filePath: string;
+  role: MarkLabLinkRole;
+  url: string;
+}
+
+interface MarkLabLinkSetFailure {
+  label: string;
+  filePath: string;
+  message: string;
+}
+
+interface MarkLabLinkSetResult {
+  scope: MarkLabBatchShareScope;
+  role: MarkLabLinkRole;
+  links: MarkLabLinkSetEntry[];
+  failures: MarkLabLinkSetFailure[];
+}
 
 class TextModal extends Modal {
   constructor(
@@ -127,6 +152,19 @@ export default class MarkLabPlugin extends Plugin {
     this.rebuildCliAdapter();
     this.addSettingTab(new MarkLabSettingTab(this.app, this));
 
+    const ribbonIcon = this.addRibbonIcon('share-2', 'MarkLab sharing', () => {
+      this.openSharingPanel();
+    });
+    ribbonIcon.addClass('marklab-ribbon-sharing');
+
+    this.addCommand({
+      id: 'open-sharing-panel',
+      name: 'Open sharing panel',
+      callback: () => {
+        this.openSharingPanel();
+      },
+    });
+
     this.addCommand({
       id: 'check-setup',
       name: 'Check setup',
@@ -239,7 +277,42 @@ export default class MarkLabPlugin extends Plugin {
     }
   }
 
-  private async ensureHosted(filePath: string): Promise<boolean> {
+  private openSharingPanel(): void {
+    const markdownFiles = this.markdownFileChoices();
+    if (markdownFiles.length === 0) {
+      new Notice('No Markdown pages are available to share with MarkLab.');
+      return;
+    }
+
+    new MarkLabSharingModal(this.app, {
+      defaultRole: this.settings.defaultLinkRole,
+      markdownFiles,
+      createSinglePageLink: (filePath, role) => this.createLinkForFile(filePath, role),
+      createLinkSet: (files, role, scope) => this.createLinksForFiles(files, role, scope),
+    }).open();
+  }
+
+  private markdownFileChoices(): MarkLabShareableMarkdownFile[] {
+    const activeFile = this.app.workspace.getActiveFile() as TFile | null;
+    return this.app.vault
+      .getMarkdownFiles()
+      .map((file) => ({
+        label: file.path,
+        filePath: resolveMarkdownFilePath(this.app, file),
+        isActive: file.path === activeFile?.path,
+      }))
+      .sort((a, b) => {
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+        return a.label.localeCompare(b.label);
+      });
+  }
+
+  private async ensureHosted(
+    filePath: string,
+    options: { confirmBeforeHosting?: boolean; openBrowser?: boolean } = {},
+  ): Promise<boolean> {
+    const confirmBeforeHosting = options.confirmBeforeHosting ?? true;
+    const openBrowser = options.openBrowser ?? true;
     const status = await this.cli.status(filePath);
     const entry = status.files[0];
     if (entry?.daemon === 'running') {
@@ -256,15 +329,17 @@ export default class MarkLabPlugin extends Plugin {
       return false;
     }
 
-    const confirmed = await confirmAction(
-      this.app,
-      'Start MarkLab hosting?',
-      'MarkLab will start a persistent local background daemon for this note so relay links can work while the daemon remains online.',
-      'Start hosting',
-    );
-    if (!confirmed) return false;
+    if (confirmBeforeHosting) {
+      const confirmed = await confirmAction(
+        this.app,
+        'Start MarkLab hosting?',
+        'MarkLab will start a persistent local background daemon for this note so relay links can work while the daemon remains online.',
+        'Start hosting',
+      );
+      if (!confirmed) return false;
+    }
 
-    await this.cli.openBackground(filePath);
+    await this.cli.openBackground(filePath, { openBrowser });
     return true;
   }
 
@@ -272,18 +347,104 @@ export default class MarkLabPlugin extends Plugin {
     await this.createLinkForCurrentNote(this.settings.defaultLinkRole);
   }
 
-  private async createLinkForCurrentNote(role: MarkLabLinkRole): Promise<void> {
+  private async createLinkForCurrentNote(role: MarkLabLinkRole): Promise<boolean> {
     const filePath = this.activeMarkdownPath();
-    if (!filePath) return;
-    if (!(await this.checkSetup())) return;
+    if (!filePath) return false;
+    return this.createLinkForFile(filePath, role);
+  }
+
+  private async createLinkForFile(filePath: string, role: MarkLabLinkRole): Promise<boolean> {
+    if (!(await this.checkSetup())) return false;
 
     try {
-      if (!(await this.ensureHosted(filePath))) return;
+      if (!(await this.ensureHosted(filePath))) return false;
       const link = await this.cli.createLink(filePath, role);
       await this.presentCreatedLink(link);
+      return true;
     } catch (error) {
       new Notice(humanizeCliError(error));
+      return false;
     }
+  }
+
+  private async createLinksForFiles(
+    files: MarkLabShareableMarkdownFile[],
+    role: MarkLabLinkRole,
+    scope: MarkLabBatchShareScope,
+  ): Promise<boolean> {
+    if (files.length === 0) {
+      new Notice('Choose at least one Markdown page before creating MarkLab links.');
+      return false;
+    }
+
+    const confirmed = await this.confirmBatchSharing(files.length, role, scope);
+    if (!confirmed) return false;
+    if (!(await this.checkSetup())) return false;
+
+    const result: MarkLabLinkSetResult = {
+      scope,
+      role,
+      links: [],
+      failures: [],
+    };
+
+    for (const file of files) {
+      try {
+        const hosted = await this.ensureHosted(file.filePath, {
+          confirmBeforeHosting: false,
+          openBrowser: false,
+        });
+        if (!hosted) {
+          result.failures.push({
+            label: file.label,
+            filePath: file.filePath,
+            message: 'MarkLab could not start or verify background hosting for this page.',
+          });
+          continue;
+        }
+
+        const link = await this.cli.createLink(file.filePath, role);
+        if (isLocalDaemonUrl(link.url)) {
+          result.failures.push({
+            label: file.label,
+            filePath: file.filePath,
+            message: 'MarkLab returned a local daemon URL, not a relay link.',
+          });
+          continue;
+        }
+
+        result.links.push({
+          label: file.label,
+          filePath: file.filePath,
+          role: link.role,
+          url: link.url,
+        });
+      } catch (error) {
+        result.failures.push({
+          label: file.label,
+          filePath: file.filePath,
+          message: humanizeCliError(error),
+        });
+      }
+    }
+
+    await this.presentCreatedLinkSet(result);
+    return result.links.length > 0;
+  }
+
+  private confirmBatchSharing(fileCount: number, role: MarkLabLinkRole, scope: MarkLabBatchShareScope): Promise<boolean> {
+    const title = scope === 'vault' ? 'Share vault Markdown?' : 'Create MarkLab link set?';
+    const pageLabel = `${fileCount} Markdown page${fileCount === 1 ? '' : 's'}`;
+    const scopeCopy =
+      scope === 'vault'
+        ? `MarkLab will create one ${role} relay link for each of the ${pageLabel} in this vault. Attachments and non-Markdown files are excluded.`
+        : `MarkLab will create one ${role} relay link for each of the ${pageLabel} you selected.`;
+    return confirmAction(
+      this.app,
+      title,
+      `${scopeCopy} This may start local background hosting for each page, but it will not open a browser tab for every file.`,
+      'Create links',
+    );
   }
 
   private async presentCreatedLink(link: MarkLabCreatedLinkResponse): Promise<void> {
@@ -299,6 +460,54 @@ export default class MarkLabPlugin extends Plugin {
     }
 
     new TextModal(this.app, `MarkLab ${link.role} link`, ['Copy this relay link and send it to your collaborator.'], link.url).open();
+  }
+
+  private async presentCreatedLinkSet(result: MarkLabLinkSetResult): Promise<void> {
+    const scopeLabel = result.scope === 'vault' ? 'vault Markdown' : 'multiple pages';
+    const title = result.links.length > 0 ? `MarkLab ${result.role} link set` : 'MarkLab link set failed';
+    const summary = `Created ${result.links.length} link${result.links.length === 1 ? '' : 's'} for ${scopeLabel}.`;
+    const failureSummary =
+      result.failures.length > 0 ? `${result.failures.length} page${result.failures.length === 1 ? '' : 's'} could not be shared.` : '';
+    const text = this.formatLinkSet(result, scopeLabel);
+
+    if (result.links.length > 0 && result.failures.length === 0 && this.settings.copyCreatedLinksAutomatically) {
+      const copied = await copyToClipboard(text);
+      if (copied) {
+        new Notice(`Copied MarkLab ${result.role} link set for ${result.links.length} page${result.links.length === 1 ? '' : 's'}.`);
+        return;
+      }
+    }
+
+    const paragraphs = failureSummary
+      ? [summary, failureSummary, 'Copy the links that were created successfully, and review any failed pages below.']
+      : [summary, 'Copy these relay links and send them to your collaborator.'];
+    new TextModal(this.app, title, paragraphs, text).open();
+  }
+
+  private formatLinkSet(result: MarkLabLinkSetResult, scopeLabel: string): string {
+    const lines = [
+      `MarkLab ${result.role} link set (${scopeLabel})`,
+      `Created: ${result.links.length}`,
+      `Failed: ${result.failures.length}`,
+      '',
+    ];
+
+    if (result.links.length > 0) {
+      lines.push('Links:');
+      for (const link of result.links) {
+        lines.push(`- ${link.label}: ${link.url}`);
+      }
+      lines.push('');
+    }
+
+    if (result.failures.length > 0) {
+      lines.push('Failures:');
+      for (const failure of result.failures) {
+        lines.push(`- ${failure.label}: ${failure.message}`);
+      }
+    }
+
+    return lines.join('\n').trimEnd();
   }
 
   private async showCurrentNoteStatus(): Promise<void> {

@@ -23,7 +23,7 @@ __export(main_exports, {
   default: () => MarkLabPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/active-note.ts
 var import_obsidian = require("obsidian");
@@ -43,14 +43,17 @@ function resolveActiveMarkdownFilePath(app) {
   if (!activeFile) {
     throw new ActiveNoteError("no_active_file", "Open a Markdown note before using MarkLab.");
   }
-  if (activeFile.extension.toLowerCase() !== "md") {
+  return resolveMarkdownFilePath(app, activeFile);
+}
+function resolveMarkdownFilePath(app, file) {
+  if (file.extension.toLowerCase() !== "md") {
     throw new ActiveNoteError("not_markdown", "MarkLab can only share Markdown notes.");
   }
   const adapter = app.vault.adapter;
   if (!hasFullPath(adapter)) {
     throw new ActiveNoteError("unsupported_vault_adapter", "This vault adapter cannot provide a desktop file path.");
   }
-  return adapter.getFullPath((0, import_obsidian.normalizePath)(activeFile.path));
+  return adapter.getFullPath((0, import_obsidian.normalizePath)(file.path));
 }
 function humanizeActiveNoteError(error) {
   if (error instanceof ActiveNoteError) return error.message;
@@ -248,8 +251,10 @@ var MarkLabCliAdapter = class {
   createLink(filePath, role) {
     return this.runJson(["create-link", filePath, "--role", role, "--json"]);
   }
-  async openBackground(filePath) {
-    await this.runText(["open", filePath, "--background"]);
+  async openBackground(filePath, options = {}) {
+    const args = ["open", filePath, "--background"];
+    if (options.openBrowser === false) args.push("--no-browser");
+    await this.runText(args);
   }
   async stop(filePath) {
     await this.runText(["stop", filePath]);
@@ -482,8 +487,215 @@ function sharingBlockReason(entry) {
   }
 }
 
+// src/sharing-modal.ts
+var import_obsidian3 = require("obsidian");
+function normalizeShareScope(value) {
+  if (value === "multiple" || value === "vault") return value;
+  return "single";
+}
+var MarkLabSharingModal = class extends import_obsidian3.Modal {
+  constructor(app, options) {
+    super(app);
+    this.options = options;
+    this.role = options.defaultRole;
+    this.selectedFilePath = options.markdownFiles.find((file) => file.isActive)?.filePath ?? options.markdownFiles[0]?.filePath ?? "";
+    const defaultMultipleSelection = options.markdownFiles.filter((file) => file.isActive).map((file) => file.filePath);
+    for (const filePath of defaultMultipleSelection.length > 0 ? defaultMultipleSelection : [this.selectedFilePath]) {
+      if (filePath) this.selectedMultipleFilePaths.add(filePath);
+    }
+  }
+  options;
+  shareScope = "single";
+  role;
+  selectedFilePath;
+  selectedMultipleFilePaths = /* @__PURE__ */ new Set();
+  onOpen() {
+    this.render();
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "MarkLab sharing" });
+    contentEl.createEl("p", {
+      text: "Create MarkLab relay links for Markdown files in this vault."
+    });
+    new import_obsidian3.Setting(contentEl).setName("Scope").setDesc("Single-page, multiple-page, and vault Markdown sharing are available as explicit scopes.").addDropdown((dropdown) => {
+      dropdown.addOption("single", "Single Markdown page").addOption("multiple", "Multiple Markdown pages").addOption("vault", "Entire vault Markdown").setValue(this.shareScope).onChange((value) => {
+        this.shareScope = normalizeShareScope(value);
+        this.render();
+      });
+    });
+    if (this.shareScope === "single") {
+      this.renderSinglePage();
+      return;
+    }
+    if (this.shareScope === "multiple") {
+      this.renderMultiplePages();
+      return;
+    }
+    this.renderVault();
+  }
+  renderSinglePage() {
+    const { contentEl } = this;
+    const selectedFile = this.options.markdownFiles.find((file) => file.filePath === this.selectedFilePath);
+    contentEl.createEl("h3", { text: "Single Markdown page" });
+    contentEl.createEl("p", {
+      text: selectedFile?.isActive ? `Active note: ${selectedFile.label}` : "Choose the Markdown page to share. The vault file remains the canonical source."
+    });
+    new import_obsidian3.Setting(contentEl).setName("Markdown page").setDesc("Pick one Markdown file from this vault.").addDropdown((dropdown) => {
+      for (const file of this.options.markdownFiles) {
+        dropdown.addOption(file.filePath, file.isActive ? `${file.label} (active)` : file.label);
+      }
+      dropdown.setValue(this.selectedFilePath).onChange((value) => {
+        this.selectedFilePath = value;
+        this.render();
+      });
+    });
+    new import_obsidian3.Setting(contentEl).setName("Link role").setDesc("Edit links allow collaborators to write. View links are read-only.").addDropdown((dropdown) => {
+      dropdown.addOption("view", "View").addOption("edit", "Edit").setValue(this.role).onChange((value) => {
+        this.role = value === "edit" ? "edit" : "view";
+        this.render();
+      });
+    });
+    const actions = contentEl.createDiv({ cls: "modal-button-container" });
+    const createButton = actions.createEl("button", { text: `Create ${this.role} link` });
+    createButton.addClass("mod-cta");
+    createButton.addEventListener("click", () => {
+      void this.createLink(createButton);
+    });
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  renderMultiplePages() {
+    const { contentEl } = this;
+    const selectedFiles = this.selectedMultipleFiles();
+    contentEl.createEl("h3", { text: "Multiple Markdown pages" });
+    contentEl.createEl("p", {
+      text: "Create a shareable link set with one MarkLab relay link per selected Markdown page."
+    });
+    new import_obsidian3.Setting(contentEl).setName("Link role").setDesc("The same role is used for every selected page.").addDropdown((dropdown) => {
+      dropdown.addOption("view", "View").addOption("edit", "Edit").setValue(this.role).onChange((value) => {
+        this.role = value === "edit" ? "edit" : "view";
+        this.render();
+      });
+    });
+    const selectionControls = contentEl.createDiv({ cls: "marklab-share-selection-controls" });
+    const selectAllButton = selectionControls.createEl("button", { text: "Select all" });
+    selectAllButton.addEventListener("click", () => {
+      this.selectedMultipleFilePaths.clear();
+      for (const file of this.options.markdownFiles) this.selectedMultipleFilePaths.add(file.filePath);
+      this.render();
+    });
+    const clearButton = selectionControls.createEl("button", { text: "Clear" });
+    clearButton.addEventListener("click", () => {
+      this.selectedMultipleFilePaths.clear();
+      this.render();
+    });
+    const list = contentEl.createDiv({ cls: "marklab-share-file-list" });
+    for (const file of this.options.markdownFiles) {
+      const row = list.createEl("label");
+      row.addClass("marklab-share-file-option");
+      const checkbox = row.createEl("input", { attr: { type: "checkbox" } });
+      checkbox.checked = this.selectedMultipleFilePaths.has(file.filePath);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          this.selectedMultipleFilePaths.add(file.filePath);
+        } else {
+          this.selectedMultipleFilePaths.delete(file.filePath);
+        }
+        this.render();
+      });
+      row.createEl("span", { text: file.isActive ? `${file.label} (active)` : file.label });
+    }
+    const actions = contentEl.createDiv({ cls: "modal-button-container" });
+    const createButton = actions.createEl("button", { text: `Create ${this.role} links (${selectedFiles.length})` });
+    createButton.addClass("mod-cta");
+    createButton.disabled = selectedFiles.length === 0;
+    createButton.addEventListener("click", () => {
+      void this.createLinkSet(createButton, selectedFiles, "multiple");
+    });
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  renderVault() {
+    const { contentEl } = this;
+    const files = this.options.markdownFiles;
+    contentEl.createEl("h3", { text: "Entire vault Markdown" });
+    contentEl.createEl("p", {
+      text: `Create a shareable link set for all ${files.length} Markdown page${files.length === 1 ? "" : "s"} in this vault. Attachments and non-Markdown files are excluded.`
+    });
+    contentEl.createEl("p", {
+      text: "You will be asked to confirm before MarkLab starts background hosting or creates relay links for the vault."
+    });
+    new import_obsidian3.Setting(contentEl).setName("Link role").setDesc("The same role is used for every Markdown page in the vault.").addDropdown((dropdown) => {
+      dropdown.addOption("view", "View").addOption("edit", "Edit").setValue(this.role).onChange((value) => {
+        this.role = value === "edit" ? "edit" : "view";
+        this.render();
+      });
+    });
+    const actions = contentEl.createDiv({ cls: "modal-button-container" });
+    const createButton = actions.createEl("button", { text: `Create ${this.role} links (${files.length})` });
+    createButton.addClass("mod-cta");
+    createButton.disabled = files.length === 0;
+    createButton.addEventListener("click", () => {
+      void this.createLinkSet(createButton, files, "vault");
+    });
+    const closeButton = actions.createEl("button", { text: "Close" });
+    closeButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  async createLink(createButton) {
+    if (!this.selectedFilePath) {
+      new import_obsidian3.Notice("Choose a Markdown page before creating a MarkLab link.");
+      return;
+    }
+    const previousText = createButton.textContent ?? `Create ${this.role} link`;
+    createButton.disabled = true;
+    createButton.textContent = "Creating link...";
+    try {
+      const created = await this.options.createSinglePageLink(this.selectedFilePath, this.role);
+      if (created) {
+        this.close();
+        return;
+      }
+    } catch (error) {
+      new import_obsidian3.Notice(error instanceof Error ? error.message : String(error));
+    }
+    createButton.disabled = false;
+    createButton.textContent = previousText;
+  }
+  selectedMultipleFiles() {
+    return this.options.markdownFiles.filter((file) => this.selectedMultipleFilePaths.has(file.filePath));
+  }
+  async createLinkSet(createButton, files, scope) {
+    if (files.length === 0) {
+      new import_obsidian3.Notice("Choose at least one Markdown page before creating MarkLab links.");
+      return;
+    }
+    const previousText = createButton.textContent ?? `Create ${this.role} links`;
+    createButton.disabled = true;
+    createButton.textContent = "Creating links...";
+    try {
+      const created = await this.options.createLinkSet(files, this.role, scope);
+      if (created) {
+        this.close();
+        return;
+      }
+    } catch (error) {
+      new import_obsidian3.Notice(error instanceof Error ? error.message : String(error));
+    }
+    createButton.disabled = false;
+    createButton.textContent = previousText;
+  }
+};
+
 // src/main.ts
-var TextModal = class extends import_obsidian3.Modal {
+var TextModal = class extends import_obsidian4.Modal {
   constructor(app, title, paragraphs, selectableText) {
     super(app);
     this.title = title;
@@ -510,7 +722,7 @@ var TextModal = class extends import_obsidian3.Modal {
     }
   }
 };
-var ConfirmModal = class extends import_obsidian3.Modal {
+var ConfirmModal = class extends import_obsidian4.Modal {
   constructor(app, title, message, confirmText, onResolve) {
     super(app);
     this.title = title;
@@ -580,13 +792,24 @@ function statusLabel(entry, shareState) {
   if (entry.daemon === "running") return "Open locally and synced";
   return entry.syncState;
 }
-var MarkLabPlugin = class extends import_obsidian3.Plugin {
+var MarkLabPlugin = class extends import_obsidian4.Plugin {
   settings = DEFAULT_SETTINGS;
   cli = new MarkLabCliAdapter({ command: DEFAULT_SETTINGS.cliCommand });
   async onload() {
     this.settings = normalizeSettings(await this.loadData());
     this.rebuildCliAdapter();
     this.addSettingTab(new MarkLabSettingTab(this.app, this));
+    const ribbonIcon = this.addRibbonIcon("share-2", "MarkLab sharing", () => {
+      this.openSharingPanel();
+    });
+    ribbonIcon.addClass("marklab-ribbon-sharing");
+    this.addCommand({
+      id: "open-sharing-panel",
+      name: "Open sharing panel",
+      callback: () => {
+        this.openSharingPanel();
+      }
+    });
     this.addCommand({
       id: "check-setup",
       name: "Check setup",
@@ -666,7 +889,7 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
       return false;
     }
     if (setup.available) {
-      if (showSuccessNotice) new import_obsidian3.Notice("MarkLab CLI is available.");
+      if (showSuccessNotice) new import_obsidian4.Notice("MarkLab CLI is available.");
       return true;
     }
     new TextModal(this.app, "MarkLab setup", [
@@ -681,33 +904,61 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
     try {
       return resolveActiveMarkdownFilePath(this.app);
     } catch (error) {
-      new import_obsidian3.Notice(humanizeActiveNoteError(error));
+      new import_obsidian4.Notice(humanizeActiveNoteError(error));
       return null;
     }
   }
-  async ensureHosted(filePath) {
+  openSharingPanel() {
+    const markdownFiles = this.markdownFileChoices();
+    if (markdownFiles.length === 0) {
+      new import_obsidian4.Notice("No Markdown pages are available to share with MarkLab.");
+      return;
+    }
+    new MarkLabSharingModal(this.app, {
+      defaultRole: this.settings.defaultLinkRole,
+      markdownFiles,
+      createSinglePageLink: (filePath, role) => this.createLinkForFile(filePath, role),
+      createLinkSet: (files, role, scope) => this.createLinksForFiles(files, role, scope)
+    }).open();
+  }
+  markdownFileChoices() {
+    const activeFile = this.app.workspace.getActiveFile();
+    return this.app.vault.getMarkdownFiles().map((file) => ({
+      label: file.path,
+      filePath: resolveMarkdownFilePath(this.app, file),
+      isActive: file.path === activeFile?.path
+    })).sort((a, b) => {
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+  }
+  async ensureHosted(filePath, options = {}) {
+    const confirmBeforeHosting = options.confirmBeforeHosting ?? true;
+    const openBrowser = options.openBrowser ?? true;
     const status = await this.cli.status(filePath);
     const entry = status.files[0];
     if (entry?.daemon === "running") {
       const blockReason = sharingBlockReason(entry);
       if (blockReason) {
-        new import_obsidian3.Notice(blockReason);
+        new import_obsidian4.Notice(blockReason);
         return false;
       }
       return true;
     }
     if (this.settings.backgroundHostingPreference === "never") {
-      new import_obsidian3.Notice("This note is not hosted by MarkLab. Background hosting is disabled in settings.");
+      new import_obsidian4.Notice("This note is not hosted by MarkLab. Background hosting is disabled in settings.");
       return false;
     }
-    const confirmed = await confirmAction(
-      this.app,
-      "Start MarkLab hosting?",
-      "MarkLab will start a persistent local background daemon for this note so relay links can work while the daemon remains online.",
-      "Start hosting"
-    );
-    if (!confirmed) return false;
-    await this.cli.openBackground(filePath);
+    if (confirmBeforeHosting) {
+      const confirmed = await confirmAction(
+        this.app,
+        "Start MarkLab hosting?",
+        "MarkLab will start a persistent local background daemon for this note so relay links can work while the daemon remains online.",
+        "Start hosting"
+      );
+      if (!confirmed) return false;
+    }
+    await this.cli.openBackground(filePath, { openBrowser });
     return true;
   }
   async shareCurrentNote() {
@@ -715,27 +966,135 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
   }
   async createLinkForCurrentNote(role) {
     const filePath = this.activeMarkdownPath();
-    if (!filePath) return;
-    if (!await this.checkSetup()) return;
+    if (!filePath) return false;
+    return this.createLinkForFile(filePath, role);
+  }
+  async createLinkForFile(filePath, role) {
+    if (!await this.checkSetup()) return false;
     try {
-      if (!await this.ensureHosted(filePath)) return;
+      if (!await this.ensureHosted(filePath)) return false;
       const link = await this.cli.createLink(filePath, role);
       await this.presentCreatedLink(link);
+      return true;
     } catch (error) {
-      new import_obsidian3.Notice(humanizeCliError(error));
+      new import_obsidian4.Notice(humanizeCliError(error));
+      return false;
     }
+  }
+  async createLinksForFiles(files, role, scope) {
+    if (files.length === 0) {
+      new import_obsidian4.Notice("Choose at least one Markdown page before creating MarkLab links.");
+      return false;
+    }
+    const confirmed = await this.confirmBatchSharing(files.length, role, scope);
+    if (!confirmed) return false;
+    if (!await this.checkSetup()) return false;
+    const result = {
+      scope,
+      role,
+      links: [],
+      failures: []
+    };
+    for (const file of files) {
+      try {
+        const hosted = await this.ensureHosted(file.filePath, {
+          confirmBeforeHosting: false,
+          openBrowser: false
+        });
+        if (!hosted) {
+          result.failures.push({
+            label: file.label,
+            filePath: file.filePath,
+            message: "MarkLab could not start or verify background hosting for this page."
+          });
+          continue;
+        }
+        const link = await this.cli.createLink(file.filePath, role);
+        if (isLocalDaemonUrl(link.url)) {
+          result.failures.push({
+            label: file.label,
+            filePath: file.filePath,
+            message: "MarkLab returned a local daemon URL, not a relay link."
+          });
+          continue;
+        }
+        result.links.push({
+          label: file.label,
+          filePath: file.filePath,
+          role: link.role,
+          url: link.url
+        });
+      } catch (error) {
+        result.failures.push({
+          label: file.label,
+          filePath: file.filePath,
+          message: humanizeCliError(error)
+        });
+      }
+    }
+    await this.presentCreatedLinkSet(result);
+    return result.links.length > 0;
+  }
+  confirmBatchSharing(fileCount, role, scope) {
+    const title = scope === "vault" ? "Share vault Markdown?" : "Create MarkLab link set?";
+    const pageLabel = `${fileCount} Markdown page${fileCount === 1 ? "" : "s"}`;
+    const scopeCopy = scope === "vault" ? `MarkLab will create one ${role} relay link for each of the ${pageLabel} in this vault. Attachments and non-Markdown files are excluded.` : `MarkLab will create one ${role} relay link for each of the ${pageLabel} you selected.`;
+    return confirmAction(
+      this.app,
+      title,
+      `${scopeCopy} This may start local background hosting for each page, but it will not open a browser tab for every file.`,
+      "Create links"
+    );
   }
   async presentCreatedLink(link) {
     if (isLocalDaemonUrl(link.url)) {
-      new import_obsidian3.Notice("MarkLab returned a local daemon URL, so it was not copied as a share link.");
+      new import_obsidian4.Notice("MarkLab returned a local daemon URL, so it was not copied as a share link.");
       return;
     }
     const copied = this.settings.copyCreatedLinksAutomatically ? await copyToClipboard(link.url) : false;
     if (copied) {
-      new import_obsidian3.Notice(`Copied MarkLab ${link.role} link.`);
+      new import_obsidian4.Notice(`Copied MarkLab ${link.role} link.`);
       return;
     }
     new TextModal(this.app, `MarkLab ${link.role} link`, ["Copy this relay link and send it to your collaborator."], link.url).open();
+  }
+  async presentCreatedLinkSet(result) {
+    const scopeLabel = result.scope === "vault" ? "vault Markdown" : "multiple pages";
+    const title = result.links.length > 0 ? `MarkLab ${result.role} link set` : "MarkLab link set failed";
+    const summary = `Created ${result.links.length} link${result.links.length === 1 ? "" : "s"} for ${scopeLabel}.`;
+    const failureSummary = result.failures.length > 0 ? `${result.failures.length} page${result.failures.length === 1 ? "" : "s"} could not be shared.` : "";
+    const text = this.formatLinkSet(result, scopeLabel);
+    if (result.links.length > 0 && result.failures.length === 0 && this.settings.copyCreatedLinksAutomatically) {
+      const copied = await copyToClipboard(text);
+      if (copied) {
+        new import_obsidian4.Notice(`Copied MarkLab ${result.role} link set for ${result.links.length} page${result.links.length === 1 ? "" : "s"}.`);
+        return;
+      }
+    }
+    const paragraphs = failureSummary ? [summary, failureSummary, "Copy the links that were created successfully, and review any failed pages below."] : [summary, "Copy these relay links and send them to your collaborator."];
+    new TextModal(this.app, title, paragraphs, text).open();
+  }
+  formatLinkSet(result, scopeLabel) {
+    const lines = [
+      `MarkLab ${result.role} link set (${scopeLabel})`,
+      `Created: ${result.links.length}`,
+      `Failed: ${result.failures.length}`,
+      ""
+    ];
+    if (result.links.length > 0) {
+      lines.push("Links:");
+      for (const link of result.links) {
+        lines.push(`- ${link.label}: ${link.url}`);
+      }
+      lines.push("");
+    }
+    if (result.failures.length > 0) {
+      lines.push("Failures:");
+      for (const failure of result.failures) {
+        lines.push(`- ${failure.label}: ${failure.message}`);
+      }
+    }
+    return lines.join("\n").trimEnd();
   }
   async showCurrentNoteStatus() {
     const filePath = this.activeMarkdownPath();
@@ -762,7 +1121,7 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
       ];
       new TextModal(this.app, "MarkLab status", paragraphs).open();
     } catch (error) {
-      new import_obsidian3.Notice(humanizeCliError(error));
+      new import_obsidian4.Notice(humanizeCliError(error));
     }
   }
   async openCurrentNote() {
@@ -782,9 +1141,9 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
         if (!confirmed) return;
       }
       await this.cli.openBackground(filePath);
-      new import_obsidian3.Notice("Opened current note in MarkLab.");
+      new import_obsidian4.Notice("Opened current note in MarkLab.");
     } catch (error) {
-      new import_obsidian3.Notice(humanizeCliError(error));
+      new import_obsidian4.Notice(humanizeCliError(error));
     }
   }
   async copyAiHandoffInstructions() {
@@ -796,7 +1155,7 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
     });
     const copied = await copyToClipboard(instructions);
     if (copied) {
-      new import_obsidian3.Notice("Copied MarkLab AI handoff instructions.");
+      new import_obsidian4.Notice("Copied MarkLab AI handoff instructions.");
       return;
     }
     new TextModal(this.app, "MarkLab AI handoff instructions", ["Copy these instructions into your local AI agent."], instructions).open();
@@ -814,9 +1173,9 @@ var MarkLabPlugin = class extends import_obsidian3.Plugin {
     if (!confirmed) return;
     try {
       await this.cli.stop(filePath);
-      new import_obsidian3.Notice("Stopped MarkLab sharing for this note.");
+      new import_obsidian4.Notice("Stopped MarkLab sharing for this note.");
     } catch (error) {
-      new import_obsidian3.Notice(humanizeCliError(error));
+      new import_obsidian4.Notice(humanizeCliError(error));
     }
   }
 };

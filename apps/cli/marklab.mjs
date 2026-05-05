@@ -76,9 +76,9 @@ export function printCommandUsage(command) {
   if (command === 'open') {
     console.log(`Usage:
   marklab open <file.md>
-  marklab open <file.md> --background
+  marklab open <file.md> --background [--no-browser]
 
-Open a local Markdown file in MarkLab. Foreground mode keeps the daemon attached to this terminal; background mode keeps it running until marklab stop.`);
+Open a local Markdown file in MarkLab. Foreground mode keeps the daemon attached to this terminal; background mode keeps it running until marklab stop. Use --no-browser for background automation that should not open a local editor tab.`);
     return;
   }
   if (command === 'share') {
@@ -132,6 +132,7 @@ export function parseCliArgs(argv) {
       command,
       file,
       background: rest.includes('--background'),
+      noBrowser: rest.includes('--no-browser'),
     };
   }
 
@@ -646,14 +647,14 @@ async function shareJsonCommand(file) {
   }));
 }
 
-async function openBackground(file) {
+async function openBackground(file, options = {}) {
   const markdownPath = await resolveMarkdownFile(file);
   const { daemon, reused } = await startBackgroundDaemon(markdownPath);
   if (reused) {
     console.log(`MarkLab is already watching ${markdownPath}`);
     console.log(`Browser URL: ${daemon.localUrl}`);
     console.log(`Stop with: marklab stop ${markdownPath}`);
-    openBrowser(daemon.localUrl);
+    if (options.openBrowser !== false) openBrowser(daemon.localUrl);
     return;
   }
 
@@ -661,7 +662,7 @@ async function openBackground(file) {
   console.log(`Browser URL: ${daemon.localUrl}`);
   console.log('Sync is running in the background.');
   console.log(`Stop with: marklab stop ${markdownPath}`);
-  openBrowser(daemon.localUrl);
+  if (options.openBrowser !== false) openBrowser(daemon.localUrl);
 }
 
 async function startBackgroundDaemon(markdownPath, options = {}) {
@@ -1159,7 +1160,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (input.command === 'open' && input.file) {
-    if (input.background) await openBackground(input.file);
+    if (input.background) await openBackground(input.file, { openBrowser: !input.noBrowser });
     else await openForeground(input.file);
     return;
   }

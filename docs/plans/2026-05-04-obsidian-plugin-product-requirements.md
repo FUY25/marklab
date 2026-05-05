@@ -107,6 +107,26 @@ Acceptance criteria:
 
 The plugin may expose these through the command palette first. Ribbon icons and context-menu entries can follow once the command behavior is stable.
 
+## Roadmap Requirements
+
+### Left sidebar sharing surface
+
+The plugin should appear in Obsidian's left sidebar or ribbon as a first-class MarkLab entry point. Clicking it should open a MarkLab sharing panel that lets the user choose what to share before generating a link:
+
+- A single specific Markdown page, defaulting to the active note but allowing file selection.
+- Multiple specific Markdown pages selected from the vault.
+- The entire vault, limited to Markdown files unless a later attachment-sharing requirement explicitly expands the scope.
+
+Acceptance criteria:
+
+- The panel supports edit and view link roles for each supported sharing scope.
+- The UI makes the selected scope explicit before any daemon launch, network use, or link creation.
+- Multi-page and whole-vault sharing may ship first as a generated link set with one MarkLab relay link per Markdown file. The UI should label this honestly until MarkLab has true single-link multi-file collection support.
+- Multi-page and whole-vault links preserve MarkLab's local-first rule: vault Markdown files remain canonical, and hosted relay state coordinates access rather than replacing the vault with a cloud workspace.
+- Whole-vault sharing requires an extra confirmation step and explains the privacy impact before generating a link.
+- Batch sharing should avoid opening one browser tab per page when starting background hosting.
+- The sidebar surface should be designed so future collection links can replace link sets without changing the user's mental model.
+
 ## Settings
 
 MVP settings:
