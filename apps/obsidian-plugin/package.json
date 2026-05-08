@@ -1,0 +1,19 @@
+{
+  "name": "@marklab/obsidian-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Obsidian desktop control panel for sharing Markdown notes with MarkLab.",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs development --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "obsidian": "^1.12.3",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
