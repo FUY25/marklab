@@ -13,6 +13,22 @@ describe('splitCommandLine', () => {
     expect(splitCommandLine('"/Applications/Mark Lab/marklab" --flag')).toEqual(['/Applications/Mark Lab/marklab', '--flag']);
   });
 
+  it('preserves backslashes in Windows command paths', () => {
+    expect(splitCommandLine('C:\\Tools\\MarkLab\\marklab.exe')).toEqual(['C:\\Tools\\MarkLab\\marklab.exe']);
+    expect(splitCommandLine('C:\\Program Files\\MarkLab\\marklab.exe')).toEqual(['C:\\Program', 'Files\\MarkLab\\marklab.exe']);
+    expect(splitCommandLine('"C:\\Program Files\\MarkLab\\marklab.exe" --profile default')).toEqual([
+      'C:\\Program Files\\MarkLab\\marklab.exe',
+      '--profile',
+      'default',
+    ]);
+    expect(splitCommandLine('\\\\server\\share\\MarkLab\\marklab.exe')).toEqual(['\\\\server\\share\\MarkLab\\marklab.exe']);
+    expect(splitCommandLine('"\\\\server\\share\\MarkLab\\marklab.exe" --profile default')).toEqual([
+      '\\\\server\\share\\MarkLab\\marklab.exe',
+      '--profile',
+      'default',
+    ]);
+  });
+
   it('rejects unmatched quotes', () => {
     expect(() => splitCommandLine('"marklab')).toThrow(MarkLabCliError);
   });
@@ -55,6 +71,30 @@ describe('MarkLabCliAdapter', () => {
     expect(calls[0]).toEqual({
       command: 'marklab',
       args: ['status', '/tmp/My Note.md', '--json'],
+    });
+  });
+
+  it('passes a quoted Windows CLI command and prefix args unchanged to the executor', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const executor: CommandExecutor = vi.fn(async (command, args) => {
+      calls.push({ command, args });
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: JSON.stringify({ ok: true, files: [] }),
+        stderr: '',
+      };
+    });
+
+    const adapter = new MarkLabCliAdapter({
+      command: '"C:\\Program Files\\MarkLab\\marklab.exe" --profile default',
+      executor,
+    });
+    await adapter.status('C:\\Users\\Pan\\Vault\\Note.md');
+
+    expect(calls[0]).toEqual({
+      command: 'C:\\Program Files\\MarkLab\\marklab.exe',
+      args: ['--profile', 'default', 'status', 'C:\\Users\\Pan\\Vault\\Note.md', '--json'],
     });
   });
 

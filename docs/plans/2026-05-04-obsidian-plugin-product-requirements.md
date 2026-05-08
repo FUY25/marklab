@@ -24,6 +24,24 @@ The design principles are:
 - Preserve MarkLab's existing local-file, hosted-relay, and conflict semantics.
 - Prepare the plugin for eventual Obsidian Community Plugin submission.
 
+## Codex Goal For Implementation Session
+
+Use Codex's experimental `/goal` feature only for the long-running implementation session, not for one-off edits. The objective should be concrete, outcome-focused, and include enough completion criteria that Codex can keep the thread aligned without turning the goal into a long task list.
+
+Recommended goal:
+
+```text
+Implement the MarkLab Obsidian plugin MVP as a desktop-only, Obsidian-native control panel over the existing MarkLab CLI, daemon, browser UI, and hosted relay. Preserve the vault Markdown file as canonical, require explicit user consent before setup, daemon launch, network use, or vault-wide sharing, adopt the PR #2 Windows CLI parser fix, update README and manifest disclosures for Obsidian review, and finish only after targeted plugin tests, typecheck, build, and relevant CLI adapter tests pass or any blocker is documented.
+```
+
+Goal-writing checklist for later Codex use:
+
+- State the product outcome, not just the next command.
+- Include the most important context: this is an Obsidian desktop plugin wrapping existing MarkLab surfaces, not a sync-engine port.
+- Include constraints that must remain true: local-first file authority, consent-first sharing, no silent installs, no hosted AI write APIs, no client telemetry, and Obsidian policy compliance.
+- Include "done when" checks: behavior implemented, review-driven CLI parser fix adopted, docs/disclosures updated, and narrow verification run.
+- Keep the goal simple and direct; put detailed execution steps in the prompt, plan, or PRD sections rather than overloading the `/goal` objective.
+
 ## Non-Goals
 
 - Do not port the MarkLab sync engine into the plugin for MVP.
@@ -139,6 +157,14 @@ MVP settings:
 
 Settings must avoid storing raw local daemon tokens or raw relay access tokens when MarkLab already manages them.
 
+CLI command path requirements:
+
+- The setting may contain either a bare executable name, an absolute executable path, or an executable plus fixed prefix arguments such as `npx -y @marklab/cli`.
+- The plugin must invoke the command through `spawn` with `shell: false`; splitting the configured command must only produce the executable and argv prefix.
+- The splitter must support quoted executable paths with spaces; Windows executable paths containing spaces must be quoted.
+- Literal backslashes must be preserved so Windows paths such as `C:\Tools\MarkLab\marklab.exe`, `"C:\Program Files\MarkLab\marklab.exe"`, and `\\server\share\MarkLab\marklab.exe` are passed to `spawn` unchanged.
+- Backslash escaping should only be consumed where the parser explicitly supports escaping a quote or other parser metacharacter. A generic backslash in an unquoted or quoted Windows path is not an escape sequence.
+
 ## Technical Requirements
 
 - Add the plugin as a new workspace package only when implementation begins, preferably under `apps/obsidian-plugin`.
@@ -150,6 +176,22 @@ Settings must avoid storing raw local daemon tokens or raw relay access tokens w
 - Parse MarkLab `--json` output for status and link creation.
 - Use explicit user confirmation before running setup/install commands or starting persistent background hosting.
 - If invoking Node.js, Electron, child processes, or desktop filesystem behavior, set `isDesktopOnly` to `true`.
+
+## Review-Driven Corrections To Adopt Before Merge
+
+The PR #2 automated review identified a P1 correctness issue in the Obsidian plugin CLI adapter: the command-line splitter treated every `\` as an escape character, which corrupts configured Windows executable paths before `spawn` runs.
+
+Adoption requirements:
+
+- Fix the CLI command splitter so literal backslashes survive in configured command paths and quoted command paths.
+- Keep shell execution disabled; the fix must not route user-provided command settings through a shell.
+- Add unit coverage for at least:
+  - `C:\Tools\MarkLab\marklab.exe`
+  - `"C:\Program Files\MarkLab\marklab.exe" --profile default`
+  - `\\server\share\MarkLab\marklab.exe`
+  - Existing POSIX quoted-path behavior such as `"/Applications/Mark Lab/marklab" --flag`
+- Verify the adapter passes the parsed executable and prefix args unchanged to the `CommandExecutor`.
+- Treat the fix as blocking for Windows desktop beta testing because setup checks, sharing, status, and link creation all depend on the CLI adapter.
 
 ## Installability Requirements
 
@@ -213,5 +255,8 @@ Payment-gated behavior must be disclosed in the README before Community Plugin s
 - [Obsidian developer policies](https://raw.githubusercontent.com/obsidianmd/obsidian-developer-docs/main/en/Developer%20policies.md)
 - [Obsidian plugin submission requirements](https://raw.githubusercontent.com/obsidianmd/obsidian-developer-docs/main/en/Plugins/Releasing/Submission%20requirements%20for%20plugins.md)
 - [Obsidian plugin security](https://obsidian.md/help/plugin-security)
+- [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
+- [OpenAI Codex CLI slash commands](https://developers.openai.com/codex/cli/slash-commands)
+- [OpenAI reasoning best practices](https://developers.openai.com/api/docs/guides/reasoning-best-practices)
 - [Relay product and pricing](https://relay.md/relay)
 - [Relay introduction](https://docs.relay.md/introduction/)

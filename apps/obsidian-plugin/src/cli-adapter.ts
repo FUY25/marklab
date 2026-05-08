@@ -123,17 +123,19 @@ export function splitCommandLine(input: string): string[] {
   const parts: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
-  let escaping = false;
 
-  for (const char of input.trim()) {
-    if (escaping) {
-      current += char;
-      escaping = false;
-      continue;
-    }
-
+  const chars = Array.from(input.trim());
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    if (char === undefined) continue;
     if (char === '\\') {
-      escaping = true;
+      const next = chars[index + 1];
+      if (next && shouldEscape(next, quote)) {
+        current += next;
+        index += 1;
+      } else {
+        current += char;
+      }
       continue;
     }
 
@@ -162,10 +164,14 @@ export function splitCommandLine(input: string): string[] {
     current += char;
   }
 
-  if (escaping) current += '\\';
   if (quote) throw new MarkLabCliError('invalid_target', 'CLI command setting has an unmatched quote.');
   if (current) parts.push(current);
   return parts;
+}
+
+function shouldEscape(char: string, quote: '"' | "'" | null): boolean {
+  if (quote) return char === quote;
+  return char === '"' || char === "'" || /\s/u.test(char);
 }
 
 function commandParts(commandLine: string): string[] {
