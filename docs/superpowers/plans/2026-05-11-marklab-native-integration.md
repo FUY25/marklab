@@ -1,0 +1,113 @@
+# MarkLab Native Integration Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build the MarkLab.app native/local editor surface based on MarkEdit behavior and connect it to the same single-file collaboration model as browser collaborators.
+
+**Architecture:** MarkLab.app is the first-class local-file entry point. It opens a user-owned `.md` file, binds native CodeMirror/MarkEdit editing to `Y.Text("contents")` for shared files, projects provider changes back to disk, ingests local file watcher changes, and exposes share/manage actions through app UI and CLI.
+
+**Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, existing `apps/api` local daemon, existing `apps/cli`.
+
+---
+
+## Scope
+
+This plan starts after the control-plane session/grant/token-refresh contract exists and after the browser app has proven provider connection, session, cursor, and view behavior. It does not add folder collaboration or rich/WYSIWYG editing.
+
+## File Structure
+
+- Create `apps/marklab-macos/` or equivalent native app folder after confirming the MarkEdit import strategy.
+- Modify `apps/api/src/local/local-file-service.ts`
+- Modify `apps/api/src/local/local-file-service.test.ts`
+- Modify `apps/api/src/routes/local-file-routes.ts`
+- Modify `apps/api/src/routes/local-conflict-routes.ts`
+- Modify `apps/cli/marklab.mjs`
+- Modify `apps/cli/marklab-cli.test.mjs`
+- Modify `docs/product/marklab-alpha-user-guide.md`
+- Modify downstream plan files listed in the final task.
+
+## Tasks
+
+### Task 1: MarkEdit Import Strategy
+
+- [ ] Inspect `Learning resources/MarkEdit` for license, app structure, editor integration, file open/save behavior, and CodeMirror usage.
+- [ ] Choose one strategy:
+  - create `apps/marklab-macos` and port the needed editor/file behavior;
+  - keep MarkEdit as external reference and implement a new native app shell;
+  - fork MarkEdit into a dedicated MarkLab native repository and reference it from this repo.
+- [ ] Record the decision in `docs/appdesigndoc.md`.
+- [ ] Acceptance: the repo has one documented native app ownership model and no ambiguous deferred MarkEdit import dependency.
+
+### Task 2: Local File Open And Save
+
+- [ ] Implement native file open for one `.md` file.
+- [ ] Reuse or call existing local daemon APIs for summary, versions, restore, and conflict status.
+- [ ] Preserve normal local editing when a file is not shared.
+- [ ] Acceptance: opening, editing, saving, closing, and reopening a file preserves exact Markdown bytes except intentional LF normalization for shared files.
+
+### Task 3: Share And Manage UI
+
+- [ ] Add app actions for:
+  - start sharing;
+  - create edit link;
+  - create view link;
+  - revoke link;
+  - show share state;
+  - copy browser link.
+- [ ] Connect these actions to local daemon/control-plane APIs rather than directly mutating provider state.
+- [ ] Acceptance: a user can create an edit link from MarkLab.app and join it from `apps/collab-web`.
+
+### Task 4: Native Collaboration Editing
+
+- [ ] Bind the native editor to the same `Y.Text("contents")` model as browser edit mode.
+- [ ] Project remote provider changes to disk using the Plan 1A baseline path.
+- [ ] Ingest local disk changes using the Plan 1A baseline path.
+- [ ] Show connection states in app chrome.
+- [ ] Acceptance: native app and browser edit session converge on the same Markdown text.
+
+### Task 5: Native Presence, Cursor, Highlight
+
+- [ ] Publish native cursor/selection awareness using Yjs relative positions.
+- [ ] Render browser collaborator cursor/highlight in native source editor.
+- [ ] Render native collaborator cursor/highlight in browser source editor.
+- [ ] Acceptance: native app and browser show each other's cursor/highlight while editing.
+
+### Task 6: CLI/App Boundary
+
+- [ ] Ensure `marklab share`, `create-link`, `revoke-link`, `status`, `wait`, `conflict`, and `export` can operate when the native app is running.
+- [ ] Ensure the CLI can start or find the local daemon without stealing focus from the native app.
+- [ ] Ensure native edit sessions refresh provider tokens through the same control-plane endpoint as browser edit sessions.
+- [ ] Acceptance command: `node apps/cli/marklab.mjs share README.md --json` returns a usable link while the app owns the file.
+
+### Task 7: Native E2E Smoke
+
+- [ ] Add same-Mac smoke script for:
+  - native host opens a file;
+  - browser guest joins edit link;
+  - browser edits;
+  - native sees update;
+  - disk receives projected Markdown;
+  - native edits;
+  - browser sees update.
+- [ ] Acceptance: the smoke passes with one local machine and no VM.
+
+### Task 8: Verification
+
+- [ ] Run native build/test command selected by the MarkEdit strategy.
+- [ ] Run `npx -y pnpm@10.0.0 test apps/api/src/local apps/cli`.
+- [ ] Run native/browser E2E smoke.
+- [ ] Run `git diff --check`.
+- [ ] Commit with `git commit -m "feat: integrate marklab native collaboration"`.
+
+### Task 9: Downstream Plan Refresh
+
+- [ ] Review native app folder, daemon boundary, local file behavior, share UI, and same-Mac smoke results.
+- [ ] Update `docs/appdesigndoc.md` if the native app strategy or local edit behavior changed.
+- [ ] Update these downstream plans:
+  - `docs/superpowers/plans/2026-05-11-control-plane-mvp.md`
+  - `docs/superpowers/plans/2026-05-11-reconnect-conflict-hardening.md`
+  - `docs/superpowers/plans/2026-05-11-packaging-cli-distribution-docs.md`
+  - `docs/superpowers/plans/2026-05-11-billing-subscription-seats.md`
+  - `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`
+- [ ] Run `rg -n "MarkEdit|native|daemon|local file|share UI|cursor|highlight" docs/superpowers/plans docs/appdesigndoc.md`.
+- [ ] Commit plan refresh with `git commit -m "docs: refresh plans after native integration"`.

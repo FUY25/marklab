@@ -20,4 +20,5 @@ playwright-report/
 !.env.example
 
 # Reference-only source clone; not part of this product repo.
+Learning resources/
 resource/milkdown/
