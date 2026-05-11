@@ -38,6 +38,28 @@ create table if not exists document_branch_states (
 alter table document_branch_states
   add column if not exists yjs_state_fingerprint text;
 
+alter table document_branch_states
+  add column if not exists provider_doc_id text;
+
+create unique index if not exists document_branch_states_provider_doc_id_idx
+  on document_branch_states (provider_doc_id)
+  where provider_doc_id is not null;
+
+create table if not exists provider_token_issuances (
+  id uuid primary key default gen_random_uuid(),
+  doc_id uuid not null references documents(id) on delete cascade,
+  branch_id uuid not null references document_branches(id) on delete cascade,
+  provider_doc_id text not null,
+  session_id text not null,
+  client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
+  authorization text not null check (authorization in ('full', 'read-only')),
+  valid_for_seconds integer not null,
+  issued_at timestamptz not null default now()
+);
+
+create index if not exists provider_token_issuances_branch_issued_idx
+  on provider_token_issuances (branch_id, issued_at desc);
+
 create table if not exists document_versions (
   id uuid primary key default gen_random_uuid(),
   doc_id uuid not null references documents(id) on delete cascade,
