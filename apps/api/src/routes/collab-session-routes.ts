@@ -14,6 +14,10 @@ const collabSessionSchema = z.object({
   sessionId: z.string().trim().min(1).optional(),
 });
 
+const providerTokenRefreshSchema = z.object({
+  clientKind: z.enum(['browser', 'app', 'daemon', 'agent', 'guest']).default('browser'),
+});
+
 function requiredParam(req: Request, name: string): string {
   const value = req.params[name];
   if (typeof value !== 'string' || !value) throw new Error(`missing_route_param:${name}`);
@@ -95,6 +99,42 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
       next(error);
     }
   });
+
+  router.post(
+    '/docs/:docId/branches/:branchId/collab/session/:sessionId/provider-token/refresh',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const docId = requiredParam(req, 'docId');
+        const branchId = requiredParam(req, 'branchId');
+        const sessionId = requiredParam(req, 'sessionId');
+        const body = providerTokenRefreshSchema.parse(req.body);
+        const auth = requireAuth(options);
+
+        await auth.requireDocumentAccess(req, docId, branchId, 'write');
+        const providerDocId = await ensureProviderDocId(pool, branchId);
+        const providerTokenService = requireProviderTokenService(options);
+        const providerToken = await providerTokenService.issueProviderToken({
+          providerDocId,
+          sessionId,
+          authorization: 'full',
+          validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
+        });
+        await recordProviderTokenIssuance(pool, {
+          docId,
+          branchId,
+          providerDocId,
+          sessionId,
+          clientKind: body.clientKind,
+          authorization: 'full',
+          validForSeconds: providerToken.validForSeconds,
+        });
+
+        res.status(200).json({ providerToken });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   return router;
 }

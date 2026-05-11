@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp, type HttpRequestAuth } from '../http/app';
+import { PROVIDER_TOKEN_TTL_SECONDS } from '../config/provider-token-policy';
 import type { ProviderTokenService } from '../provider/ysweet-token-service';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 
@@ -36,13 +37,14 @@ function createPool(): DbPool {
   };
 }
 
-function createAuth(): HttpRequestAuth & { operations: string[] } {
+function createAuth(input: { denyWrite?: boolean } = {}): HttpRequestAuth & { operations: string[] } {
   const operations: string[] = [];
   return {
     operations,
     async requireAdminAccess() {},
     async requireDocumentAccess(_req, _docId, _branchId, operation) {
       operations.push(operation);
+      if (operation === 'write' && input.denyWrite) throw new Error('forbidden');
       return { actorType: 'user' };
     },
   };
@@ -58,7 +60,7 @@ function createProviderTokenService(): ProviderTokenService & { issued: unknown[
         providerDocId: input.providerDocId,
         sessionId: input.sessionId,
         authorization: input.authorization,
-        validForSeconds: input.validForSeconds ?? 1,
+        validForSeconds: input.validForSeconds ?? PROVIDER_TOKEN_TTL_SECONDS,
         issuedAt: '2026-05-11T00:00:00.000Z',
         expiresAt: '2026-05-11T00:10:00.000Z',
         clientToken: {
@@ -88,6 +90,7 @@ describe('collab session routes', () => {
     expect(providerTokenService.issued).toEqual([expect.objectContaining({
       providerDocId: 'ml_doc_existing',
       authorization: 'full',
+      validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
     })]);
     expect(response.body.providerToken.clientToken.token).toBe('ysweet_token');
     expect(response.body.providerToken.clientToken.authorization).toBe('full');
@@ -113,5 +116,40 @@ describe('collab session routes', () => {
       },
     });
     expect(response.body.providerToken).toBeUndefined();
+  });
+
+  it('refreshes an edit provider token only after write access succeeds', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const app = createHttpApp(createPool(), createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_1/provider-token/refresh')
+      .send({})
+      .expect(200);
+
+    expect(auth.operations).toEqual(['write']);
+    expect(providerTokenService.issued).toEqual([{
+      providerDocId: 'ml_doc_existing',
+      sessionId: 'session_1',
+      authorization: 'full',
+      validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
+    }]);
+    expect(response.body.providerToken.clientToken.authorization).toBe('full');
+    expect(response.body.providerToken.validForSeconds).toBe(PROVIDER_TOKEN_TTL_SECONDS);
+  });
+
+  it('does not issue a refresh provider token when write access is denied', async () => {
+    const auth = createAuth({ denyWrite: true });
+    const providerTokenService = createProviderTokenService();
+    const app = createHttpApp(createPool(), createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_1/provider-token/refresh')
+      .send({})
+      .expect(403);
+
+    expect(auth.operations).toEqual(['write']);
+    expect(providerTokenService.issued).toEqual([]);
   });
 });
