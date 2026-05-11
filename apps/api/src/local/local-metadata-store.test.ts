@@ -53,6 +53,33 @@ describe('JsonLocalMetadataStore', () => {
     expect(JSON.parse(raw)).toMatchObject({ schemaVersion: 1 });
   });
 
+  it('persists local projection baseline metadata for reconnect reconciliation', async () => {
+    const metadataPath = await createMetadataPath();
+    const store = createJsonLocalMetadataStore(metadataPath);
+
+    await store.saveDocument({
+      schemaVersion: 1,
+      localDocId: 'doc_local',
+      absolutePath: '/tmp/local.md',
+      displayName: 'local.md',
+      roomName: 'local:file:doc_local',
+      lastDiskHash: 'sha256:disk',
+      currentHash: 'sha256:current',
+      currentYjsStateBase64: Buffer.from([1, 2, 3]).toString('base64'),
+      lastProjectedMarkdown: '# Projected\n',
+      lastProjectedHash: 'sha256:projected',
+      lastProviderStateFingerprint: 'fp_projected',
+      updatedAt: '2026-05-11T00:00:00.000Z',
+    });
+
+    const reloaded = createJsonLocalMetadataStore(metadataPath);
+    await expect(reloaded.loadDocument('/tmp/local.md')).resolves.toMatchObject({
+      lastProjectedMarkdown: '# Projected\n',
+      lastProjectedHash: 'sha256:projected',
+      lastProviderStateFingerprint: 'fp_projected',
+    });
+  });
+
   it('treats corrupt metadata as empty so opening a Markdown file is not blocked', async () => {
     const metadataPath = await createMetadataPath();
     await writeFile(metadataPath, '{not valid json', 'utf8');

@@ -22,6 +22,9 @@ export interface StoredLocalDocument {
   lastDiskHash: string;
   currentHash: string;
   currentYjsStateBase64: string;
+  lastProjectedMarkdown?: string;
+  lastProjectedHash?: string;
+  lastProviderStateFingerprint?: string;
   updatedAt: string;
 }
 
