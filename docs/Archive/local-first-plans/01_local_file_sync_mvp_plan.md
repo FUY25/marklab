@@ -516,7 +516,7 @@ Acceptance criteria:
 - Modify: `README.md`
 - Create: `docs/product/local-first-user-journeys.md`
 - Create: `docs/product/local-url-vs-relay-url.md`
-- Modify: `plans/Archive/cloud-first-reference/README.md` if archive index does not exist.
+- Modify: `docs/Archive/cloud-first-reference/README.md` if archive index does not exist.
 - Modify or archive root legacy spec docs `00_*.md` through `09_*.md`.
 
 The root README currently describes the legacy cloud-first product where AI agents read/write a hosted document. That is now misleading and will teach future agents the wrong behavior.
@@ -540,7 +540,7 @@ Acceptance criteria:
 - Root README links to the active plans `01` through `06`.
 - Legacy cloud-first plans are clearly labeled as archived reference, not current execution plans.
 - No root-level Markdown file can be mistaken for the current product direction.
-- Every superseded cloud-first root spec has a first-screen banner: `Historical cloud-first reference. Superseded by plans/01 through plans/06 local-first product plans.`
+- Every superseded cloud-first root spec has a first-screen banner: `Historical cloud-first reference. Superseded by docs/appdesigndoc.md; previous local-first plans are archived under docs/Archive/local-first-plans/.`
 - README links the active local-first plans before any historical reference.
 - `docs/product/local-first-user-journeys.md` covers:
   - solo local file;

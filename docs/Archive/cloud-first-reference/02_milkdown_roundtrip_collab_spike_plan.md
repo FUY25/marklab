@@ -241,7 +241,7 @@ describe('canonicalizeMarkdown', () => {
 
 > **Context note:** The original expected table output used compact `| A | B |` spacing. Prettier aligns table columns, so the corrected test checks the actual final formatter behavior while still asserting content preservation.
 >
-> This package is not the semantic Markdown authority. It only stabilizes Markdown that has already passed through Milkdown parser/serializer. The Milkdown transformer in `plans/04_import_export_plan.md` owns Markdown-to-editor and editor-to-Markdown semantic round-trip behavior.
+> This package is not the semantic Markdown authority. It only stabilizes Markdown that has already passed through Milkdown parser/serializer. The Milkdown transformer in `docs/Archive/cloud-first-reference/04_import_export_plan.md` owns Markdown-to-editor and editor-to-Markdown semantic round-trip behavior.
 
 - [ ] **Step 3: Run test to verify it fails**
 

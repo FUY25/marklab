@@ -13,8 +13,8 @@
 ### Task 1: Spec coverage review
 
 **Files:**
-- Review: `00_scope_and_decisions.md`
-- Review: `01_product_requirements.md`
+- Review: `docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md`
+- Review: `docs/Archive/root-cloud-first-reference/01_product_requirements.md`
 - Review: `plans/*.md`
 
 - [ ] **Step 1: Verify Milkdown-first decision is represented**
@@ -22,7 +22,7 @@
 Run:
 
 ```bash
-grep -R "Milkdown" -n 00_scope_and_decisions.md 02_architecture_milkdown_first.md plans
+grep -R "Milkdown" -n docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md plans
 ```
 
 Expected: references appear in scope, architecture, and Milkdown spike plan.
@@ -32,7 +32,7 @@ Expected: references appear in scope, architecture, and Milkdown spike plan.
 Run:
 
 ```bash
-grep -R "Local sync" -n 00_scope_and_decisions.md 07_risks_and_attention.md README.md
+grep -R "Local sync" -n docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md docs/Archive/root-cloud-first-reference/07_risks_and_attention.md README.md
 ```
 
 Expected: each file states local sync is not in MVP.
@@ -61,7 +61,7 @@ Expected: no vague implementation instructions remain.
 ### Task 3: Type consistency review
 
 **Files:**
-- Review: `04_data_model_and_api.md`
+- Review: `docs/Archive/root-cloud-first-reference/04_data_model_and_api.md`
 - Review: `plans/*.md`
 
 - [ ] **Step 1: Check request field naming**
@@ -69,7 +69,7 @@ Expected: no vague implementation instructions remain.
 Run:
 
 ```bash
-grep -R "baseVersionId\|base_version" -n 04_data_model_and_api.md plans
+grep -R "baseVersionId\|base_version" -n docs/Archive/root-cloud-first-reference/04_data_model_and_api.md plans
 ```
 
 Expected: API JSON in implementation plans uses camelCase (`baseVersionId`, `baseHash`, `oldString`, `newString`). SQL docs may use snake_case for table fields.
@@ -79,7 +79,7 @@ Expected: API JSON in implementation plans uses camelCase (`baseVersionId`, `bas
 Run:
 
 ```bash
-grep -R "doc:.*branch" -n 02_architecture_milkdown_first.md plans
+grep -R "doc:.*branch" -n docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md plans
 ```
 
 Expected: room names follow `doc:{docId}:branch:{branchId}`.
@@ -87,8 +87,8 @@ Expected: room names follow `doc:{docId}:branch:{branchId}`.
 ### Task 4: Execution readiness
 
 **Files:**
-- Review: `plans/01_foundation_repo_plan.md`
-- Review: `plans/02_milkdown_roundtrip_collab_spike_plan.md`
+- Review: `docs/Archive/cloud-first-reference/01_foundation_repo_plan.md`
+- Review: `docs/Archive/cloud-first-reference/02_milkdown_roundtrip_collab_spike_plan.md`
 
 - [ ] **Step 1: Confirm first two plans produce testable output**
 
@@ -113,15 +113,15 @@ Expected: output is at least `20`.
 
 **Files:**
 - Review: `plans/*.md`
-- Review: `02_architecture_milkdown_first.md`
-- Review: `04_data_model_and_api.md`
+- Review: `docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md`
+- Review: `docs/Archive/root-cloud-first-reference/04_data_model_and_api.md`
 
 - [ ] **Step 1: Verify no mirror-only AI write path remains**
 
 Run:
 
 ```bash
-grep -R "first pass updates the mirror\\|mirror-only\\|directly updates current_markdown" -n plans 02_architecture_milkdown_first.md 04_data_model_and_api.md
+grep -R "first pass updates the mirror\\|mirror-only\\|directly updates current_markdown" -n plans docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md docs/Archive/root-cloud-first-reference/04_data_model_and_api.md
 ```
 
 Expected: Any matches are context notes explaining the rejected original approach, not executable implementation steps.
@@ -151,7 +151,7 @@ Expected: no matches.
 Run:
 
 ```bash
-rg -n "multi_edit_doc|multi-edit|snapshot create|proposal\\.md|submit-snapshot|preview_doc_change|apply_doc_change|change_sets" 00_scope_and_decisions.md 01_product_requirements.md 04_data_model_and_api.md 05_ai_write_versioning_branching.md plans
+rg -n "multi_edit_doc|multi-edit|snapshot create|proposal\\.md|submit-snapshot|preview_doc_change|apply_doc_change|change_sets" docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md docs/Archive/root-cloud-first-reference/01_product_requirements.md docs/Archive/root-cloud-first-reference/04_data_model_and_api.md docs/Archive/root-cloud-first-reference/05_ai_write_versioning_branching.md plans
 ```
 
 Expected: matches only appear in statements forbidding those workflows or explaining why they are deferred. The executable MVP workflow should use `read_doc`, `edit_doc`, and `write_doc`.
@@ -161,7 +161,7 @@ Expected: matches only appear in statements forbidding those workflows or explai
 Run:
 
 ```bash
-rg -n "Prettier-only|source of truth|Milkdown serializer|initializeBranchEditorState" 00_scope_and_decisions.md 02_architecture_milkdown_first.md 03_canonical_markdown_contract.md plans
+rg -n "Prettier-only|source of truth|Milkdown serializer|initializeBranchEditorState" docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md docs/Archive/root-cloud-first-reference/03_canonical_markdown_contract.md plans
 ```
 
 Expected: documents state that Milkdown parser/serializer is the semantic authority and Prettier is only final formatting.
@@ -171,7 +171,7 @@ Expected: documents state that Milkdown parser/serializer is the semantic author
 Run:
 
 ```bash
-test -f plans/07_cli_agent_skill_plan.md && ! test -f plans/07_mcp_agent_plan.md
+test -f docs/Archive/cloud-first-reference/07_cli_agent_skill_plan.md && ! test -f plans/07_mcp_agent_plan.md
 ```
 
 Expected: command exits with status 0. MCP may appear only as a later adapter, not as the MVP-critical Plan 7.
@@ -181,7 +181,7 @@ Expected: command exits with status 0. MCP may appear only as a later adapter, n
 Run:
 
 ```bash
-rg -n "GET /api/docs/:docId/branches/:branchId/versions|GET /api/docs/:docId/versions/:versionId|POST /api/docs/import|GET /api/docs/:docId/branches/:branchId/export.md|POST /api/docs/:docId/branches/:branchId/write|POST /api/docs/:docId/branches/:branchId/edit|router\\.get\\('/docs/:docId/branches/:branchId/versions'|router\\.get\\('/docs/:docId/versions/:versionId'|router\\.post\\('/docs/import'|router\\.get\\('/docs/:docId/branches/:branchId/export\\.md'|router\\.post\\('/docs/:docId/branches/:branchId/write'|router\\.post\\('/docs/:docId/branches/:branchId/edit'" 04_data_model_and_api.md plans
+rg -n "GET /api/docs/:docId/branches/:branchId/versions|GET /api/docs/:docId/versions/:versionId|POST /api/docs/import|GET /api/docs/:docId/branches/:branchId/export.md|POST /api/docs/:docId/branches/:branchId/write|POST /api/docs/:docId/branches/:branchId/edit|router\\.get\\('/docs/:docId/branches/:branchId/versions'|router\\.get\\('/docs/:docId/versions/:versionId'|router\\.post\\('/docs/import'|router\\.get\\('/docs/:docId/branches/:branchId/export\\.md'|router\\.post\\('/docs/:docId/branches/:branchId/write'|router\\.post\\('/docs/:docId/branches/:branchId/edit'" docs/Archive/root-cloud-first-reference/04_data_model_and_api.md plans
 ```
 
 Expected: version, import, export, write, and edit route contracts appear in the API docs and implementation plans before the CLI plan depends on them.

@@ -279,15 +279,19 @@ npx -y pnpm@10.0.0 --filter @marklab/cli pack --dry-run
 npx -y pnpm@10.0.0 --filter @marklab/web exec playwright test tests/relay-collaboration.spec.ts tests/local-conflict-review.spec.ts
 ```
 
-## Plans And Historical Reference
+## App Design And Archive
 
-Active implementation plans:
+Current app design:
 
-- [Plan 01: Local File Sync MVP](plans/01_local_file_sync_mvp_plan.md)
-- [Plan 02: Local Collaboration Relay MVP](plans/02_local_collaboration_relay_mvp_plan.md)
-- [Plan 03: Reconnect Conflict Review](plans/03_reconnect_conflict_review_plan.md)
-- [Plan 04: Hosted Relay Production And Distribution](plans/04_hosted_relay_production_and_distribution_plan.md)
-- [Plan 05: AI Agent Operating Layer](plans/05_ai_agent_operating_layer_plan.md)
-- [Plan 06: Legacy Cloud AI Write Cleanup](plans/06_legacy_cloud_ai_write_cleanup_plan.md)
+- [MarkLab App Design Doc](docs/appdesigndoc.md)
 
-Root files named `00_*.md` through `09_*.md` and files under `plans/Archive/cloud-first-reference/` are historical cloud-first reference material. They explain prior Milkdown/Yjs decisions, but the current implementation path is local-first.
+Archived prior local-first plans:
+
+- [Plan 01: Local File Sync MVP](docs/Archive/local-first-plans/01_local_file_sync_mvp_plan.md)
+- [Plan 02: Local Collaboration Relay MVP](docs/Archive/local-first-plans/02_local_collaboration_relay_mvp_plan.md)
+- [Plan 03: Reconnect Conflict Review](docs/Archive/local-first-plans/03_reconnect_conflict_review_plan.md)
+- [Plan 04: Hosted Relay Production And Distribution](docs/Archive/local-first-plans/04_hosted_relay_production_and_distribution_plan.md)
+- [Plan 05: AI Agent Operating Layer](docs/Archive/local-first-plans/05_ai_agent_operating_layer_plan.md)
+- [Plan 06: Legacy Cloud AI Write Cleanup](docs/Archive/local-first-plans/06_legacy_cloud_ai_write_cleanup_plan.md)
+
+Files under `docs/Archive/` are historical planning and design material. They are useful reference, but `docs/appdesigndoc.md` is the current product and architecture direction.

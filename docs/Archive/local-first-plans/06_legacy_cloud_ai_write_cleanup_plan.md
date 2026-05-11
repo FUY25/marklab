@@ -70,16 +70,16 @@ apps/web/src/components/DocumentActionRail.tsx
 apps/web/src/lib/api-client.ts
 apps/web/src/routes.ts
 README.md
-00_scope_and_decisions.md
-01_product_requirements.md
-02_architecture_milkdown_first.md
-03_canonical_markdown_contract.md
-04_data_model_and_api.md
-05_ai_write_versioning_branching.md
-06_testing_strategy.md
-07_risks_and_attention.md
-08_references.md
-09_mvp_launch_gap_matrix.md
+docs/Archive/root-cloud-first-reference/00_scope_and_decisions.md
+docs/Archive/root-cloud-first-reference/01_product_requirements.md
+docs/Archive/root-cloud-first-reference/02_architecture_milkdown_first.md
+docs/Archive/root-cloud-first-reference/03_canonical_markdown_contract.md
+docs/Archive/root-cloud-first-reference/04_data_model_and_api.md
+docs/Archive/root-cloud-first-reference/05_ai_write_versioning_branching.md
+docs/Archive/root-cloud-first-reference/06_testing_strategy.md
+docs/Archive/root-cloud-first-reference/07_risks_and_attention.md
+docs/Archive/root-cloud-first-reference/08_references.md
+docs/Archive/root-cloud-first-reference/09_mvp_launch_gap_matrix.md
 ```
 
 This list is an audit starting point, not an instruction to delete every file. Keep reusable pieces that local sync or relay still need.
@@ -136,7 +136,7 @@ hosted AI write/edit CLI
 **Files:**
 
 - Create: `docs/legacy-cleanup/inventory.md`
-- Modify: `plans/06_legacy_cloud_ai_write_cleanup_plan.md` only if inventory reveals a missing category.
+- Modify: `docs/Archive/local-first-plans/06_legacy_cloud_ai_write_cleanup_plan.md` only if inventory reveals a missing category.
 
 - [ ] List every API route mounted by `apps/api/src/http/app.ts`.
 - [ ] List every web route parsed by `apps/web/src/routes.ts`.
@@ -285,7 +285,7 @@ Acceptance criteria:
 
 - Modify: `README.md`
 - Modify: `docs/product/local-first-user-journeys.md`
-- Create or modify: `plans/Archive/cloud-first-reference/README.md`
+- Create or modify: `docs/Archive/cloud-first-reference/README.md`
 - Create: `docs/legacy-cleanup/removed-surfaces.md`
 - Modify or archive: root legacy spec docs `00_*.md` through `09_*.md`
 
@@ -301,7 +301,7 @@ Acceptance criteria:
 - No current doc tells AI agents to call hosted write/edit endpoints.
 - Archive index makes it clear old plans are not active execution plans.
 - No root-level Markdown file can be mistaken for the current product direction.
-- Every superseded cloud-first root spec starts with `Historical cloud-first reference. Superseded by plans/01 through plans/06 local-first product plans.`
+- Every superseded cloud-first root spec starts with `Historical cloud-first reference. Superseded by docs/appdesigndoc.md; previous local-first plans are archived under docs/Archive/local-first-plans/.`
 
 ## Verification
 

@@ -176,11 +176,11 @@ Export from deployed app.
 ## Task 4: Launch blockers review
 
 **Files:**
-- Review `09_mvp_launch_gap_matrix.md`
+- Review `docs/Archive/root-cloud-first-reference/09_mvp_launch_gap_matrix.md`
 
 - [ ] **Step 1: Confirm no MVP blockers remain**
 
-For every "Required before MVP launch" row in `09_mvp_launch_gap_matrix.md`, confirm:
+For every "Required before MVP launch" row in `docs/Archive/root-cloud-first-reference/09_mvp_launch_gap_matrix.md`, confirm:
 
 ```text
 Implemented.

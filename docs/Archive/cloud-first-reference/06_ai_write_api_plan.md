@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Use: `apps/api/src/services/doc-read.ts` — shared canonical branch state reader created in `plans/04_import_export_plan.md`.
+- Use: `apps/api/src/services/doc-read.ts` — shared canonical branch state reader created in `docs/Archive/cloud-first-reference/04_import_export_plan.md`.
 - Create: `apps/api/src/services/doc-write.ts` — safe write/edit service.
 - Create: `apps/api/src/services/live-writer.ts` — minimal transaction live writer contract.
 - Create: `apps/api/src/services/editor-state.ts` — update Milkdown/Yjs branch state from Markdown through minimal transactions.
@@ -26,7 +26,7 @@
 
 This plan does not build MCP or UI. It only builds HTTP APIs and service logic. It explicitly does not build AI streaming UX, in-app selection-aware AI, or in-app diff UI.
 
-> **Execution gate:** The HTTP route shape may exist before the concrete writer is wired, but accepted write/edit execution must fail closed with `503 live_writer_not_configured` until a concrete minimal transaction live writer exists. The writer must parse target canonical Markdown into an editor document, compare it to the current live Yjs-bound ProseMirror document, apply only changed ranges through ProseMirror transactions/Yjs updates, and return serialized Markdown plus a valid non-empty encoded Yjs state from the resulting live state. The version service from `plans/05_version_branch_plan.md` must also exist before successful write/edit execution is enabled.
+> **Execution gate:** The HTTP route shape may exist before the concrete writer is wired, but accepted write/edit execution must fail closed with `503 live_writer_not_configured` until a concrete minimal transaction live writer exists. The writer must parse target canonical Markdown into an editor document, compare it to the current live Yjs-bound ProseMirror document, apply only changed ranges through ProseMirror transactions/Yjs updates, and return serialized Markdown plus a valid non-empty encoded Yjs state from the resulting live state. The version service from `docs/Archive/cloud-first-reference/05_version_branch_plan.md` must also exist before successful write/edit execution is enabled.
 
 > **Context note:** The original plan included a mirror-only first pass for `applyMarkdownToBranchState`. That directly conflicts with the architecture rule that AI writes must update live collaboration state before updating the canonical mirror. The corrected plan makes the live-state writer an explicit dependency instead of shipping a route that can desync online editors.
 >
@@ -45,7 +45,7 @@ Use `edit_doc` only for one small exact replacement. Use `write_doc` for full ta
 
 - [ ] **Step 1: Verify shared read service contract**
 
-Confirm `apps/api/src/services/doc-read.ts` already exists from `plans/04_import_export_plan.md` and exports this contract:
+Confirm `apps/api/src/services/doc-read.ts` already exists from `docs/Archive/cloud-first-reference/04_import_export_plan.md` and exports this contract:
 
 ```ts
 import type { DbPool } from '../db/client';
