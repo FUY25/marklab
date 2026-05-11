@@ -3,6 +3,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, basename, resolve, join } from 'node:path';
 import { sha256Hex } from '@marklab/shared/src/hash';
+import { decideMarkdownReconciliation, normalizeCollabMarkdown } from '@marklab/shared/src/markdown-reconciliation';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import {
@@ -186,6 +187,10 @@ function rawMarkdownHash(markdown: string): string {
   return sha256Hex(markdown);
 }
 
+function collabMarkdownHash(markdown: string): string {
+  return rawMarkdownHash(normalizeCollabMarkdown(markdown));
+}
+
 async function readMarkdownFile(absolutePath: string): Promise<string> {
   return readFile(absolutePath, 'utf8');
 }
@@ -248,7 +253,10 @@ export async function createLocalFileServiceWithOptions(
   let currentMarkdown = initialized.markdown;
   let currentHash = initialized.hash;
   let currentStateFingerprint = encodeYjsStateFingerprint(initialized.yjsState);
-  let lastDiskHash = rawMarkdownHash(initialDiskMarkdown);
+  let lastDiskHash = collabMarkdownHash(initialDiskMarkdown);
+  let lastProjectedMarkdown = normalizeCollabMarkdown(initialized.markdown);
+  let lastProjectedHash = collabMarkdownHash(lastProjectedMarkdown);
+  let lastProviderStateFingerprint = currentStateFingerprint;
   let conflict: string | null = null;
   let currentOpenConflict: ReconnectConflict | null = null;
   let historyLoadError: string | null = null;
@@ -262,7 +270,24 @@ export async function createLocalFileServiceWithOptions(
 
   let versions: LocalVersionRecord[] = [];
   try {
-    await metadataStore.loadDocument(absolutePath);
+    const storedDocument = await metadataStore.loadDocument(absolutePath);
+    if (storedDocument) {
+      lastDiskHash = storedDocument.lastDiskHash;
+      const storedYjsState = decodeBase64(storedDocument.currentYjsStateBase64);
+      const storedState = await runtime.serializeYjsState(storedYjsState);
+      if (storedState.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+      currentYjsState = storedState.yjsState;
+      currentMarkdown = storedState.markdown;
+      currentHash = storedState.hash;
+      currentStateFingerprint = encodeYjsStateFingerprint(storedState.yjsState);
+      lastProviderStateFingerprint = currentStateFingerprint;
+    }
+    if (storedDocument?.lastProjectedMarkdown !== undefined) {
+      lastProjectedMarkdown = normalizeCollabMarkdown(storedDocument.lastProjectedMarkdown);
+      lastProjectedHash = storedDocument.lastProjectedHash ?? collabMarkdownHash(lastProjectedMarkdown);
+      lastDiskHash = lastProjectedHash;
+      lastProviderStateFingerprint = storedDocument.lastProviderStateFingerprint ?? currentStateFingerprint;
+    }
     relayHostState = await metadataStore.loadRelayHost(absolutePath);
     relayJoinState = await metadataStore.loadRelayJoin(absolutePath);
     const storedVersions = await metadataStore.listVersions(localDocId);
@@ -290,7 +315,7 @@ export async function createLocalFileServiceWithOptions(
   }
 
   function isRelaySyncPaused(): boolean {
-    return Boolean(currentOpenConflict) || (conflict?.startsWith('Relay reconnect conflict') ?? false);
+    return Boolean(currentOpenConflict) || Boolean(conflict);
   }
 
   function nextVersionNumber(): number {
@@ -307,8 +332,18 @@ export async function createLocalFileServiceWithOptions(
       lastDiskHash,
       currentHash,
       currentYjsStateBase64: encodeBase64(currentYjsState),
+      lastProjectedMarkdown,
+      lastProjectedHash,
+      lastProviderStateFingerprint,
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  function markProjectedBaseline(markdown: string, stateFingerprint = currentStateFingerprint): void {
+    lastProjectedMarkdown = normalizeCollabMarkdown(markdown);
+    lastProjectedHash = collabMarkdownHash(lastProjectedMarkdown);
+    lastProviderStateFingerprint = stateFingerprint;
+    lastDiskHash = lastProjectedHash;
   }
 
   async function createVersion(
@@ -408,7 +443,7 @@ export async function createLocalFileServiceWithOptions(
     currentMarkdown = serialized.markdown;
     currentHash = rawMarkdownHash(serialized.markdown);
     currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
-    lastDiskHash = rawMarkdownHash(serialized.markdown);
+    markProjectedBaseline(serialized.markdown, currentStateFingerprint);
     await persistCurrentDocument();
   }
 
@@ -425,7 +460,7 @@ export async function createLocalFileServiceWithOptions(
     currentMarkdown = applied.serializedMarkdown;
     currentHash = rawMarkdownHash(applied.serializedMarkdown);
     currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
-    lastDiskHash = rawMarkdownHash(applied.serializedMarkdown);
+    markProjectedBaseline(applied.serializedMarkdown, currentStateFingerprint);
     await persistCurrentDocument();
   }
 
@@ -458,46 +493,100 @@ export async function createLocalFileServiceWithOptions(
     const serialized = await runtime.serializeYjsState(yjsState);
     if (serialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
 
-    if (serialized.hash === currentHash) {
+    const nextFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
+    const diskMarkdown = await readMarkdownFile(absolutePath);
+    const diskMatchesProjection = collabMarkdownHash(diskMarkdown) === lastProjectedHash;
+    if (nextFingerprint === lastProviderStateFingerprint && diskMatchesProjection) {
       currentYjsState = serialized.yjsState;
       currentMarkdown = serialized.markdown;
-      currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
+      currentHash = rawMarkdownHash(serialized.markdown);
+      currentStateFingerprint = nextFingerprint;
+      conflict = null;
       await persistCurrentDocument();
       return;
     }
 
-    const diskMarkdown = await readMarkdownFile(absolutePath);
-    const diskHash = rawMarkdownHash(diskMarkdown);
-    if (diskHash !== lastDiskHash && diskHash !== rawMarkdownHash(serialized.markdown)) {
+    const decision = decideMarkdownReconciliation({
+      lastProjectedMarkdown,
+      diskMarkdown,
+      providerMarkdown: serialized.markdown,
+    });
+
+    if (decision.kind === 'conflict') {
       currentYjsState = serialized.yjsState;
       currentMarkdown = serialized.markdown;
-      currentHash = serialized.hash;
-      currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
+      currentHash = rawMarkdownHash(serialized.markdown);
+      currentStateFingerprint = nextFingerprint;
+      lastProviderStateFingerprint = nextFingerprint;
       conflict = 'File changed outside MarkLab. Review needed.';
       await createConflictRecoverySnapshot();
       await persistCurrentDocument();
       return;
     }
 
-    await writeMarkdownFileAtomically(absolutePath, serialized.markdown);
-    lastDiskHash = rawMarkdownHash(serialized.markdown);
     currentYjsState = serialized.yjsState;
     currentMarkdown = serialized.markdown;
-    currentHash = serialized.hash;
-    currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
+    currentHash = rawMarkdownHash(serialized.markdown);
+    currentStateFingerprint = nextFingerprint;
+    lastProviderStateFingerprint = nextFingerprint;
+
+    if (decision.kind === 'noop' || decision.kind === 'ingest_disk_to_provider') {
+      conflict = null;
+      await persistCurrentDocument();
+      return;
+    }
+
+    if (decision.kind === 'project_provider_to_disk') {
+      await writeMarkdownFileAtomically(absolutePath, decision.markdown);
+    }
+
+    if (decision.kind === 'project_provider_to_disk' || decision.kind === 'accept_converged') {
+      markProjectedBaseline(decision.markdown, nextFingerprint);
+    }
+
     conflict = null;
     await persistCurrentDocument();
   }
 
   async function applyExternalDiskMarkdown(markdown: string): Promise<Uint8Array | null> {
-    const diskHash = rawMarkdownHash(markdown);
-    if (diskHash === lastDiskHash) return null;
+    const diskHash = collabMarkdownHash(markdown);
+    if (diskHash === lastProjectedHash) return null;
+
+    const decision = decideMarkdownReconciliation({
+      lastProjectedMarkdown,
+      diskMarkdown: markdown,
+      providerMarkdown: currentMarkdown,
+    });
+
+    if (decision.kind === 'conflict') {
+      conflict = 'File changed outside MarkLab. Review needed.';
+      await createConflictRecoverySnapshot();
+      await persistCurrentDocument();
+      return null;
+    }
+
+    if (decision.kind === 'noop') return null;
+
+    if (decision.kind === 'accept_converged') {
+      markProjectedBaseline(decision.markdown, currentStateFingerprint);
+      conflict = null;
+      await persistCurrentDocument();
+      return null;
+    }
+
+    if (decision.kind === 'project_provider_to_disk') {
+      await writeMarkdownFileAtomically(absolutePath, decision.markdown);
+      markProjectedBaseline(decision.markdown, currentStateFingerprint);
+      conflict = null;
+      await persistCurrentDocument();
+      return null;
+    }
 
     const applied = await runtime.applyChangedRanges({
       branchId: localDocId,
       yjsState: currentYjsState,
       seedMarkdown: currentMarkdown,
-      targetCanonicalMarkdown: markdown,
+      targetCanonicalMarkdown: decision.markdown,
     });
     if (applied.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
 
@@ -505,7 +594,7 @@ export async function createLocalFileServiceWithOptions(
     currentMarkdown = applied.serializedMarkdown;
     currentHash = rawMarkdownHash(applied.serializedMarkdown);
     currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
-    lastDiskHash = diskHash;
+    markProjectedBaseline(decision.markdown, currentStateFingerprint);
     conflict = null;
     await persistCurrentDocument();
     return applied.yjsState;
@@ -523,7 +612,7 @@ export async function createLocalFileServiceWithOptions(
       do {
         shouldHandleWatcherAgain = false;
         const markdown = await readMarkdownFile(absolutePath);
-        if (rawMarkdownHash(markdown) === lastDiskHash) continue;
+        if (collabMarkdownHash(markdown) === lastDiskHash) continue;
         await callbacks.flushRoom(roomName);
         if (conflict) return;
         const latestMarkdown = await readMarkdownFile(absolutePath);
@@ -847,7 +936,7 @@ export async function createLocalFileServiceWithOptions(
       currentMarkdown = applied.serializedMarkdown;
       currentHash = rawMarkdownHash(applied.serializedMarkdown);
       currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
-      lastDiskHash = rawMarkdownHash(applied.serializedMarkdown);
+      markProjectedBaseline(applied.serializedMarkdown, currentStateFingerprint);
       conflict = null;
       lastConflictRecoveryHash = null;
 

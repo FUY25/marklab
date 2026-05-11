@@ -128,6 +128,67 @@ describe('LocalFileService', () => {
     service.stopWatcher();
   });
 
+  it('projects remote provider changes when disk stayed at last projected baseline', async () => {
+    const { file, metadataPath } = await createTempMarkdown('# Base\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath });
+    const loaded = await service.loadRoomState(service.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    const remote = await runtime.applyChangedRanges({
+      branchId: service.getSummary().localDocId,
+      yjsState: loaded.yjsState,
+      seedMarkdown: '# Base\n',
+      targetCanonicalMarkdown: '# Remote\n',
+    });
+
+    await service.storeRoomState(service.roomName, remote.yjsState, loaded.stateFingerprint);
+
+    expect(await readFile(file, 'utf8')).toBe('# Remote\n');
+    expect(service.getSummary().conflict).toBeNull();
+    service.stopWatcher();
+  });
+
+  it('does not let stale disk overwrite remote provider changes after restart', async () => {
+    const { file, metadataPath } = await createTempMarkdown('# Base\n');
+    const first = await createLocalFileServiceWithOptions(file, { metadataPath });
+    const loaded = await first.loadRoomState(first.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    const remote = await runtime.applyChangedRanges({
+      branchId: first.getSummary().localDocId,
+      yjsState: loaded.yjsState,
+      seedMarkdown: '# Base\n',
+      targetCanonicalMarkdown: '# Remote while app closed\n',
+    });
+    first.stopWatcher();
+
+    const restarted = await createLocalFileServiceWithOptions(file, { metadataPath });
+    await restarted.storeRoomState(restarted.roomName, remote.yjsState, loaded.stateFingerprint);
+
+    expect(await readFile(file, 'utf8')).toBe('# Remote while app closed\n');
+    expect(restarted.getSummary().conflict).toBeNull();
+    restarted.stopWatcher();
+  });
+
+  it('pauses sync when disk and provider both diverged from last projected baseline', async () => {
+    const { file, metadataPath } = await createTempMarkdown('# Base\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath });
+    const loaded = await service.loadRoomState(service.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    const remote = await runtime.applyChangedRanges({
+      branchId: service.getSummary().localDocId,
+      yjsState: loaded.yjsState,
+      seedMarkdown: '# Base\n',
+      targetCanonicalMarkdown: '# Remote\n',
+    });
+
+    await writeFile(file, '# Local\n', 'utf8');
+    await service.storeRoomState(service.roomName, remote.yjsState, loaded.stateFingerprint);
+
+    expect(await readFile(file, 'utf8')).toBe('# Local\n');
+    expect(service.getSummary().conflict).toBe('File changed outside MarkLab. Review needed.');
+    await expect(service.storeRoomState(service.roomName, remote.yjsState, null)).rejects.toThrow('conflict_required');
+    service.stopWatcher();
+  });
+
   it('keeps relay reconnect sync paused after recreating the daemon service', async () => {
     const { file, metadataPath, conflictPath } = await createTempMarkdown('# Local offline\n');
     const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
