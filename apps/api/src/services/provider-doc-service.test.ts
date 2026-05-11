@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import type { DbQueryResult } from '../db/client';
 import { ensureProviderDocId } from './provider-doc-service';
 
 function createProviderDocPool(existingProviderDocId: string | null = null) {
-  const calls: Array<{ sql: string; params: unknown[] }> = [];
+  const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
   return {
     calls,
-    async query(sql: string, params: unknown[]) {
+    async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
       calls.push({ sql, params });
       if (/select provider_doc_id/u.test(sql)) {
-        return { rows: existingProviderDocId ? [{ provider_doc_id: existingProviderDocId }] : [{ provider_doc_id: null }] };
+        return { rows: (existingProviderDocId ? [{ provider_doc_id: existingProviderDocId }] : [{ provider_doc_id: null }]) as Row[] };
       }
       if (/update document_branch_states/u.test(sql)) {
-        return { rows: [{ provider_doc_id: params[1] }] };
+        return { rows: [{ provider_doc_id: params[1] }] as Row[] };
       }
       throw new Error(`unexpected_query:${sql}`);
     },
