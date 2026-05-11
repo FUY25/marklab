@@ -4,6 +4,7 @@ import express, { type ErrorRequestHandler, type NextFunction, type Request, typ
 import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
+import { createCollabSessionRoutes } from '../routes/collab-session-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createLocalConflictRoutes } from '../routes/local-conflict-routes';
@@ -22,6 +23,7 @@ import type { LocalFileService } from '../local/local-file-service';
 import type { LocalRelayHostController, LocalRelayMirrorController } from '../local/local-relay-client';
 import type { RelayRoomService } from '../relay/relay-room-service';
 import type { RelayServerHandle } from '../relay/relay-server';
+import type { ProviderTokenService } from '../provider/ysweet-token-service';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
@@ -33,6 +35,7 @@ export interface HttpAppOptions {
   localMode?: boolean;
   relayService?: RelayRoomService;
   relayServer?: RelayServerHandle;
+  providerTokenService?: ProviderTokenService;
   allowedOrigins?: readonly string[];
   enforceAllowedOrigins?: boolean;
   health?: HttpHealthOptions;
@@ -246,6 +249,16 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'auth_not_configured') {
+    res.status(503).json({ error: 'auth_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'provider_token_service_not_configured') {
+    res.status(503).json({ error: 'provider_token_service_not_configured' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'invalid_live_yjs_state') {
     res.status(503).json({ error: 'invalid_live_yjs_state' });
     return;
@@ -414,6 +427,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
     app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
     app.use('/api', createRelayRoutes(relayRouteOptions));
+    app.use('/api', createCollabSessionRoutes(pool, routeOptions));
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }
 
