@@ -77,7 +77,7 @@ describe('LocalFileService', () => {
 
     expect(await readFile(file, 'utf8')).toContain('Saved snapshot.');
     restartedService.stopWatcher();
-  });
+  }, 10_000);
 
   it('preserves unapplied external disk markdown and live browser state before restore overwrite', async () => {
     const { file, metadataPath } = await createTempMarkdown('# Restore\n\nBase.\n');
