@@ -21,8 +21,8 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 - Modify `apps/api/src/local/local-file-service.ts`
 - Modify `apps/api/src/local/local-conflict-store.test.ts`
 - Modify `apps/api/src/routes/local-conflict-routes.test.ts`
-- Modify `apps/collab-web/src/` conflict UI files created in Plan 2.
-- Modify native conflict UI files created in Plan 3.
+- Modify `apps/collab-web/src/` conflict UI files created in `2026-05-11-collab-web-app.md`.
+- Modify native conflict UI files created in `2026-05-11-marklab-native-integration.md`.
 - Modify `apps/cli/marklab.mjs`
 - Modify `apps/cli/agent-conflict.test.mjs`
 - Modify downstream plan files listed in the final task.
@@ -96,8 +96,8 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 - [ ] Review conflict payload, UI behavior, CLI behavior, and E2E matrix.
 - [ ] Update `docs/appdesigndoc.md` if conflict behavior or resolution choices changed.
 - [ ] Update these downstream plans:
-  - `docs/superpowers/plans/2026-05-11-packaging-cli-distribution-docs.md`
-  - `docs/superpowers/plans/2026-05-11-billing-subscription-seats.md`
-  - `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "conflict|lastProjectedMarkdown|use shared|accept local|offline|reconnect|revoked" docs/superpowers/plans docs/appdesigndoc.md`.
+  - `docs/plans/2026-05-11-packaging-cli-distribution-docs.md`
+  - `docs/plans/2026-05-11-billing-subscription-seats.md`
+  - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
+- [ ] Run `rg -n "conflict|lastProjectedMarkdown|use shared|accept local|offline|reconnect|revoked" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh plans after conflict hardening"`.

@@ -45,7 +45,7 @@ The browser collaborator app (`apps/collab-web`), native MarkLab.app UI, account
   - Add `@y-sweet/sdk@0.9.1`.
 - Create `apps/api/src/provider/ysweet-token-service.ts`
   - Small adapter around Y-Sweet `DocumentManager.getOrCreateDocAndToken`.
-  - Enforces default 10-minute TTL and records MarkLab session metadata in the return value.
+  - Reads default TTL from the central config constant `PROVIDER_TOKEN_TTL_SECONDS` (see Task 5; default 600 = 10 min, overridable via env). The spec policy ("10-minute TTL / 2-min refresh margin / 30-second client check") is sourced from this constant so changing it later is one edit, not a grep.
 - Create `apps/api/src/provider/ysweet-token-service.test.ts`
   - Unit tests with a fake manager proving `authorization` and `validForSeconds` are passed exactly.
 - Create `apps/api/src/services/provider-doc-service.ts`
@@ -671,6 +671,10 @@ Expected: FAIL with `Cannot find module './provider-doc-service'`.
 
 - [ ] **Step 3: Add schema fields**
 
+> The `provider_token_issuances.session_id` column is intentionally `text` without a foreign key in this plan. Plan 2 (control-plane MVP) renames `access_sessions` → `document_access_sessions` and adds the FK constraint after backfill. Do not add the FK here.
+
+> View sessions (`mode: 'view'`) do not mint a provider token, so they produce no row in `provider_token_issuances`. Audit for view sessions lands in Plan 2 Task 6 via the `document_access_sessions` table directly. Do not record fake "view" rows in `provider_token_issuances`.
+
 Append this SQL near the existing `document_branch_states` alterations in `apps/api/src/db/schema.sql`:
 
 ```sql
@@ -781,6 +785,9 @@ git commit -m "feat: store provider document ids"
 - Modify: `pnpm-lock.yaml`
 - Create: `apps/api/src/provider/ysweet-token-service.ts`
 - Create: `apps/api/src/provider/ysweet-token-service.test.ts`
+- Modify or create: `apps/api/src/config/provider-token-policy.ts`
+
+> **Token policy constants live in one place.** Define `PROVIDER_TOKEN_TTL_SECONDS` (default 600), `PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS` (default 120), and `PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS` (default 30) in `apps/api/src/config/provider-token-policy.ts` and read them from env vars `MARKLAB_PROVIDER_TOKEN_TTL_SECONDS`, `MARKLAB_PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS`, and `MARKLAB_PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS` if set. The token service, the route layer, and the browser client (via Plan 3) consume these constants — no raw `600` / `120` / `30` literals elsewhere in app code.
 
 - [ ] **Step 1: Add Y-Sweet SDK dependency**
 
@@ -966,6 +973,8 @@ git commit -m "feat: add ysweet provider token service"
 - Create: `apps/api/src/routes/collab-session-routes.ts`
 - Create: `apps/api/src/routes/collab-session-routes.test.ts`
 - Modify: `apps/api/src/http/app.ts`
+
+> **Auth wiring contract.** The route must never silently skip access checks. The implemented route requires an auth adapter and returns `auth_not_configured` if it is mounted directly without one. `createHttpApp` supplies the existing env-driven default auth adapter today; Plan 2 (control-plane MVP) replaces that with real login/guest session auth and must keep public hosted mode login-backed.
 
 - [ ] **Step 1: Write route tests**
 
@@ -1370,7 +1379,9 @@ If no verification fixes were needed, do not create an empty commit.
 - [ ] Disk-to-provider ingestion does not overwrite provider changes when disk also changed.
 - [ ] Both-sides-changed cases pause sync and require conflict handling.
 - [ ] Public view sessions do not receive Y-Sweet provider credentials.
-- [ ] Edit sessions receive Y-Sweet native `ClientToken`s with `authorization: "full"` and `validForSeconds: 600`.
-- [ ] Server records provider token issuance metadata for audit; it does not rely on `Y.PermanentUserData` as authoritative audit data.
+- [ ] Edit sessions receive Y-Sweet native `ClientToken`s with `authorization: "full"` and `validForSeconds` sourced from `PROVIDER_TOKEN_TTL_SECONDS` (default 600).
+- [ ] Server records provider token issuance metadata for **edit** sessions in `provider_token_issuances`. View-session audit is intentionally deferred to Plan 2, which will log view accesses via `document_access_sessions`. Do not rely on `Y.PermanentUserData` as authoritative audit data.
+- [ ] The collab session route requires an auth adapter; direct mounting without one returns `auth_not_configured`. `createHttpApp` currently supplies the existing env-driven default auth adapter, and Plan 2 replaces it with login/guest session auth.
+- [ ] Token policy values (TTL, refresh margin, refresh check interval) come from `apps/api/src/config/provider-token-policy.ts`; no raw numeric literals are duplicated in route or service code.
 - [ ] Provider document ids are opaque and do not encode file path, filename, workspace, or user identity.
 - [ ] All new behavior is covered by Vitest tests and TypeScript checks.

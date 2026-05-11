@@ -39,6 +39,20 @@ This plan starts after Plan 1A exists. It does not build the browser UI or MarkL
 - [ ] Update `fly.toml` comments so the deploy target says whether API and provider are co-located or split.
 - [ ] Acceptance: an engineer can read `docs/production/relay-ops.md` and know exactly which upstream Y-Sweet executable owns provider websocket traffic.
 
+### Task 1.5: Plan Reshape Gate
+
+The rest of this plan (Tasks 2–7) is written assuming **the API process supervises a local Y-Sweet child process** and reads its health. If Task 1 picks a different mode, Tasks 2–7 must be rewritten before any code lands:
+
+- If Y-Sweet runs as a **separate Fly process or machine**: drop `ysweet-provider-process.ts` and its supervision tests. Replace with a thin HTTP/WS client module that probes the external provider URL and a Fly deploy config for the provider machine. Persistence (Task 3) moves to the provider machine's volume.
+- If Y-Sweet runs as an **embedded library/binary linked into the API process** (no separate process): drop the supervision interface. Replace with library bootstrap inside `apps/api/src/provider/ysweet-provider-runtime.ts`. Persistence (Task 3) moves into the API process's volume.
+- If Y-Sweet runs as a **sidecar container/process managed by the orchestrator** (not the API process): drop supervision. Add health probes against the sidecar URL only. Persistence config lives in the sidecar's deployment spec.
+
+Subtasks:
+
+- [ ] After Task 1 decides the mode, mark the irrelevant Tasks 2–7 wording in this plan as "skip" or replace it with the mode-specific equivalent.
+- [ ] If the mode is anything other than "API process supervises a child process", rename `apps/api/src/provider/ysweet-provider-process.ts` to a mode-appropriate name in Tasks 2–4 before implementing.
+- [ ] Acceptance: the remaining tasks in this plan name file paths and module shapes that match the chosen runtime mode. An implementer does not have to guess.
+
 ### Task 2: Provider Process Module
 
 - [ ] Create `apps/api/src/provider/ysweet-provider-process.ts` with a small interface:
@@ -56,7 +70,8 @@ This plan starts after Plan 1A exists. It does not build the browser UI or MarkL
 - [ ] Support alpha local-dev storage under a repo-external data dir, such as `.marklab-provider-data/`.
 - [ ] Support alpha production storage through a Fly volume path or object-store path, matching the chosen runtime mode.
 - [ ] Ensure `.gitignore` excludes provider local data.
-- [ ] Acceptance: a provider restart smoke creates a doc, stops the process, restarts the process, and can read the same doc content.
+- [ ] Pick and document a Yjs garbage-collection policy: alpha default is `gc: true` (Yjs default), which removes tombstones from the in-memory CRDT but preserves the update log. Snapshots are recompacted on a cadence selected here (default: every 100 updates or every 5 minutes, whichever comes first). Record the chosen values in `docs/production/relay-ops.md` so view-link history horizon expectations are documented.
+- [ ] Acceptance: a provider restart smoke creates a doc, stops the process, restarts the process, and can read the same doc content. A separate smoke writes 200 updates and confirms snapshot compaction reduces the on-disk update count.
 
 ### Task 4: Provider Health
 
@@ -73,7 +88,7 @@ This plan starts after Plan 1A exists. It does not build the browser UI or MarkL
   - connects a Yjs client;
   - writes `Y.Text("contents")`;
   - reconnects and reads the same text.
-- [ ] Add a read-only malicious write smoke if trusted live read-only provider tokens are enabled in this stage.
+- [ ] Skip the read-only malicious-write smoke in v1: per `docs/appdesigndoc.md` locked decision 11, v1 view links are control-plane snapshots and do not use the provider. Re-enable this smoke only when a future plan introduces trusted live read-only provider tokens.
 - [ ] Acceptance command: run the smoke locally and document the command in `docs/production/relay-ops.md`.
 
 ### Task 6: Docker And Fly Wiring
@@ -95,12 +110,12 @@ This plan starts after Plan 1A exists. It does not build the browser UI or MarkL
 - [ ] Review the final provider runtime diff, env vars, storage choice, and smoke command.
 - [ ] Update `docs/appdesigndoc.md` if runtime/deploy/storage decisions changed.
 - [ ] Update these downstream plans:
-  - `docs/superpowers/plans/2026-05-11-collab-web-app.md`
-  - `docs/superpowers/plans/2026-05-11-marklab-native-integration.md`
-  - `docs/superpowers/plans/2026-05-11-control-plane-mvp.md`
-  - `docs/superpowers/plans/2026-05-11-reconnect-conflict-hardening.md`
-  - `docs/superpowers/plans/2026-05-11-packaging-cli-distribution-docs.md`
-  - `docs/superpowers/plans/2026-05-11-billing-subscription-seats.md`
-  - `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "Hocuspocus|provider token|Y-Sweet|storage|Fly volume|object store|healthz" docs/superpowers/plans docs/appdesigndoc.md`.
+  - `docs/plans/2026-05-11-collab-web-app.md`
+  - `docs/plans/2026-05-11-marklab-native-integration.md`
+  - `docs/plans/2026-05-11-control-plane-mvp.md`
+  - `docs/plans/2026-05-11-reconnect-conflict-hardening.md`
+  - `docs/plans/2026-05-11-packaging-cli-distribution-docs.md`
+  - `docs/plans/2026-05-11-billing-subscription-seats.md`
+  - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
+- [ ] Run `rg -n "Hocuspocus|provider token|Y-Sweet|storage|Fly volume|object store|healthz" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh plans after provider runtime"`.

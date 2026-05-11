@@ -31,19 +31,19 @@ The important rule is that downstream plans are living execution documents, whil
 
 ## Sequencing
 
-Recommended execution order:
+Recommended execution order matches the Order column in the table above. Plans are referenced by file name to avoid drift if the table is reordered again.
 
-1. Complete Plan 1A.
-2. Complete Plan 1B.
-3. Complete Plan 4, the control-plane MVP. This is intentionally before browser/native UI so those clients do not bake in a stub session model that gets replaced later.
-4. Complete Plan 2.
-5. Complete Plan 3.
-6. Complete Plan 5.
-7. Complete Plan 6.
-8. Complete Plan 7 if public paid launch is in scope for this release; otherwise keep free/manual subscription mode.
-9. Complete Plan 8.
+1. `2026-05-11-ysweet-single-file-collaboration-foundation.md` (1A).
+2. `2026-05-11-ysweet-provider-runtime-ops.md` (1B).
+3. `2026-05-11-control-plane-mvp.md` (2). Control-plane lands before browser/native UI so those clients do not bake in a stub session model that gets replaced later.
+4. `2026-05-11-collab-web-app.md` (3).
+5. `2026-05-11-marklab-native-integration.md` (4).
+6. `2026-05-11-reconnect-conflict-hardening.md` (5).
+7. `2026-05-11-packaging-cli-distribution-docs.md` (6).
+8. `2026-05-11-billing-subscription-seats.md` (7) if public paid launch is in scope for this release; otherwise keep free/manual subscription mode.
+9. `2026-05-11-production-deploy-alpha-launch.md` (8).
 
-Plan 7 can be deferred for a private free alpha, but Plan 4 still must include the data model concepts for seats, subscriptions, and guest quotas because provider-token issuance depends on them.
+The billing plan (7) can be deferred for a private free alpha, but the control-plane plan (2) still must include the data model concepts for seats, subscriptions, and guest quotas because provider-token issuance depends on them.
 
 ## Downstream Refresh Rule
 

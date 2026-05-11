@@ -31,12 +31,12 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 ### Task 1: MarkEdit Import Strategy
 
 - [ ] Inspect `Learning resources/MarkEdit` for license, app structure, editor integration, file open/save behavior, and CodeMirror usage.
-- [ ] Choose one strategy:
-  - create `apps/marklab-macos` and port the needed editor/file behavior;
-  - keep MarkEdit as external reference and implement a new native app shell;
-  - fork MarkEdit into a dedicated MarkLab native repository and reference it from this repo.
-- [ ] Record the decision in `docs/appdesigndoc.md`.
-- [ ] Acceptance: the repo has one documented native app ownership model and no ambiguous deferred MarkEdit import dependency.
+- [ ] Choose one of two in-repo strategies:
+  - **Port:** create `apps/marklab-macos` and port the needed editor/file behavior from MarkEdit into this monorepo.
+  - **Reference:** keep MarkEdit as external reference and implement a new native app shell under `apps/marklab-macos` without lifting source.
+- [ ] Forking MarkEdit into a separate repository is **not** an allowed v1 option. `2026-05-11-packaging-cli-distribution-docs.md` packages the native app from this repo and does not coordinate with an external native repo. If a future plan introduces a separate native repo, packaging must be redesigned at the same time.
+- [ ] Record the chosen strategy in `docs/appdesigndoc.md`.
+- [ ] Acceptance: `apps/marklab-macos/` exists in this monorepo with a documented MarkEdit import or independent-shell decision. Packaging (`2026-05-11-packaging-cli-distribution-docs.md`) can locate the native source from this repo without external coordination.
 
 ### Task 2: Local File Open And Save
 
@@ -104,10 +104,10 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 - [ ] Review native app folder, daemon boundary, local file behavior, share UI, and same-Mac smoke results.
 - [ ] Update `docs/appdesigndoc.md` if the native app strategy or local edit behavior changed.
 - [ ] Update these downstream plans:
-  - `docs/superpowers/plans/2026-05-11-control-plane-mvp.md`
-  - `docs/superpowers/plans/2026-05-11-reconnect-conflict-hardening.md`
-  - `docs/superpowers/plans/2026-05-11-packaging-cli-distribution-docs.md`
-  - `docs/superpowers/plans/2026-05-11-billing-subscription-seats.md`
-  - `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "MarkEdit|native|daemon|local file|share UI|cursor|highlight" docs/superpowers/plans docs/appdesigndoc.md`.
+  - `docs/plans/2026-05-11-control-plane-mvp.md`
+  - `docs/plans/2026-05-11-reconnect-conflict-hardening.md`
+  - `docs/plans/2026-05-11-packaging-cli-distribution-docs.md`
+  - `docs/plans/2026-05-11-billing-subscription-seats.md`
+  - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
+- [ ] Run `rg -n "MarkEdit|native|daemon|local file|share UI|cursor|highlight" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh plans after native integration"`.

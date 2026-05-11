@@ -24,7 +24,7 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Modify `apps/api/src/routes/collab-session-routes.ts`
 - Modify `apps/api/src/http/app.ts`
 - Add tests beside services/routes.
-- Modify control-plane UI files from Plan 4.
+- Modify the workspace settings UI inside `apps/collab-web` (created in `2026-05-11-collab-web-app.md`, scope-extended in `2026-05-11-control-plane-mvp.md`).
 - Modify docs and downstream deploy plan.
 
 ## Tasks
@@ -39,11 +39,13 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 
 ### Task 2: Seat Enforcement
 
-- [ ] Enforce named-member seat limits when inviting or accepting members.
-- [ ] Enforce concurrent guest-edit quota when issuing edit provider tokens.
-- [ ] Keep guest view sessions outside guest edit quota.
+The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.md` Task 5: that plan added the guest-edit quota check at provider-token issuance time, enforcing against hardcoded constants. This task does **not** add a parallel check — it only replaces the constants with plan-table lookups.
+
+- [ ] Replace the hardcoded guest-edit quota constant in the token-issuance path with a lookup against `subscriptions` → `plans` → `seat_limits.concurrent_guest_edits` for the workspace.
+- [ ] Replace the hardcoded member-seat constant in the workspace invite path with the same chain via `seat_limits.member_seats`.
+- [ ] Keep guest view sessions outside guest edit quota (already true; verify with a regression test).
 - [ ] Add tests for free-limit pass/fail and paid-limit pass/fail.
-- [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet.
+- [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits not constants. `git grep` for the old constant names returns no app-code matches.
 
 ### Task 3: Billing Provider Integration
 
@@ -56,10 +58,13 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 
 ### Task 4: Control UI
 
-- [ ] Add workspace billing/settings UI.
+The workspace settings shell already exists in `apps/collab-web` from `2026-05-11-control-plane-mvp.md` Task 7B (Members/Documents tabs). This task adds the **Plan & Billing** tab into that existing shell. Do not create a new app.
+
+- [ ] Add a Plan & Billing tab to `/workspaces/:workspaceId/settings` in `apps/collab-web`.
 - [ ] Show current plan, member seats used, guest edit sessions used, and upgrade/manage button.
 - [ ] Show clear unavailable messages when plan limits block action.
-- [ ] Acceptance: owner can see plan limits and non-owner cannot manage billing.
+- [ ] Owner-only sensitive actions (upgrade/cancel/manage payment) are enforced server-side; the UI hides them for non-owners but does not rely on UI hiding for security.
+- [ ] Acceptance: owner can open the Plan & Billing tab, see usage numbers, and trigger upgrade flow; non-owner sees the tab in read-only mode without management buttons.
 
 ### Task 5: Audit And Admin
 
@@ -80,6 +85,6 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 
 - [ ] Review actual plan ids, env vars, webhook paths, manual mode behavior, and quota enforcement.
 - [ ] Update `docs/appdesigndoc.md` if billing or seat-limit product behavior changed.
-- [ ] Update `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`.
-- [ ] Run `rg -n "billing|subscription|seat|guest quota|Stripe|manual mode|webhook" docs/superpowers/plans docs/appdesigndoc.md`.
+- [ ] Update `docs/plans/2026-05-11-production-deploy-alpha-launch.md`.
+- [ ] Run `rg -n "billing|subscription|seat|guest quota|Stripe|manual mode|webhook" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh deploy plan after billing"`.

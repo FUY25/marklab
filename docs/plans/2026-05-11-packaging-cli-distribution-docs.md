@@ -6,7 +6,7 @@
 
 **Architecture:** CLI and native app are the local control surface; hosted provider/control plane are defaults for normal users. The CLI controls software actions and never becomes a hosted content write API.
 
-**Tech Stack:** Existing `apps/cli`, Node packaging, macOS app packaging path selected in Plan 3, docs under `docs/product` and `docs/production`, Vitest/Node tests.
+**Tech Stack:** Existing `apps/cli`, Node packaging, macOS app packaging path selected in `2026-05-11-marklab-native-integration.md`, docs under `docs/product` and `docs/production`, Vitest/Node tests.
 
 ---
 
@@ -21,7 +21,7 @@ This plan does not build billing or production deploy. It makes local installati
 - Modify `apps/cli/doctor.mjs`
 - Modify `apps/cli/prepare-package.mjs`
 - Modify `apps/cli/*.test.mjs`
-- Modify native packaging files from Plan 3.
+- Modify native packaging files from `2026-05-11-marklab-native-integration.md`.
 - Modify `README.md`
 - Modify `docs/product/marklab-alpha-user-guide.md`
 - Modify `docs/production/local-daemon-distribution.md`
@@ -39,34 +39,42 @@ This plan does not build billing or production deploy. It makes local installati
 
 ### Task 2: CLI Command Coverage
 
-- [ ] Confirm or implement:
-  - `open`;
-  - `share`;
-  - `join`;
-  - `create-link`;
-  - `revoke-link`;
-  - `share-state`;
-  - `status`;
-  - `wait --synced`;
-  - `save-version`;
-  - `versions`;
-  - `conflict`;
-  - `doctor`;
-  - `stop`.
+V1 (alpha launch must-have):
+
+- [ ] `open` — open a local Markdown file in MarkLab.app or a sensible default.
+- [ ] `share` — start sharing a local file (creates document + edit link).
+- [ ] `join` — open a share link (browser fallback if app not installed).
+- [ ] `status` — show current sync/conflict state for a file.
+- [ ] `wait --synced` — block until sync is complete; used by agents.
+- [ ] `conflict` — read current conflict state as JSON for agents.
+- [ ] `doctor` — diagnose install, URLs, daemon connectivity.
+- [ ] `stop` — stop the local daemon cleanly.
+
+Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
+
+- [ ] `create-link` — create a new view/edit link without opening UI.
+- [ ] `revoke-link` — revoke a link by id.
+- [ ] `share-state` — show all current share grants for a file.
+- [ ] `save-version` — snapshot the current shared state as a named version.
+- [ ] `versions` — list known versions of a shared document.
+
+The CLI is not the home for the agent edit `begin/end` protocol described in the spec; that protocol stays out of v1 (see Task 3).
+
 - [ ] Add tests for hosted-default config and local override config.
 - [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli`.
 
 ### Task 3: AI Agent Workflow
 
 - [ ] Update `docs/agent/marklab-agent-guide.md`.
-- [ ] Document that AI edits local `.md` files directly.
-- [ ] Document `wait --synced`, `status`, `conflict`, and `save-version` as the control surface.
+- [ ] Document that AI edits local `.md` files directly. The file watcher ingests changes into shared `Y.Text` automatically when a file is part of an active room; AI does not need a special API.
+- [ ] Document `wait --synced`, `status`, and `conflict` as the v1 control surface for agents. `save-version` is post-alpha.
+- [ ] Document the **deferred** explicit agent edit protocol (`marklab agent edit begin/end`) as post-v1: per `docs/appdesigndoc.md`, v1 relies on file-watcher ingestion alone. If unattended AI rewrites of a shared file produce noisy conflicts, the begin/end protocol gets its own plan; do not ship it in v1.
 - [ ] Add a one-line install/share command for alpha users.
-- [ ] Acceptance: an agent can follow the guide without needing provider internals.
+- [ ] Acceptance: an agent can follow the guide without needing provider internals and without the begin/end protocol.
 
 ### Task 4: Native Packaging
 
-- [ ] Package MarkLab.app using the native packaging path selected in Plan 3.
+- [ ] Package MarkLab.app using the native packaging path selected in `2026-05-11-marklab-native-integration.md`.
 - [ ] Ensure installed app can start local daemon or discover existing daemon.
 - [ ] Ensure normal users do not need Terminal after install.
 - [ ] Acceptance: clean install on a test macOS user profile can open, edit, share, and quit.
@@ -99,7 +107,7 @@ This plan does not build billing or production deploy. It makes local installati
 - [ ] Review packaged URLs, CLI command behavior, native app lifecycle, and docs.
 - [ ] Update `docs/appdesigndoc.md` if packaging reveals a product workflow change.
 - [ ] Update these downstream plans:
-  - `docs/superpowers/plans/2026-05-11-billing-subscription-seats.md`
-  - `docs/superpowers/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "install|share|join|doctor|hosted default|daemon|package|alpha" docs/superpowers/plans docs/appdesigndoc.md README.md`.
+  - `docs/plans/2026-05-11-billing-subscription-seats.md`
+  - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
+- [ ] Run `rg -n "install|share|join|doctor|hosted default|daemon|package|alpha" docs/plans docs/appdesigndoc.md README.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh plans after packaging"`.

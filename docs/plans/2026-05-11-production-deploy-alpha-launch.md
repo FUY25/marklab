@@ -128,6 +128,6 @@ This plan is the launch gate. It does not add product features. It verifies the 
 
 - [ ] Review actual deployed topology, smoke results, package URLs, billing mode, and known launch gaps.
 - [ ] Update `docs/appdesigndoc.md` with any final product/architecture truth that differs from the earlier spec.
-- [ ] Update `docs/superpowers/plans/2026-05-11-marklab-alpha-plan-roadmap.md` with completed status for all plans.
+- [ ] Update `docs/plans/2026-05-11-marklab-alpha-plan-roadmap.md` with completed status for all plans.
 - [ ] Run `rg -n "Plan 04A|host-gated|Hocuspocus first|stub auth|internal technical slice|not public" docs README.md`.
 - [ ] Commit final refresh with `git commit -m "docs: refresh alpha launch truth"`.

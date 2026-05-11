@@ -779,7 +779,7 @@ Build the collaboration provider foundation. Phase 1 owns the server side end-to
 
 Phase 1 acceptance criteria that require a browser UI (browser IndexedDB persistence, remote cursor/highlight rendering, presence avatars) move to Phase 1B; Phase 1 validates the server-side awareness fanout and Y.Doc persistence with the harness client.
 
-GStack plan-review refinement: execute the Control Plane MVP immediately after provider runtime and before production-facing browser/native client work. Otherwise browser/native clients will bake in a dev-only session model and then need to be rewritten for real users, guests, grants, token refresh, and revocation. The phase labels below describe product capability groups; the implementation roadmap in `docs/superpowers/plans/2026-05-11-marklab-alpha-plan-roadmap.md` defines the execution order.
+GStack plan-review refinement: execute the Control Plane MVP immediately after provider runtime and before production-facing browser/native client work. Otherwise browser/native clients will bake in a dev-only session model and then need to be rewritten for real users, guests, grants, token refresh, and revocation. The phase labels below describe product capability groups; the implementation roadmap in `docs/plans/2026-05-11-marklab-alpha-plan-roadmap.md` defines the execution order.
 
 ### Phase 1B: Browser Collaboration App MVP
 
