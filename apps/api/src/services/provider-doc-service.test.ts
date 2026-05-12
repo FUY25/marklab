@@ -9,7 +9,10 @@ import {
   LEGACY_DOCUMENT_QUOTA_KEY_PREFIX,
   markProviderDocSeeded,
   markProviderTokenIssuanceIssuedIfSessionActive,
+  markProviderTokenRefreshIssued,
   providerTokenIssuanceCanIssue,
+  recordProviderTokenIssuanceWithPolicy,
+  readConcurrentGuestEditQuota,
 } from './provider-doc-service';
 
 function createProviderDocPool(existingProviderDocId: string | null = null, seededAt: string | null = '2026-05-11T00:00:00.000Z') {
@@ -143,21 +146,20 @@ describe('findActiveProviderTokenSession', () => {
       providerDocId: 'provider_1',
       actorId: 'user_1',
     });
-    expect(capturedSql).toContain("pti.status = 'issued'");
-    expect(capturedSql).toContain('not exists');
-    expect(capturedSql).toContain("revoked.status = 'revoked'");
+    expect(capturedSql).toContain("pti.status in ('issued', 'revoked')");
     expect(capturedSql).toContain('join collab_sessions');
     expect(capturedSql).toContain("s.mode = 'edit'");
+    expect(capturedSql).toContain("s.status = 'active'");
     expect(capturedSql).toContain('s.refresh_token_hash = $4');
     expect(capturedSql).toContain('s.client_kind');
     expect(capturedSql).toContain('s.actor_id');
     expect(capturedSql).toContain('s.actor_grant_id');
     expect(capturedSql).toContain('pti.status');
-    expect(capturedSql).not.toContain("case when pti.status = 'revoked' then 0 else 1 end");
+    expect(capturedSql).toContain("case when pti.status = 'revoked' then 0 else 1 end");
     expect(capturedSql).not.toContain('valid_for_seconds');
   });
 
-  it('does not resurrect an older issued session after a newer revoked status row', async () => {
+  it('returns a revoked session as revoked so refresh denial can be audited explicitly', async () => {
     const pool = {
       async query<Row = unknown>(): Promise<DbQueryResult<Row>> {
         return {
@@ -181,7 +183,7 @@ describe('findActiveProviderTokenSession', () => {
       branchId: 'branch_1',
       sessionId: 'session_1',
       refreshTokenHash: 'sha256:refresh',
-    })).resolves.toBeNull();
+    })).resolves.toMatchObject({ status: 'revoked' });
   });
 
   it('counts active guest edit sessions excluding the current session id', async () => {
@@ -205,12 +207,91 @@ describe('findActiveProviderTokenSession', () => {
     expect(calls[0]?.sql).toContain('latest_guest_sessions');
     expect(calls[0]?.sql).toContain('from collab_sessions');
     expect(calls[0]?.sql).toContain('last_seen_at');
+    expect(calls[0]?.sql).toContain("s.status = 'active'");
     expect(calls[0]?.sql).toContain('s.is_guest = true');
     expect(calls[0]?.sql).toContain("pti.status in ('pending', 'issued', 'revoked')");
     expect(calls[0]?.sql).not.toContain('s.actor_grant_id is not null');
     expect(calls[0]?.sql).not.toContain("'failed'");
     expect(calls[0]?.sql).not.toContain('valid_for_seconds');
     expect(calls[0]?.sql).toContain("case when pti.status = 'revoked' then 0 else 1 end");
+  });
+
+  it('uses the workspace plan concurrent guest quota before blocking new guest edit sessions', async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    let inserted = false;
+    const query = async <Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> => {
+      calls.push({ sql, params });
+      if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 0 };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+      if (sql.includes('update collab_sessions')) return { rows: [], rowCount: 1 };
+      if (sql.includes('coalesce(sl.concurrent_guest_edits')) return { rows: [{ concurrent_guest_edits: '10' } as Row], rowCount: 1 };
+      if (sql.includes('count(*) as active_guest_sessions')) return { rows: [{ active_guest_sessions: '5' } as Row], rowCount: 1 };
+      if (sql.includes('insert into provider_token_issuances')) {
+        inserted = true;
+        return { rows: [{ id: 'issuance_1' } as Row], rowCount: 1 };
+      }
+      throw new Error(`unexpected_query:${sql}`);
+    };
+    const pool = { query, connect: async () => ({ query, release: () => undefined }) };
+
+    await expect(recordProviderTokenIssuanceWithPolicy(pool, {
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      providerDocId: 'provider_1',
+      sessionId: 'session_1',
+      clientKind: 'browser',
+      actorType: 'user',
+      actorId: 'session:session_1',
+      actorGrantId: 'grant_1',
+      authorization: 'full',
+      validForSeconds: 600,
+      status: 'pending',
+      isGuestSession: true,
+      enforceGuestQuota: true,
+      guestQuota: 3,
+      guestSessionIdleTimeoutSeconds: 3600,
+    })).resolves.toEqual({ issuanceId: 'issuance_1' });
+
+    expect(inserted).toBe(true);
+    expect(calls.some((call) => call.sql.includes('seat_limits sl'))).toBe(true);
+  });
+
+  it('only applies paid concurrent guest quotas for usable subscriptions', async () => {
+    let capturedSql = '';
+    const pool = {
+      async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
+        capturedSql = sql;
+        expect(params).toEqual(['doc_1', 3]);
+        return { rows: [{ concurrent_guest_edits: '3' } as Row], rowCount: 1 };
+      },
+    };
+
+    await expect(readConcurrentGuestEditQuota(pool, {
+      docId: 'doc_1',
+      fallbackQuota: 3,
+    })).resolves.toBe(3);
+
+    expect(capturedSql).toContain("s.status in ('manual', 'trialing', 'active')");
+    expect(capturedSql).toContain('(s.current_period_end is null or s.current_period_end > now())');
+  });
+
+  it('uses the legacy fallback quota for documents without a workspace', async () => {
+    let capturedSql = '';
+    const pool = {
+      async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
+        capturedSql = sql;
+        expect(params).toEqual(['legacy_doc', 7]);
+        return { rows: [{ concurrent_guest_edits: '7' } as Row], rowCount: 1 };
+      },
+    };
+
+    await expect(readConcurrentGuestEditQuota(pool, {
+      docId: 'legacy_doc',
+      fallbackQuota: 7,
+    })).resolves.toBe(7);
+
+    expect(capturedSql).toContain('case when d.workspace_id is null then $2');
+    expect(capturedSql).toContain('else coalesce(sl.concurrent_guest_edits, $2)');
   });
 });
 
@@ -240,9 +321,13 @@ describe('markProviderTokenIssuanceIssuedIfSessionActive', () => {
     expect(capturedSql).toContain("pending.status = 'pending'");
     expect(capturedSql).toContain('join collab_sessions');
     expect(capturedSql).toContain("s.mode = 'edit'");
+    expect(capturedSql).toContain("s.status = 'active'");
     expect(capturedSql).toContain("pending.actor_type = 'user'");
     expect(capturedSql).toContain("pending.actor_id not like 'share:%'");
     expect(capturedSql).toContain("pending.actor_id not like 'access:%'");
+    expect(capturedSql).toContain('workspace_members m');
+    expect(capturedSql).toContain("m.role in ('Owner', 'Member')");
+    expect(capturedSql).toContain('d.owner_id::text = pending.actor_id');
   });
 
   it('treats any revoked session row as terminal when completing a pending refresh', async () => {
@@ -269,17 +354,68 @@ describe('markProviderTokenIssuanceIssuedIfSessionActive', () => {
     expect(capturedSql).toContain('pending.session_id = $4');
     expect(capturedSql).toContain('from collab_sessions');
     expect(capturedSql).toContain("s.mode = 'edit'");
+    expect(capturedSql).toContain("s.status = 'active'");
     expect(capturedSql).toContain('not exists');
     expect(capturedSql).toContain("revoked.status = 'revoked'");
-    expect(capturedSql).toContain('from access_grants');
-    expect(capturedSql).toContain('from share_links');
+    expect(capturedSql).toContain('from document_access_grants');
+    expect(capturedSql).not.toContain('from share_links');
     expect(capturedSql).toContain('revoked_at is null');
     expect(capturedSql).toContain('expires_at is null or');
     expect(capturedSql).toContain('(g.branch_id = pending.branch_id or g.branch_id is null)');
     expect(capturedSql).toContain("pending.actor_type = 'user'");
     expect(capturedSql).toContain("pending.actor_id not like 'share:%'");
     expect(capturedSql).toContain("pending.actor_id not like 'access:%'");
+    expect(capturedSql).toContain('workspace_members m');
+    expect(capturedSql).toContain("m.role in ('Owner', 'Member')");
+    expect(capturedSql).toContain('d.owner_id::text = pending.actor_id');
     expect(capturedSql).toContain("pending.actor_id in ('admin', 'dev-anonymous')");
     expect(capturedSql).not.toContain('revoked.issued_at >= pending.issued_at');
+  });
+
+  it('classifies provider token issuance denials for refresh errors', async () => {
+    const { providerTokenIssuanceDenyReason } = await import('./provider-doc-service');
+    let capturedSql = '';
+    const pool = {
+      async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
+        capturedSql = sql;
+        expect(params).toEqual(['issuance_1', 'doc_1', 'branch_1', 'session_1']);
+        return { rows: [{ deny_reason: 'grant_revoked' } as Row], rowCount: 1 };
+      },
+    };
+
+    await expect(providerTokenIssuanceDenyReason(pool, {
+      issuanceId: 'issuance_1',
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      sessionId: 'session_1',
+    })).resolves.toBe('grant_revoked');
+
+    expect(capturedSql).toContain('provider_token_issuance_policy_reason');
+    expect(capturedSql).toContain('grant_revoked');
+    expect(capturedSql).toContain('grant_expired');
+    expect(capturedSql).toContain('collab_session_not_found');
+  });
+});
+
+describe('markProviderTokenRefreshIssued', () => {
+  it('links refresh audit rows to the provider token issuance they produced', async () => {
+    let capturedSql = '';
+    let capturedParams: readonly unknown[] = [];
+    const pool = {
+      async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [], rowCount: 1 };
+      },
+    };
+
+    await markProviderTokenRefreshIssued(pool, {
+      refreshId: 'refresh_1',
+      expiresAt: '2026-05-11T00:10:00.000Z',
+      issuanceId: 'issuance_1',
+    });
+
+    expect(capturedParams).toEqual(['refresh_1', '2026-05-11T00:10:00.000Z', 'issuance_1']);
+    expect(capturedSql).toContain('issuance_id = $3');
   });
 });

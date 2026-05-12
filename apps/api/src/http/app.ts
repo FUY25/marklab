@@ -4,6 +4,7 @@ import express, { type ErrorRequestHandler, type NextFunction, type Request, typ
 import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
+import { createAuthRoutes } from '../routes/auth-routes';
 import { createCollabSessionRoutes } from '../routes/collab-session-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
@@ -11,6 +12,7 @@ import { createLocalConflictRoutes } from '../routes/local-conflict-routes';
 import { createLocalFileRoutes } from '../routes/local-file-routes';
 import { createRelayRoutes } from '../routes/relay-routes';
 import { createVersionRoutes } from '../routes/version-routes';
+import { createWorkspaceRoutes } from '../routes/workspace-routes';
 import {
   isAdminToken,
   verifyAdminToken,
@@ -24,6 +26,9 @@ import type { LocalRelayHostController, LocalRelayMirrorController } from '../lo
 import type { RelayRoomService } from '../relay/relay-room-service';
 import type { RelayServerHandle } from '../relay/relay-server';
 import type { ProviderTokenService } from '../provider/ysweet-token-service';
+import { authenticateRequestUser } from '../services/user-service';
+import { requireUserDocumentAccess } from '../services/control-plane-access';
+import type { OidcAuthConfig, OidcExchange } from '../services/oidc-service';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
@@ -45,6 +50,18 @@ export interface HttpAppOptions {
   localRelayMirror?: LocalRelayMirrorController;
   enableLegacyDocAiRoutes?: boolean;
   staticWeb?: StaticWebOptions;
+  authEnvironment?: Partial<HttpAuthEnvironment>;
+  oidcExchange?: OidcExchange;
+}
+
+export interface HttpAuthEnvironment {
+  requireAuth: boolean;
+  devAnonymousAccess: boolean;
+  devAuth: boolean;
+  adminTokenHash: string | undefined;
+  nodeEnv: string | undefined;
+  legacyHostedDocAi: boolean;
+  oidc: OidcAuthConfig | undefined;
 }
 
 export interface HttpHealthOptions {
@@ -83,7 +100,7 @@ export interface CollabSnapshotService {
 }
 
 export interface HttpRequestAuth {
-  requireAdminAccess(req: Request): Promise<void>;
+  requireAdminAccess(req: Request): Promise<VerifiedDocumentAccess | void>;
   requireDocumentAccess(
     req: Request,
     docId: string,
@@ -104,7 +121,7 @@ const defaultCorsOrigins = new Set([
   'http://127.0.0.1:5177',
   'http://localhost:5177',
 ]);
-const corsMethods = 'GET, POST, DELETE, OPTIONS';
+const corsMethods = 'GET, POST, PATCH, DELETE, OPTIONS';
 const corsHeaders = 'content-type, authorization';
 const exposedCorsHeaders = 'content-disposition';
 
@@ -148,6 +165,7 @@ function createCorsMiddleware(input: { allowedOrigins?: readonly string[]; enfor
       res.setHeader('Access-Control-Allow-Methods', corsMethods);
       res.setHeader('Access-Control-Allow-Headers', corsHeaders);
       res.setHeader('Access-Control-Expose-Headers', exposedCorsHeaders);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
     } else if (origin && input.enforceAllowedOrigins) {
       res.status(403).json({ error: 'origin_not_allowed' });
       return;
@@ -219,7 +237,29 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
     try {
       const schemaColumns = input.schemaColumns ?? {};
       const tables = Array.from(new Set([
-        ...(input.schemaTables ?? ['relay_rooms', 'relay_access_grants', 'relay_access_sessions']),
+        ...(input.schemaTables ?? [
+          'users',
+          'user_sessions',
+          'oidc_login_states',
+          'workspaces',
+          'workspace_members',
+          'workspace_share_keys',
+          'workspace_folders',
+          'folder_access_policies',
+          'plans',
+          'seat_limits',
+          'subscriptions',
+          'document_access_grants',
+          'document_access_sessions',
+          'share_links',
+          'relay_rooms',
+          'relay_access_grants',
+          'relay_access_sessions',
+          'document_branch_states',
+          'collab_sessions',
+          'provider_token_issuances',
+          'provider_token_refreshes',
+        ]),
         ...Object.keys(schemaColumns),
       ]));
       const result = await pool.query<{ table_name: string }>(
@@ -267,12 +307,35 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
   };
 }
 
-function authRequired(): boolean {
-  return process.env.MARKLAB_REQUIRE_AUTH === 'true';
+function readAuthEnvironment(input: Partial<HttpAuthEnvironment> = {}): HttpAuthEnvironment {
+  const oidc = input.oidc ?? readOidcEnvironment();
+  const nodeEnv = input.nodeEnv ?? process.env.NODE_ENV;
+  const requestedDevAuth = input.devAuth ?? process.env.MARKLAB_ENABLE_DEV_AUTH === 'true';
+  return {
+    requireAuth: input.requireAuth ?? process.env.MARKLAB_REQUIRE_AUTH === 'true',
+    devAnonymousAccess: input.devAnonymousAccess ?? process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB === 'true',
+    devAuth: nodeEnv === 'production' ? false : requestedDevAuth,
+    adminTokenHash: input.adminTokenHash ?? process.env.MARKLAB_ADMIN_TOKEN_HASH,
+    nodeEnv,
+    legacyHostedDocAi: input.legacyHostedDocAi ?? process.env.MARKLAB_ENABLE_LEGACY_DOC_AI === 'true',
+    oidc,
+  };
 }
 
-function legacyHostedDocAiEnabled(): boolean {
-  return process.env.MARKLAB_ENABLE_LEGACY_DOC_AI === 'true';
+function readOidcEnvironment(): OidcAuthConfig | undefined {
+  const issuer = process.env.MARKLAB_OIDC_ISSUER;
+  const clientId = process.env.MARKLAB_OIDC_CLIENT_ID;
+  const clientSecret = process.env.MARKLAB_OIDC_CLIENT_SECRET;
+  const redirectUri = process.env.MARKLAB_OIDC_REDIRECT_URI;
+  const authorizationEndpoint = process.env.MARKLAB_OIDC_AUTHORIZATION_ENDPOINT;
+  if (!issuer || !clientId || !clientSecret || !redirectUri) return undefined;
+  return {
+    issuer,
+    clientId,
+    clientSecret,
+    redirectUri,
+    ...(authorizationEndpoint ? { authorizationEndpoint } : {}),
+  };
 }
 
 function bearerToken(req: Request): string | undefined {
@@ -286,16 +349,36 @@ function documentToken(req: Request): string | undefined {
   return bearerToken(req);
 }
 
-function createRequestAuth(pool: DbPool): HttpRequestAuth {
+function createRequestAuth(pool: DbPool, authEnvironment: HttpAuthEnvironment): HttpRequestAuth {
   return {
     async requireAdminAccess(req: Request) {
-      if (!authRequired()) return;
-      verifyAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
+      if (!authEnvironment.requireAuth && authEnvironment.devAnonymousAccess) return { actorType: 'user', actorId: 'dev-anonymous' };
+      verifyAdminToken(bearerToken(req), authEnvironment.adminTokenHash);
+      return { actorType: 'user', actorId: 'admin', canManageAccess: true };
     },
     async requireDocumentAccess(req: Request, docId: string, branchId: string, operation: AccessOperation) {
-      if (!authRequired()) return { actorType: 'user', actorId: 'dev-anonymous' };
+      if (!authEnvironment.requireAuth && authEnvironment.devAnonymousAccess) return { actorType: 'user', actorId: 'dev-anonymous' };
       const token = documentToken(req);
-      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return { actorType: 'user', actorId: 'admin' };
+      if (isAdminToken(bearerToken(req), authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
+      const user = await authenticateRequestUser(pool, req);
+      if (user) {
+        try {
+          return await requireUserDocumentAccess(pool, { userId: user.userId, docId, branchId, operation });
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'forbidden') throw error;
+          if (operation === 'write') {
+            let hasReadAccess = false;
+            try {
+              await requireUserDocumentAccess(pool, { userId: user.userId, docId, branchId, operation: 'read' });
+              hasReadAccess = true;
+            } catch (readError) {
+              if (!(readError instanceof Error) || readError.message !== 'forbidden') throw readError;
+            }
+            if (hasReadAccess) throw new Error('forbidden');
+          }
+        }
+      }
+      if (isAdminToken(token, authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
       return verifyDocumentAccess(pool, token, docId, branchId, operation);
     },
   };
@@ -332,6 +415,55 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'dev_auth_disabled') {
+    res.status(403).json({ error: 'dev_auth_disabled' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'oidc_not_configured') {
+    res.status(503).json({ error: 'oidc_not_configured' });
+    return;
+  }
+
+  if (
+    error instanceof Error
+    && (
+      error.message === 'oidc_discovery_failed'
+      || error.message === 'oidc_code_exchange_failed'
+      || error.message === 'oidc_userinfo_failed'
+      || error.message === 'oidc_issuer_mismatch'
+      || error.message === 'oidc_insecure_endpoint'
+      || error.message === 'oidc_login_state_invalid'
+      || error.message === 'oidc_unverified_email'
+      || error.message === 'oidc_missing_token_endpoint'
+      || error.message === 'oidc_missing_userinfo_endpoint'
+      || error.message === 'oidc_missing_authorization_endpoint'
+    )
+  ) {
+    res.status(401).json({ error: 'oidc_login_failed' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'oidc_invalid_claims') {
+    res.status(400).json({ error: 'oidc_invalid_claims' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'unauthorized') {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'invalid_email') {
+    res.status(400).json({ error: 'invalid_email' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'email_already_linked') {
+    res.status(409).json({ error: 'email_already_linked' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'provider_token_service_not_configured') {
     res.status(503).json({ error: 'provider_token_service_not_configured' });
     return;
@@ -354,6 +486,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   if (error instanceof Error && error.message === 'guest_session_quota_exceeded') {
     res.status(429).json({ error: 'guest_session_quota_exceeded' });
+    return;
+  }
+
+  if (error instanceof Error && (error.message === 'grant_revoked' || error.message === 'grant_expired' || error.message === 'provider_token_revoked')) {
+    res.status(403).json({ error: error.message });
     return;
   }
 
@@ -399,6 +536,31 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   if (error instanceof Error && error.message === 'access_grant_not_found') {
     res.status(404).json({ error: 'access_grant_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'workspace_share_key_not_found') {
+    res.status(404).json({ error: 'workspace_share_key_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'workspace_not_found') {
+    res.status(404).json({ error: 'workspace_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'workspace_member_not_found') {
+    res.status(404).json({ error: 'workspace_member_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'member_seat_limit_exceeded') {
+    res.status(429).json({ error: 'member_seat_limit_exceeded' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'last_owner_required') {
+    res.status(409).json({ error: 'last_owner_required' });
     return;
   }
 
@@ -494,7 +656,8 @@ function mountStaticWeb(app: express.Express, staticWeb: StaticWebOptions | unde
 
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
-  const routeOptions = { ...options, auth: options.auth ?? createRequestAuth(pool) };
+  const authEnvironment = readAuthEnvironment(options.authEnvironment);
+  const routeOptions = { ...options, authEnvironment, auth: options.auth ?? createRequestAuth(pool, authEnvironment) };
   const relayRouteOptions: Parameters<typeof createRelayRoutes>[0] = {};
   if (options.relayService) relayRouteOptions.relayService = options.relayService;
   if (options.relayServer) relayRouteOptions.relayServer = options.relayServer;
@@ -520,12 +683,18 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
     app.use('/api', createRelayRoutes(relayRouteOptions));
   } else {
+    app.use('/api', createAuthRoutes(pool, {
+      devAuthEnabled: authEnvironment.devAuth,
+      cookieSecure: authEnvironment.nodeEnv === 'production',
+      ...(authEnvironment.oidc ? { oidcConfig: authEnvironment.oidc } : {}),
+      ...(options.oidcExchange ? { oidcExchange: options.oidcExchange } : {}),
+    }));
+    app.use('/api', createWorkspaceRoutes(pool));
     app.use('/api', createAccessRoutes(pool, routeOptions));
-    if (options.enableLegacyDocAiRoutes ?? legacyHostedDocAiEnabled()) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
+    if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
     app.use('/api', createImportExportRoutes(pool, routeOptions));
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
     app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
-    app.use('/api', createRelayRoutes(relayRouteOptions));
     app.use('/api', createCollabSessionRoutes(pool, routeOptions));
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }

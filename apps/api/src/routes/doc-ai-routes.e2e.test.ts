@@ -116,7 +116,7 @@ function createFakePool(options: FakePoolOptions = {}) {
       };
     }
 
-    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+    if (sql.includes('from document_access_grants') && sql.includes('token_hash = $1')) {
       const [tokenHash, docId, branchId] = params ?? [];
       return {
         rows: (options.accessGrants ?? [])
@@ -394,7 +394,7 @@ describe('doc AI routes minimal transaction e2e', () => {
   it('flushes live state and creates an autosave version before read_doc returns version and hash', async () => {
     const runtime = createHeadlessMilkdownRuntime();
     const seeded = await runtime.initializeFromMarkdown('# Human live edit\n');
-    const { pool } = createFakePool({
+    const { pool, queries } = createFakePool({
       currentMarkdown: seeded.markdown,
       currentHash: seeded.hash,
       currentVersionId: 'ver_001',
@@ -403,7 +403,17 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: seeded.yjsState,
       versionIds: ['ver_002'],
     });
-    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const operations: string[] = [];
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool), {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId }).toEqual({ docId: 'doc_001', branchId: 'br_main' });
+          operations.push(operation);
+          return { actorType: 'user', actorId: 'user_reader' };
+        },
+      },
+    });
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
 
@@ -411,6 +421,54 @@ describe('doc AI routes minimal transaction e2e', () => {
     expect(response.body.versionNumber).toBe(2);
     expect(response.body.hash).toBe(seeded.hash);
     expect(response.body.markdown).toBe(seeded.markdown);
+    expect(operations).toEqual(['read', 'write']);
+    const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInsert?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_001',
+      2,
+      seeded.markdown,
+      seeded.hash,
+      'user',
+      'user_reader',
+      'autosave',
+    ]);
+  });
+
+  it('does not create an autosave version for read-only read_doc access', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('# Reader live view\n');
+    const { pool, queries } = createFakePool({
+      currentMarkdown: seeded.markdown,
+      currentHash: seeded.hash,
+      currentVersionId: 'ver_001',
+      currentVersionNumber: 1,
+      headHash: 'sha256:old',
+      yjsState: seeded.yjsState,
+      versionIds: ['ver_002'],
+    });
+    const operations: string[] = [];
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool), {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId }).toEqual({ docId: 'doc_001', branchId: 'br_main' });
+          operations.push(operation);
+          if (operation === 'write') throw new Error('forbidden');
+          return { actorType: 'user', actorId: 'user_reader' };
+        },
+      },
+    });
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/read').expect(200);
+
+    expect(response.body.versionId).toBe('ver_001');
+    expect(response.body.versionNumber).toBe(1);
+    expect(response.body.hash).toBe(seeded.hash);
+    expect(response.body.markdown).toBe(seeded.markdown);
+    expect(operations).toEqual(['read', 'write']);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
   });
 
   it('persists the live transaction serialization rather than the requested full-write markdown', async () => {
@@ -466,7 +524,7 @@ describe('doc AI routes minimal transaction e2e', () => {
       2,
       expectedMarkdown,
       expectedHash,
-      'agent',
+      'user',
       null,
       'write',
     ]);
@@ -480,7 +538,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createDocAiTestApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_member' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -513,7 +583,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createDocAiTestApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_member' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -526,8 +608,8 @@ describe('doc AI routes minimal transaction e2e', () => {
 
     expect(response.body).toEqual({ versionId: 'ver_012', versionNumber: 12, hash: expectedHash });
     expect(versionInserts.map((query) => query.params)).toEqual([
-      ['doc_001', 'br_main', 'ver_010', 11, '# Human draft\n', 'sha256:dirty', 'system', null, 'autosave'],
-      ['doc_001', 'br_main', 'ver_011', 12, expectedMarkdown, expectedHash, 'agent', null, 'write'],
+      ['doc_001', 'br_main', 'ver_010', 11, '# Human draft\n', 'sha256:dirty', 'user', 'user_member', 'autosave'],
+      ['doc_001', 'br_main', 'ver_011', 12, expectedMarkdown, expectedHash, 'user', 'user_member', 'write'],
     ]);
   });
 
@@ -544,7 +626,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: live.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool), {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'agent', actorId: 'agent:edit-token' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -568,7 +662,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       yjsState: live.yjsState,
       versionIds: ['ver_002', 'ver_003'],
     });
-    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool));
+    const app = createDocAiTestApp(pool, createPostgresLiveMarkdownWriter(pool), {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'agent', actorId: 'agent:edit-token' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -581,8 +687,8 @@ describe('doc AI routes minimal transaction e2e', () => {
 
     expect(response.body).toEqual({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
     expect(versionInserts.map((query) => query.params)).toEqual([
-      ['doc_001', 'br_main', 'ver_001', 2, live.markdown, live.hash, 'system', null, 'autosave'],
-      ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'edit'],
+      ['doc_001', 'br_main', 'ver_001', 2, live.markdown, live.hash, 'agent', 'agent:edit-token', 'autosave'],
+      ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', 'agent:edit-token', 'edit'],
     ]);
   });
 
@@ -595,7 +701,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createDocAiTestApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_editor' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/write')
@@ -710,7 +828,19 @@ describe('doc AI routes minimal transaction e2e', () => {
       changedRangeCount: 1,
       appliedTransactionCount: 1,
     });
-    const app = createDocAiTestApp(pool, liveWriter);
+    const app = createDocAiTestApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {},
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_editor' };
+        },
+      },
+    });
 
     const response = await request(app)
       .post('/api/docs/doc_001/branches/br_main/edit')
@@ -748,8 +878,8 @@ describe('doc AI routes minimal transaction e2e', () => {
       2,
       expectedMarkdown,
       expectedHash,
-      'agent',
-      null,
+      'user',
+      'user_editor',
       'edit',
     ]);
   });

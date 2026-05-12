@@ -113,4 +113,31 @@ describe('runtime-backed milkdown transformer', () => {
       'manual_save',
     ]);
   });
+
+  it('records supplied validated actor identity when creating a dirty live-state version', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const seeded = await runtime.initializeFromMarkdown('# Member live\n');
+    const { pool, queries } = createFlushPool({
+      yjsState: seeded.yjsState,
+      headHash: 'sha256:old',
+    });
+
+    await flushBranchMarkdownMirror(pool, 'doc_001', 'br_main', 'manual_save', {
+      actorType: 'user',
+      actorId: 'user_member',
+    });
+
+    const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInsert?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_001',
+      2,
+      seeded.markdown,
+      seeded.hash,
+      'user',
+      'user_member',
+      'manual_save',
+    ]);
+  });
 });

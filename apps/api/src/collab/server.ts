@@ -46,6 +46,7 @@ export interface CreateCollabServerOptions {
 
 export function createCollabServer(pool: DbPool, options: CreateCollabServerOptions = {}) {
   const requireAuth = process.env.MARKLAB_REQUIRE_AUTH === 'true';
+  const devAnonymousAccess = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB === 'true';
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
   const activeDocumentByRoomName = new Map<string, Y.Doc>();
   const applyingLocalStoreUpdate = new WeakSet<Y.Doc>();
@@ -203,7 +204,7 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
         return;
       }
       assertLocalRoomAllowed(documentName);
-      if (!requireAuth) return;
+      if (!requireAuth && devAnonymousAccess) return;
       parseRoomName(documentName);
       throw new Error('forbidden');
     },

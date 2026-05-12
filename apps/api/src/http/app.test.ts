@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { DbPool } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createHttpApp, type HttpHealthOptions } from './app';
+import { createInMemoryRelayRoomService } from '../relay/relay-room-service';
 
 function createLocalOnlyPool(): DbPool {
   async function unavailable(): Promise<never> {
@@ -87,6 +88,28 @@ describe('http app hosted web serving', () => {
 
     await request(app).get('/healthz').expect(200);
     await request(app).get('/api/not-a-real-route').expect(404);
+  });
+
+  it('does not mount legacy relay API routes in the hosted control-plane app', async () => {
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      relayService: createInMemoryRelayRoomService(),
+    });
+
+    await request(app)
+      .post('/api/relay/rooms')
+      .send({ hostSessionId: 'host_1', hostAuthToken: 'host_secret' })
+      .expect(404);
+  });
+
+  it('allows credentialed cookie auth from configured web origins', async () => {
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .options('/api/auth/session')
+      .set('Origin', 'http://localhost:5173')
+      .expect(204)
+      .expect('Access-Control-Allow-Origin', 'http://localhost:5173')
+      .expect('Access-Control-Allow-Credentials', 'true');
   });
 
   it('mounts provider document proxy routes before the single-page app fallback', async () => {
@@ -230,9 +253,31 @@ describe('http app readiness', () => {
   it('returns 503 when provider schema tables or columns are missing', async () => {
     const app = createHttpApp(
       createSchemaPool({
-        tables: ['relay_rooms', 'relay_access_grants', 'relay_access_sessions', 'document_branch_states', 'collab_sessions'],
+        tables: [
+          'users',
+          'user_sessions',
+          'workspaces',
+          'workspace_members',
+          'workspace_share_keys',
+          'workspace_folders',
+          'folder_access_policies',
+          'plans',
+          'seat_limits',
+          'subscriptions',
+          'document_access_sessions',
+          'share_links',
+          'relay_rooms',
+          'relay_access_grants',
+          'relay_access_sessions',
+          'document_branch_states',
+          'collab_sessions',
+          'provider_token_issuances',
+          'provider_token_refreshes',
+        ],
         columns: {
           document_branch_states: ['provider_doc_id'],
+          document_access_sessions: ['actor_id'],
+          provider_token_refreshes: ['session_id', 'denied_at', 'deny_reason'],
         },
       }),
       createUnavailableLiveMarkdownWriter(),
@@ -247,9 +292,35 @@ describe('http app readiness', () => {
             serverUrl: 'http://127.0.0.1:8080',
             error: null,
           }),
-          schemaTables: ['relay_rooms', 'relay_access_grants', 'relay_access_sessions', 'document_branch_states', 'collab_sessions', 'provider_token_issuances'],
+          schemaTables: [
+            'users',
+            'user_sessions',
+            'oidc_login_states',
+            'workspaces',
+            'workspace_members',
+            'workspace_share_keys',
+            'workspace_folders',
+            'folder_access_policies',
+            'plans',
+            'seat_limits',
+            'subscriptions',
+            'document_access_grants',
+            'document_access_sessions',
+            'share_links',
+            'relay_rooms',
+            'relay_access_grants',
+            'relay_access_sessions',
+            'document_branch_states',
+            'collab_sessions',
+            'provider_token_issuances',
+            'provider_token_refreshes',
+          ],
           schemaColumns: {
+            document_access_grants: ['workspace_id', 'folder_id', 'created_by_user_id', 'grant_kind'],
+            document_access_sessions: ['doc_id', 'branch_id', 'actor_kind', 'actor_id'],
             document_branch_states: ['provider_doc_id', 'provider_doc_seeded_at'],
+            provider_token_issuances: ['workspace_id', 'folder_id'],
+            provider_token_refreshes: ['session_id', 'issued_at', 'expires_at', 'denied_at', 'deny_reason'],
           },
         },
       },
@@ -264,7 +335,18 @@ describe('http app readiness', () => {
           schema: {
             required: true,
             ready: false,
-            missing: ['provider_token_issuances', 'document_branch_states.provider_doc_seeded_at'],
+            missing: [
+              'oidc_login_states',
+              'document_access_grants',
+              'document_access_sessions.doc_id',
+              'document_access_sessions.branch_id',
+              'document_access_sessions.actor_kind',
+              'document_branch_states.provider_doc_seeded_at',
+              'provider_token_issuances.workspace_id',
+              'provider_token_issuances.folder_id',
+              'provider_token_refreshes.issued_at',
+              'provider_token_refreshes.expires_at',
+            ],
           },
         });
       });

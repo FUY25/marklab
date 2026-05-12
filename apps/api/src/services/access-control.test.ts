@@ -52,26 +52,33 @@ function createAccessPool(rows: { agentTokens?: AccessRow[]; shareLinks?: Access
       return { rows: (rows.shareLinks ?? []).filter(matches) as Row[], rowCount: rows.shareLinks?.length ?? 0 };
     }
 
-    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+    if (sql.includes('from document_access_grants') && sql.includes('token_hash = $1')) {
+      const allowDocumentWideGrant = sql.includes('g.branch_id = $3 or g.branch_id is null');
       const grants = (rows.accessGrants ?? []).filter(
-        (row) => matches(row) && (row.branch_doc_id === undefined || row.branch_doc_id === row.doc_id),
+        (row) => row.token_hash === tokenHash &&
+          row.doc_id === docId &&
+          (row.branch_id === branchId || (allowDocumentWideGrant && row.branch_id === null)) &&
+          (row.branch_doc_id === undefined || row.branch_doc_id === row.doc_id),
       );
       return { rows: grants as Row[], rowCount: grants.length };
     }
 
-    if (sql.includes('select id') && sql.includes('from access_grants') && sql.includes('for update')) {
+    if (sql.includes('select id') && sql.includes('from document_access_grants') && sql.includes('for update')) {
+      const allowDocumentWideGrant = sql.includes('branch_id = $3 or branch_id is null');
       const grant = (rows.accessGrants ?? []).find(
-        (row) => row.id === params?.[0] && row.doc_id === params?.[1] && row.branch_id === params?.[2],
+        (row) => row.id === params?.[0] &&
+          row.doc_id === params?.[1] &&
+          (row.branch_id === params?.[2] || (allowDocumentWideGrant && row.branch_id === null)),
       );
       return { rows: (grant ? [grant] : []) as Row[], rowCount: grant ? 1 : 0 };
     }
 
-    if (sql.includes('from access_sessions') && sql.includes('grant_id = $1') && sql.includes('client_id = $2')) {
+    if (sql.includes('from document_access_sessions') && sql.includes('grant_id = $1') && sql.includes('client_id = $2')) {
       const session = (rows.accessSessions ?? []).find((row) => row.id && row.id === params?.[0]);
       return { rows: (session ? [session] : []) as Row[], rowCount: session ? 1 : 0 };
     }
 
-    if (sql.includes('from access_sessions') && sql.includes('display_name like')) {
+    if (sql.includes('from document_access_sessions') && sql.includes('display_name like')) {
       const grantId = params?.[0];
       return {
         rows: (rows.accessSessions ?? []).filter((row) => row.token_hash === grantId && row.display_name?.startsWith('Guest ')) as Row[],
@@ -79,17 +86,17 @@ function createAccessPool(rows: { agentTokens?: AccessRow[]; shareLinks?: Access
       };
     }
 
-    if (sql.includes('insert into access_sessions')) {
+    if (sql.includes('insert into document_access_sessions')) {
       const session: AccessRow = {
         id: `ses_${nextSessionId++}`,
         token_hash: String(params?.[0]),
-        doc_id: '',
-        branch_id: null,
-        client_id: String(params?.[1]),
-        client_kind: params?.[2] as 'browser' | 'agent' | 'api',
-        display_name: String(params?.[3]),
-        color: String(params?.[4]),
-        last_branch_id: String(params?.[5]),
+        doc_id: String(params?.[1]),
+        branch_id: String(params?.[2]),
+        client_id: String(params?.[3]),
+        client_kind: params?.[4] as 'browser' | 'agent' | 'api',
+        display_name: String(params?.[5]),
+        color: String(params?.[6]),
+        last_branch_id: String(params?.[7]),
         created_at: new Date('2026-05-01T12:00:00Z'),
         last_seen_at: new Date('2026-05-01T12:00:00Z'),
       };
@@ -97,12 +104,14 @@ function createAccessPool(rows: { agentTokens?: AccessRow[]; shareLinks?: Access
       return { rows: [session as Row], rowCount: 1 };
     }
 
-    if (sql.includes('update access_sessions')) {
+    if (sql.includes('update document_access_sessions')) {
       const session = (rows.accessSessions ?? []).find((row) => row.token_hash === params?.[0] && row.client_id === params?.[1]);
       if (!session) return { rows: [], rowCount: 0 };
-      const nextName = String(params?.[3] ?? '').trim();
+      session.doc_id = String(params?.[2]);
+      session.branch_id = String(params?.[3]);
+      const nextName = String(params?.[4] ?? '').trim();
       if (nextName) session.display_name = nextName;
-      session.last_branch_id = String(params?.[2]);
+      session.last_branch_id = String(params?.[3]);
       session.last_seen_at = new Date('2026-05-01T12:05:00Z');
       return { rows: [session as Row], rowCount: 1 };
     }
@@ -207,7 +216,7 @@ describe('access-control service', () => {
     await expect(verifyDocumentAccess(pool, readOnlyToken, 'doc_001', 'br_main', 'write')).rejects.toThrow('forbidden');
   });
 
-  it('treats view share links as read-only and edit share links as write-capable', async () => {
+  it('does not accept legacy share_links directly after migration to document grants', async () => {
     const viewToken = generateShareToken();
     const editToken = generateShareToken();
     const pool = createAccessPool({
@@ -229,19 +238,9 @@ describe('access-control service', () => {
       ],
     });
 
-    await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'read')).resolves.toEqual({
-      actorType: 'user',
-      actorId: `share:${hashToken(viewToken)}`,
-      grantId: 'share_view',
-      role: 'view',
-    });
+    await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'read')).rejects.toThrow('forbidden');
     await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'write')).rejects.toThrow('forbidden');
-    await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_main', 'write')).resolves.toEqual({
-      actorType: 'user',
-      actorId: `share:${hashToken(editToken)}`,
-      grantId: 'share_edit',
-      role: 'edit',
-    });
+    await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_main', 'write')).rejects.toThrow('forbidden');
   });
 
   it('accepts access grants only for the exact shared document branch and role', async () => {
@@ -280,6 +279,68 @@ describe('access-control service', () => {
       actorId: `access:${hashToken(editToken)}`,
       grantId: 'grant_edit',
       role: 'edit',
+    });
+  });
+
+  it('treats share-prefixed document access grants as guest share actors', async () => {
+    const editToken = generateShareToken();
+    const pool = createAccessPool({
+      accessGrants: [
+        {
+          id: 'share_grant_edit',
+          token_hash: hashToken(editToken),
+          doc_id: 'doc_001',
+          branch_id: 'br_main',
+          role: 'edit',
+        },
+      ],
+    });
+
+    await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_main', 'write')).resolves.toEqual({
+      actorType: 'user',
+      actorId: `share:${hashToken(editToken)}`,
+      grantId: 'share_grant_edit',
+      grantSource: 'document_access_grants',
+      role: 'edit',
+    });
+  });
+
+  it('preserves migrated document-wide share grants across branches', async () => {
+    const editToken = generateShareToken();
+    const pool = createAccessPool({
+      accessGrants: [
+        {
+          id: 'share_grant_document_wide',
+          token_hash: hashToken(editToken),
+          doc_id: 'doc_001',
+          branch_id: null,
+          role: 'edit',
+        },
+      ],
+      accessSessions: [],
+    });
+
+    await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_other', 'write')).resolves.toEqual({
+      actorType: 'user',
+      actorId: `share:${hashToken(editToken)}`,
+      grantId: 'share_grant_document_wide',
+      grantSource: 'document_access_grants',
+      role: 'edit',
+    });
+
+    await expect(
+      createOrUpdateAccessSession(pool, {
+        grantId: 'share_grant_document_wide',
+        docId: 'doc_001',
+        branchId: 'br_other',
+        clientId: 'browser_document_wide',
+        clientKind: 'browser',
+        displayName: 'Branch Guest',
+      }),
+    ).resolves.toMatchObject({
+      sessionId: 'ses_1',
+      grantId: 'share_grant_document_wide',
+      lastBranchId: 'br_other',
     });
   });
 
@@ -323,6 +384,7 @@ describe('access-control service', () => {
   });
 
   it('creates named and blank access sessions with stable identity per grant and client', async () => {
+    const accessSessions: AccessRow[] = [];
     const pool = createAccessPool({
       accessGrants: [
         {
@@ -333,7 +395,7 @@ describe('access-control service', () => {
           role: 'edit',
         },
       ],
-      accessSessions: [],
+      accessSessions,
     });
 
     await expect(
@@ -385,5 +447,10 @@ describe('access-control service', () => {
       displayName: 'Blair',
     });
     expect(repeat).toMatchObject({ sessionId: 'ses_1', displayName: 'Blair', lastBranchId: 'br_main' });
+    expect(accessSessions).toEqual([
+      expect.objectContaining({ doc_id: 'doc_001', branch_id: 'br_main', last_branch_id: 'br_main' }),
+      expect.objectContaining({ doc_id: 'doc_001', branch_id: 'br_main', last_branch_id: 'br_main' }),
+      expect.objectContaining({ doc_id: 'doc_001', branch_id: 'br_main', last_branch_id: 'br_main' }),
+    ]);
   });
 });

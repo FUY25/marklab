@@ -1,6 +1,7 @@
 import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { initializeBranchEditorState } from './milkdown-transformer';
+import type { VersionActorType } from './version-service';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface CreateDocInput {
@@ -8,6 +9,11 @@ export interface CreateDocInput {
   title: string;
   markdown: string;
   operation: 'create' | 'import';
+  actorType: VersionActorType;
+  actorId?: string | undefined;
+  ownerUserId?: string | undefined;
+  workspaceId?: string | undefined;
+  folderId?: string | undefined;
 }
 
 export interface CreateDocResult {
@@ -26,9 +32,18 @@ export async function createDoc(input: CreateDocInput): Promise<CreateDocResult>
   const initialized = await initializeBranchEditorState(input.markdown);
 
   return withTransaction(input.pool, async (client) => {
-    const doc = await client.query<{ id: string }>('insert into documents (title) values ($1) returning id', [
-      input.title,
-    ]);
+    const doc = await client.query<{ id: string }>(
+      `insert into documents
+         (title, owner_id, workspace_id, folder_id)
+       values ($1, $2, $3, $4)
+      returning id`,
+      [
+        input.title,
+        input.ownerUserId ?? null,
+        input.workspaceId ?? null,
+        input.folderId ?? null,
+      ],
+    );
     const docId = requiredId(doc.rows[0]?.id, 'document');
 
     const branch = await client.query<{ id: string }>(
@@ -53,10 +68,10 @@ export async function createDoc(input: CreateDocInput): Promise<CreateDocResult>
 
     const version = await client.query<{ id: string }>(
       `insert into document_versions
-         (doc_id, branch_id, version_number, markdown_snapshot, hash, actor_type, operation)
-       values ($1, $2, 1, $3, $4, 'user', $5)
+         (doc_id, branch_id, version_number, markdown_snapshot, hash, actor_type, actor_id, operation)
+       values ($1, $2, 1, $3, $4, $5, $6, $7)
        returning id`,
-      [docId, branchId, initialized.markdown, initialized.hash, input.operation],
+      [docId, branchId, initialized.markdown, initialized.hash, input.actorType, input.actorId ?? null, input.operation],
     );
     const versionId = requiredId(version.rows[0]?.id, 'document_version');
 

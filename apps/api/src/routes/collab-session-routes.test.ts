@@ -6,6 +6,7 @@ import { createHttpApp, type HttpRequestAuth } from '../http/app';
 import { PROVIDER_TOKEN_TTL_SECONDS } from '../config/provider-token-policy';
 import type { ProviderTokenService } from '../provider/ysweet-token-service';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
+import { generateAccessToken, generateShareToken, hashToken } from '../services/access-control';
 
 const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
 const originalDevAnonymousCollab = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
@@ -35,47 +36,68 @@ function createPool(input: {
   activeSessionIsGuest?: boolean;
   deleteBeforeMarkIssued?: boolean;
   activeGuestSessions?: number;
+  guestQuota?: number;
   revokeDuringRefresh?: boolean;
   missingCollabSession?: boolean;
+  providerPolicyDenyReason?: 'collab_session_not_found' | 'forbidden' | 'grant_revoked' | 'grant_expired' | 'provider_token_revoked';
   missingBranchState?: boolean;
   initialProviderDocId?: string | null;
   initialProviderDocSeededAt?: string | null;
   failSeedMarkOnce?: boolean;
-} = {}): DbPool & {
-  collabSessions: readonly (readonly unknown[])[];
-  collabSessionTouches: readonly (readonly unknown[])[];
-  collabSessionDeletes: readonly (readonly unknown[])[];
-  providerDocSeedMarks: readonly (readonly unknown[])[];
-  issuances: readonly (readonly unknown[])[];
-  statusUpdates: readonly (readonly unknown[])[];
-} {
+	  documentAccessGrantTokenHash?: string;
+	  documentAccessGrantRole?: 'view' | 'edit';
+	  documentAccessGrantRevoked?: boolean;
+	  documentAccessGrantExpired?: boolean;
+  readerMemberRole?: 'Owner' | 'Member' | 'Reader' | null;
+	  legacyShareTokenHash?: string;
+	  legacyShareRole?: 'view' | 'edit';
+	} = {}): DbPool & {
+	  collabSessions: readonly (readonly unknown[])[];
+	  documentAccessSessions: readonly (readonly unknown[])[];
+	  collabSessionTouches: readonly (readonly unknown[])[];
+  collabSessionFailures: readonly (readonly unknown[])[];
+	  providerDocSeedMarks: readonly (readonly unknown[])[];
+	  issuances: readonly (readonly unknown[])[];
+	  statusUpdates: readonly (readonly unknown[])[];
+	  refreshAttempts: readonly (readonly unknown[])[];
+	  refreshIssued: readonly (readonly unknown[])[];
+	  refreshDenied: readonly (readonly unknown[])[];
+	} {
   const serverSessionId = 'session_server';
   let providerDocId = Object.hasOwn(input, 'initialProviderDocId') ? input.initialProviderDocId ?? null : 'ml_doc_existing';
   let providerDocSeededAt = providerDocId
     ? Object.hasOwn(input, 'initialProviderDocSeededAt') ? input.initialProviderDocSeededAt ?? null : '2026-05-11T00:00:00.000Z'
     : null;
   let seedMarkFailuresRemaining = input.failSeedMarkOnce ? 1 : 0;
-  const collabSessions: (readonly unknown[])[] = [];
-  const collabSessionTouches: (readonly unknown[])[] = [];
-  const collabSessionDeletes: (readonly unknown[])[] = [];
-  const providerDocSeedMarks: (readonly unknown[])[] = [];
-  const issuances: (readonly unknown[])[] = [];
-  const statusUpdates: (readonly unknown[])[] = [];
+	  const collabSessions: (readonly unknown[])[] = [];
+	  const documentAccessSessions: (readonly unknown[])[] = [];
+	  const collabSessionTouches: (readonly unknown[])[] = [];
+  const collabSessionFailures: (readonly unknown[])[] = [];
+	  const providerDocSeedMarks: (readonly unknown[])[] = [];
+	  const issuances: (readonly unknown[])[] = [];
+	  const statusUpdates: (readonly unknown[])[] = [];
+	  const refreshAttempts: (readonly unknown[])[] = [];
+	  const refreshIssued: (readonly unknown[])[] = [];
+	  const refreshDenied: (readonly unknown[])[] = [];
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
     params?: readonly unknown[],
   ): Promise<DbQueryResult<Row>> => {
-    if (/insert into collab_sessions/u.test(sql)) {
-      collabSessions.push(params ?? []);
-      return { rows: [{ id: params?.[0] } as Row], rowCount: 1 };
+	    if (/insert into collab_sessions/u.test(sql)) {
+	      collabSessions.push(params ?? []);
+	      return { rows: [{ id: params?.[0] } as Row], rowCount: 1 };
+	    }
+	    if (/insert into document_access_sessions/u.test(sql)) {
+	      documentAccessSessions.push(params ?? []);
+	      return { rows: [], rowCount: 1 };
+	    }
+    if (/update collab_sessions/u.test(sql) && /status = 'failed'/u.test(sql)) {
+      collabSessionFailures.push(params ?? []);
+      return { rows: [], rowCount: input.missingCollabSession ? 0 : 1 };
     }
     if (/update collab_sessions/u.test(sql)) {
       collabSessionTouches.push(params ?? []);
       return { rows: [], rowCount: input.missingCollabSession ? 0 : 1 };
-    }
-    if (/delete from collab_sessions/u.test(sql)) {
-      collabSessionDeletes.push(params ?? []);
-      return { rows: [], rowCount: 1 };
     }
     if (/update document_branch_states[\s\S]+provider_doc_seeded_at = now/u.test(sql)) {
       if (seedMarkFailuresRemaining > 0) {
@@ -91,15 +113,93 @@ function createPool(input: {
       providerDocSeededAt = null;
       return { rows: [{ provider_doc_id: providerDocId, provider_doc_seeded_at: providerDocSeededAt, yjs_state: Buffer.from([1, 2, 3]) } as Row], rowCount: 1 };
     }
-    if (/insert into provider_token_issuances/u.test(sql)) {
-      if (input.failAuditInsert) throw new Error('audit_insert_failed');
-      issuances.push(params ?? []);
-      return { rows: [{ id: `issuance_${issuances.length}` } as Row], rowCount: 1 };
-    }
+	    if (/insert into provider_token_issuances/u.test(sql)) {
+	      if (input.failAuditInsert) throw new Error('audit_insert_failed');
+	      issuances.push(params ?? []);
+	      return { rows: [{ id: `issuance_${issuances.length}` } as Row], rowCount: 1 };
+	    }
+	    if (/insert into provider_token_refreshes/u.test(sql)) {
+	      refreshAttempts.push(params ?? []);
+	      return { rows: [{ id: `refresh_${refreshAttempts.length}` } as Row], rowCount: 1 };
+	    }
+	    if (/update provider_token_refreshes/u.test(sql) && /issued_at = now/u.test(sql)) {
+	      refreshIssued.push(params ?? []);
+	      return { rows: [], rowCount: 1 };
+	    }
+	    if (/update provider_token_refreshes/u.test(sql) && /denied_at = now/u.test(sql)) {
+	      refreshDenied.push(params ?? []);
+	      return { rows: [], rowCount: 1 };
+	    }
     if (/^(begin|commit|rollback)$/iu.test(sql.trim())) return { rows: [], rowCount: 0 };
     if (/pg_advisory_xact_lock/u.test(sql)) return { rows: [{} as Row], rowCount: 1 };
+    if (/update user_sessions/u.test(sql) && /from users/u.test(sql)) {
+      if (params?.[0] === hashToken('reader-token')) {
+        return {
+          rows: [{ session_id: 'user_session_reader', id: 'user_reader', email: 'reader@example.com', display_name: 'Reader' } as Row],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+    if (/from agent_tokens/u.test(sql) && /token_hash = \$1/u.test(sql)) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (/from share_links/u.test(sql) && /token_hash = \$1/u.test(sql)) {
+      if (params?.[0] !== input.legacyShareTokenHash) return { rows: [], rowCount: 0 };
+      return {
+        rows: [{
+          id: 'legacy_share_1',
+          role: input.legacyShareRole ?? 'view',
+          expires_at: null,
+          revoked_at: null,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+    if (/from document_access_grants g/u.test(sql) && /where g\.id::text = \$1/u.test(sql)) {
+      const expectedGrantId = Object.hasOwn(input, 'activeSessionActorGrantId') ? input.activeSessionActorGrantId ?? null : 'grant_1';
+      if (!expectedGrantId || params?.[0] !== expectedGrantId) return { rows: [], rowCount: 0 };
+      return {
+        rows: [{
+          role: input.documentAccessGrantRole ?? 'edit',
+          revoked_at: input.documentAccessGrantRevoked ? '2026-05-11T00:00:00.000Z' : null,
+          expired: input.documentAccessGrantExpired ?? false,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+    if (/from document_access_grants/u.test(sql) && /token_hash = \$1/u.test(sql)) {
+      if (params?.[0] !== input.documentAccessGrantTokenHash) return { rows: [], rowCount: 0 };
+      return {
+        rows: [{
+          id: 'share_grant_1',
+          role: input.documentAccessGrantRole ?? 'edit',
+          expires_at: null,
+          revoked_at: input.documentAccessGrantRevoked ? '2026-05-11T00:00:00.000Z' : null,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+    if (/^\s*select d\.owner_id/u.test(sql) && /from documents d/u.test(sql) && /left join workspace_members/u.test(sql)) {
+      return {
+	        rows: [{
+	          owner_id: 'user_owner',
+	          workspace_id: 'ws_1',
+	          member_role: input.readerMemberRole ?? null,
+	        } as Row],
+        rowCount: 1,
+      };
+    }
     if (/select 1\s+from provider_token_issuances pending/u.test(sql)) {
       return { rows: input.revokeDuringRefresh ? [] : [{ active: 1 } as Row], rowCount: input.revokeDuringRefresh ? 0 : 1 };
+    }
+    if (/provider_token_issuance_policy_reason/u.test(sql)) {
+      return {
+        rows: [{
+          deny_reason: input.providerPolicyDenyReason ?? (input.revokeDuringRefresh ? 'grant_revoked' : 'collab_session_not_found'),
+        } as Row],
+        rowCount: 1,
+      };
     }
     if (/pending\.status = 'pending'/u.test(sql)) {
       statusUpdates.push(params ?? []);
@@ -111,6 +211,9 @@ function createPool(input: {
     }
     if (/count\(\*\) as active_guest_sessions/u.test(sql)) {
       return { rows: [{ active_guest_sessions: String(input.activeGuestSessions ?? 0) } as Row], rowCount: 1 };
+    }
+    if (/coalesce\(sl\.concurrent_guest_edits/u.test(sql)) {
+      return { rows: [{ concurrent_guest_edits: String(input.guestQuota ?? 3) } as Row], rowCount: 1 };
     }
     if (/from provider_token_issuances/u.test(sql)) {
       if (input.missingCollabSession) return { rows: [], rowCount: 0 };
@@ -173,12 +276,16 @@ function createPool(input: {
   };
 
   return {
-    collabSessions,
-    collabSessionTouches,
-    collabSessionDeletes,
-    providerDocSeedMarks,
-    issuances,
-    statusUpdates,
+	    collabSessions,
+	    documentAccessSessions,
+	    collabSessionTouches,
+    collabSessionFailures,
+	    providerDocSeedMarks,
+	    issuances,
+	    statusUpdates,
+	    refreshAttempts,
+	    refreshIssued,
+	    refreshDenied,
     query,
     async connect(): Promise<DbTransactionClient> {
       return {
@@ -209,7 +316,7 @@ function createAuth(input: {
       return {
         actorType: input.actorType ?? 'user',
         ...(input.actorId === null ? {} : { actorId: input.actorId ?? defaultActorId }),
-        ...(grantId ? { grantId, role: operation === 'write' ? 'edit' : 'view' } : {}),
+        ...(grantId ? { grantId, grantSource: 'document_access_grants' as const, role: operation === 'write' ? 'edit' : 'view' } : {}),
       };
     },
   };
@@ -310,7 +417,7 @@ describe('collab session routes', () => {
     })]);
   });
 
-  it('normalizes user-supplied app and daemon client kinds to browser sessions', async () => {
+  it('preserves native app and daemon client kinds in server-side session metadata', async () => {
     const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
     const providerTokenService = createProviderTokenService();
     const pool = createPool();
@@ -321,8 +428,8 @@ describe('collab session routes', () => {
       .send({ mode: 'edit', clientKind: 'daemon', displayName: 'Alice' })
       .expect(201);
 
-    expect(response.body.session.clientKind).toBe('browser');
-    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user']));
+    expect(response.body.session.clientKind).toBe('daemon');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['daemon', 'user']));
   });
 
   it('does not let browser callers claim agent client kind', async () => {
@@ -360,6 +467,33 @@ describe('collab session routes', () => {
     expect(providerTokenService.issued).toHaveLength(1);
   });
 
+  it('ignores client-supplied actor ids and forged PermanentUserData attribution', async () => {
+    const auth = createAuth({ grantId: null, actorId: 'user_1' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionActorGrantId: null, activeSessionActorId: 'user_1', activeSessionIsGuest: false });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .send({
+        mode: 'edit',
+        clientKind: 'browser',
+        displayName: 'Alice',
+        actorId: 'attacker_user',
+        permanentUserData: { clientId: 123, userId: 'attacker_user' },
+      })
+      .expect(201);
+
+    expect(response.body.providerToken.sessionIdentity).toEqual(expect.objectContaining({
+      actorId: 'user_1',
+      displayName: 'Alice',
+      isGuest: false,
+    }));
+    expect(JSON.stringify(response.body)).not.toContain('attacker_user');
+    expect(pool.collabSessions[0]?.[6]).toBe('user_1');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user', 'user_1', null]));
+  });
+
   it('does not return a direct-user provider token when write access is revoked while minting', async () => {
     let writeChecks = 0;
     const auth: HttpRequestAuth = {
@@ -384,7 +518,7 @@ describe('collab session routes', () => {
     expect(writeChecks).toBe(2);
     expect(providerTokenService.issued).toHaveLength(1);
     expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
-    expect(pool.collabSessionDeletes).toHaveLength(1);
+    expect(pool.collabSessionFailures).toHaveLength(1);
   });
 
   it('records guest edit sessions distinctly for share-link quota enforcement', async () => {
@@ -419,6 +553,141 @@ describe('collab session routes', () => {
       `session:${response.body.session.sessionId}`,
       'grant_1',
     ]));
+  });
+
+  it('honors explicit share-link query tokens even when a logged-in user is not a workspace member', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const shareToken = generateShareToken();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      documentAccessGrantTokenHash: hashToken(shareToken),
+      documentAccessGrantRole: 'edit',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService });
+
+    const response = await request(app)
+      .post(`/api/docs/doc_1/branches/branch_1/collab/session?token=${encodeURIComponent(shareToken)}`)
+      .set('Cookie', 'marklab_session=reader-token')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Guest' })
+      .expect(201);
+
+    expect(pool.collabSessions[0]).toEqual(expect.arrayContaining([
+      response.body.session.sessionId,
+      'doc_1',
+      'branch_1',
+      'edit',
+      'browser',
+      'user',
+      `session:${response.body.session.sessionId}`,
+      'share_grant_1',
+      'edit',
+      'Guest',
+    ]));
+    expect(pool.collabSessions[0]?.[9]).toBe(true);
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining([
+      'browser',
+      'user',
+      `session:${response.body.session.sessionId}`,
+      'share_grant_1',
+    ]));
+    expect(response.body.providerToken.sessionIdentity).toEqual(expect.objectContaining({
+      actorId: `session:${response.body.session.sessionId}`,
+      isGuest: true,
+    }));
+  });
+
+  it('prefers a logged-in workspace member over an explicit share-link token', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const shareToken = generateShareToken();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      documentAccessGrantTokenHash: hashToken(shareToken),
+      documentAccessGrantRole: 'edit',
+      readerMemberRole: 'Member',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService });
+
+    const response = await request(app)
+      .post(`/api/docs/doc_1/branches/branch_1/collab/session?token=${encodeURIComponent(shareToken)}`)
+      .set('Cookie', 'marklab_session=reader-token')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Named Member' })
+      .expect(201);
+
+    expect(pool.collabSessions[0]).toEqual(expect.arrayContaining([
+      response.body.session.sessionId,
+      'doc_1',
+      'branch_1',
+      'edit',
+      'browser',
+      'user',
+      'user_reader',
+      null,
+      'edit',
+      'Named Member',
+    ]));
+    expect(pool.collabSessions[0]?.[9]).toBe(false);
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining([
+      'browser',
+      'user',
+      'user_reader',
+      null,
+    ]));
+    expect(response.body.providerToken.sessionIdentity).toEqual(expect.objectContaining({
+      actorId: 'user_reader',
+      isGuest: false,
+    }));
+
+    const bearerPool = createPool({
+      documentAccessGrantTokenHash: hashToken(shareToken),
+      documentAccessGrantRole: 'edit',
+      readerMemberRole: 'Member',
+    });
+    const bearerProviderTokenService = createProviderTokenService();
+    const bearerApp = createHttpApp(bearerPool, createUnavailableLiveMarkdownWriter(), { providerTokenService: bearerProviderTokenService });
+
+    const bearerResponse = await request(bearerApp)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .set({
+        Authorization: `Bearer ${shareToken}`,
+        Cookie: 'marklab_session=reader-token',
+      })
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Bearer Member' })
+      .expect(201);
+
+    expect(bearerPool.collabSessions[0]).toEqual(expect.arrayContaining([
+      bearerResponse.body.session.sessionId,
+      'doc_1',
+      'branch_1',
+      'edit',
+      'browser',
+      'user',
+      'user_reader',
+      null,
+      'edit',
+      'Bearer Member',
+    ]));
+    expect(bearerPool.collabSessions[0]?.[9]).toBe(false);
+  });
+
+  it('does not let a logged-in Reader use an explicit edit link to bypass workspace role', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const shareToken = generateShareToken();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      documentAccessGrantTokenHash: hashToken(shareToken),
+      documentAccessGrantRole: 'edit',
+      readerMemberRole: 'Reader',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService });
+
+    await request(app)
+      .post(`/api/docs/doc_1/branches/branch_1/collab/session?token=${encodeURIComponent(shareToken)}`)
+      .set('Cookie', 'marklab_session=reader-token')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Reader' })
+      .expect(403, { error: 'forbidden' });
+
+    expect(pool.collabSessions).toEqual([]);
+    expect(providerTokenService.issued).toEqual([]);
   });
 
   it('retries provider document seeding after a transient initial seed failure', async () => {
@@ -487,38 +756,35 @@ describe('collab session routes', () => {
     expect(pool.issuances).toEqual([]);
   });
 
-  it('does not charge identity-bearing access-grant edit sessions against guest quota', async () => {
+  it('charges access-grant bearer edit sessions against guest quota', async () => {
     const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
     const providerTokenService = createProviderTokenService();
     const pool = createPool({ activeGuestSessions: 3 });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
-    const response = await request(app)
+    await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session')
       .send({ mode: 'edit', clientKind: 'browser', displayName: 'Member' })
-      .expect(201);
+      .expect(429);
 
-    expect(response.body.session.sessionId).toMatch(/^session_[0-9a-f-]{36}$/u);
-    expect(pool.collabSessions[0]?.[6]).toBe('access:token_hash');
-    expect(pool.collabSessions[0]?.[9]).toBe(false);
-    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user', 'access:token_hash', 'grant_1']));
-    expect(providerTokenService.issued).toHaveLength(1);
+    expect(providerTokenService.issued).toEqual([]);
+    expect(pool.issuances).toEqual([]);
   });
 
   it('does not return an initial edit provider token when the grant is revoked while the provider token is minting', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
-    const pool = createPool({ revokeDuringRefresh: true });
+    const pool = createPool({ revokeDuringRefresh: true, providerPolicyDenyReason: 'grant_revoked' });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session')
       .send({ mode: 'edit', clientKind: 'browser', displayName: 'Guest' })
-      .expect(404);
+      .expect(403, { error: 'grant_revoked' });
 
     expect(providerTokenService.issued).toHaveLength(0);
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
-    expect(pool.collabSessionDeletes).toHaveLength(1);
+    expect(pool.collabSessionFailures).toHaveLength(1);
   });
 
   it('does not mint edit provider tokens when auth returns no verified actor', async () => {
@@ -667,7 +933,151 @@ describe('collab session routes', () => {
       'view',
       'Guest',
     ]));
+    expect(pool.documentAccessSessions[0]).toEqual([
+      'grant_1',
+      'doc_1',
+      'branch_1',
+      response.body.session.sessionId,
+      'browser',
+      'guest',
+      `session:${response.body.session.sessionId}`,
+      'Guest',
+      expect.stringMatching(/^#[0-9a-f]{6}$/u),
+      'branch_1',
+    ]);
     expect(response.body.providerToken).toBeUndefined();
+  });
+
+  it('records direct logged-in view sessions in document access audit rows', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const providerTokenService = createProviderTokenService();
+    const flushCollabDocument = vi.fn(async () => undefined);
+    const pool = createPool({ readerMemberRole: 'Reader' });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService, flushCollabDocument });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .set('Cookie', 'marklab_session=reader-token')
+      .send({ mode: 'view', clientKind: 'daemon', displayName: 'Reader' })
+      .expect(200);
+
+    expect(pool.collabSessions[0]).toEqual(expect.arrayContaining([
+      response.body.session.sessionId,
+      'doc_1',
+      'branch_1',
+      'view',
+      'daemon',
+      'user',
+      'user_reader',
+      null,
+      'view',
+      'Reader',
+    ]));
+    expect(pool.documentAccessSessions[0]).toEqual([
+      null,
+      'doc_1',
+      'branch_1',
+      response.body.session.sessionId,
+      'daemon',
+      'user',
+      'user_reader',
+      'Reader',
+      expect.stringMatching(/^#[0-9a-f]{6}$/u),
+      'branch_1',
+    ]);
+  });
+
+  it('serves migrated legacy share-link view sessions through document access grants', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const migratedShareToken = generateShareToken();
+    const providerTokenService = createProviderTokenService();
+    const flushCollabDocument = vi.fn(async () => undefined);
+    const pool = createPool({
+      documentAccessGrantTokenHash: hashToken(migratedShareToken),
+      documentAccessGrantRole: 'view',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService, flushCollabDocument });
+
+    const response = await request(app)
+      .post(`/api/docs/doc_1/branches/branch_1/collab/session?token=${encodeURIComponent(migratedShareToken)}`)
+      .send({ mode: 'view', clientKind: 'guest', displayName: 'Legacy Guest' })
+      .expect(200);
+
+    expect(response.body.providerToken).toBeUndefined();
+    expect(response.body.document.markdown).toBe('# Visible\n');
+    expect(pool.collabSessions[0]).toEqual(expect.arrayContaining([
+      response.body.session.sessionId,
+      'doc_1',
+      'branch_1',
+      'view',
+      'browser',
+      'user',
+      `session:${response.body.session.sessionId}`,
+      'share_grant_1',
+      'view',
+      'Legacy Guest',
+    ]));
+    expect(pool.documentAccessSessions[0]).toEqual([
+      'share_grant_1',
+      'doc_1',
+      'branch_1',
+      response.body.session.sessionId,
+      'browser',
+      'guest',
+      `session:${response.body.session.sessionId}`,
+      'Legacy Guest',
+      expect.stringMatching(/^#[0-9a-f]{6}$/u),
+      'branch_1',
+    ]);
+  });
+
+  it('blocks revoked view grants before reading a snapshot', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const accessToken = generateAccessToken();
+    const providerTokenService = createProviderTokenService();
+    const flushCollabDocument = vi.fn(async () => undefined);
+    const pool = createPool({
+      documentAccessGrantTokenHash: hashToken(accessToken),
+      documentAccessGrantRole: 'view',
+      documentAccessGrantRevoked: true,
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService, flushCollabDocument });
+
+    await request(app)
+      .post(`/api/docs/doc_1/branches/branch_1/collab/session?token=${encodeURIComponent(accessToken)}`)
+      .send({ mode: 'view', clientKind: 'guest', displayName: 'Guest' })
+      .expect(403);
+
+    expect(flushCollabDocument).not.toHaveBeenCalled();
+    expect(pool.collabSessions).toEqual([]);
+    expect(providerTokenService.issued).toEqual([]);
+  });
+
+  it('does not let requested view client kind forge document access audit actor kind', async () => {
+    const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
+    const providerTokenService = createProviderTokenService();
+    const flushCollabDocument = vi.fn(async () => undefined);
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService, flushCollabDocument });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .send({ mode: 'view', clientKind: 'daemon', displayName: 'User' })
+      .expect(200);
+
+    expect(response.body.session.clientKind).toBe('daemon');
+    expect(pool.documentAccessSessions[0]).toEqual([
+      'grant_1',
+      'doc_1',
+      'branch_1',
+      response.body.session.sessionId,
+      'daemon',
+      'guest',
+      `session:${response.body.session.sessionId}`,
+      'User',
+      expect.stringMatching(/^#[0-9a-f]{6}$/u),
+      'branch_1',
+    ]);
   });
 
   it('does not read or flush a view snapshot when auth returns no verified actor', async () => {
@@ -816,7 +1226,7 @@ describe('collab session routes', () => {
     expect(response.body.providerToken).toBeUndefined();
   });
 
-  it('refreshes an edit provider token only after write access succeeds', async () => {
+  it('refreshes an existing guest edit provider token without resending the raw share token', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
     const pool = createPool();
@@ -827,7 +1237,7 @@ describe('collab session routes', () => {
       .send({ refreshToken: serverSessionRefreshToken, clientKind: 'guest' })
       .expect(200);
 
-    expect(auth.operations).toEqual(['write']);
+    expect(auth.operations).toEqual([]);
     expect(providerTokenService.issued).toEqual([expect.objectContaining({
       providerDocId: 'ml_doc_existing',
       sessionId: 'session_server',
@@ -854,6 +1264,8 @@ describe('collab session routes', () => {
     ]));
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'doc_1', 'branch_1', 'session_server']);
     expect(pool.collabSessionTouches[0]).toEqual(['session_server', 'doc_1', 'branch_1', 'guest']);
+    expect(pool.refreshAttempts[0]).toEqual(['session_server']);
+    expect(pool.refreshIssued[0]).toEqual(['refresh_1', response.body.providerToken.expiresAt, 'issuance_1']);
   });
 
   it('refreshes an existing guest edit session even when the guest quota is full', async () => {
@@ -876,16 +1288,37 @@ describe('collab session routes', () => {
       }),
     })]);
     expect(pool.issuances).toHaveLength(1);
+    expect(pool.refreshIssued).toHaveLength(1);
   });
 
-  it('refreshes identity-bearing access-grant edit sessions with stable actor identity', async () => {
+  it('refreshes a guest session under auth-required mode using only the session refresh token', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(200);
+
+    expect(providerTokenService.issued).toEqual([expect.objectContaining({
+      sessionIdentity: expect.objectContaining({
+        actorId: 'session:session_server',
+        isGuest: true,
+      }),
+    })]);
+    expect(pool.refreshIssued).toHaveLength(1);
+  });
+
+  it('refreshes access-grant bearer edit sessions as existing guests with stable session identity', async () => {
     const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
     const providerTokenService = createProviderTokenService();
     const pool = createPool({
       activeSessionActorGrantId: 'grant_1',
-      activeSessionActorId: 'access:token_hash',
+      activeSessionActorId: 'session:session_server',
       activeSessionClientKind: 'browser',
-      activeSessionIsGuest: false,
+      activeSessionIsGuest: true,
     });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
@@ -900,17 +1333,39 @@ describe('collab session routes', () => {
       authorization: 'full',
       validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
       sessionIdentity: expect.objectContaining({
-        actorId: 'grant:grant_1',
+        actorId: 'session:session_server',
         displayName: 'Guest',
-        isGuest: false,
+        isGuest: true,
       }),
     })]);
     expect(pool.issuances[0]).toEqual(expect.arrayContaining([
       'browser',
       'user',
-      'access:token_hash',
+      'session:session_server',
       'grant_1',
     ]));
+  });
+
+  it('does not refresh a guest edit session when the current logged-in user is only a Reader', async () => {
+    const auth = createAuth({ denyWrite: true, grantId: null, actorId: 'user_reader' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      activeSessionActorGrantId: 'grant_1',
+      activeSessionActorId: 'session:session_server',
+      activeSessionClientKind: 'browser',
+      activeSessionIsGuest: true,
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .set('Cookie', 'marklab_session=reader-token')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(403, { error: 'forbidden' });
+
+    expect(auth.operations).toEqual(['write', 'read']);
+    expect(providerTokenService.issued).toHaveLength(0);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'forbidden']);
   });
 
   it('refreshes server-verified logged-in user edit sessions', async () => {
@@ -929,6 +1384,7 @@ describe('collab session routes', () => {
       .send({ refreshToken: serverSessionRefreshToken })
       .expect(200);
 
+    expect(auth.operations).toEqual(['write', 'write']);
     expect(providerTokenService.issued).toEqual([expect.objectContaining({
       sessionIdentity: expect.objectContaining({
         actorId: 'user_1',
@@ -969,6 +1425,30 @@ describe('collab session routes', () => {
     expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
   });
 
+  it('does not return a direct-user refreshed token when workspace role is revoked after the final auth check', async () => {
+    const auth = createAuth({ grantId: null, actorId: 'user_1' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      activeSessionActorGrantId: null,
+      activeSessionActorId: 'user_1',
+      activeSessionClientKind: 'browser',
+      activeSessionIsGuest: false,
+      deleteBeforeMarkIssued: true,
+      providerPolicyDenyReason: 'forbidden',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(403, { error: 'forbidden' });
+
+    expect(auth.operations).toEqual(['write', 'write']);
+    expect(providerTokenService.issued).toHaveLength(1);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'forbidden']);
+    expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
+  });
+
   it('does not refresh a grant-backed session with only the leaked session id', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
@@ -985,7 +1465,8 @@ describe('collab session routes', () => {
   it('does not refresh a grant-backed session with the wrong session refresh token', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
-    const app = createHttpApp(createPool(), createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
@@ -993,21 +1474,44 @@ describe('collab session routes', () => {
       .expect(404);
 
     expect(providerTokenService.issued).toEqual([]);
+    expect(pool.refreshAttempts).toEqual([]);
+    expect(pool.refreshDenied).toEqual([]);
   });
 
-  it('does not mark a refresh issued when the session is revoked while the provider token is minting', async () => {
+  it('reports revoked edit grants explicitly when refresh is denied before provider token minting', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
-    const pool = createPool({ revokeDuringRefresh: true });
+    const pool = createPool({ documentAccessGrantRevoked: true });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
       .send({ refreshToken: serverSessionRefreshToken })
-      .expect(404);
+      .expect(403, { error: 'grant_revoked' });
 
     expect(providerTokenService.issued).toHaveLength(0);
-    expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
+    expect(pool.issuances).toEqual([]);
+    expect(pool.statusUpdates).toEqual([]);
+    expect(pool.collabSessionTouches).toEqual([]);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'grant_revoked']);
+  });
+
+  it('reports expired edit grants explicitly when refresh is denied before provider token minting', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ documentAccessGrantExpired: true });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(403, { error: 'grant_expired' });
+
+    expect(providerTokenService.issued).toHaveLength(0);
+    expect(pool.issuances).toEqual([]);
+    expect(pool.statusUpdates).toEqual([]);
+    expect(pool.collabSessionTouches).toEqual([]);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'grant_expired']);
   });
 
   it('does not return a refreshed provider token when the control-plane session disappears before marking issued', async () => {
@@ -1071,10 +1575,34 @@ describe('collab session routes', () => {
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
   });
 
+  it('does not persist secret-bearing provider error messages in refresh-denial audit rows', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService({
+      failIssue: true,
+      failMessage: 'failed https://ysweet.example.test?token=secret',
+    });
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(500);
+
+    expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'provider_token_refresh_denied']);
+  });
+
   it('does not issue a refresh provider token when write access is denied', async () => {
     const auth = createAuth({ denyWrite: true });
     const providerTokenService = createProviderTokenService();
-    const app = createHttpApp(createPool(), createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+    const pool = createPool({
+      activeSessionActorGrantId: null,
+      activeSessionActorId: 'user_1',
+      activeSessionClientKind: 'browser',
+      activeSessionIsGuest: false,
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
@@ -1083,15 +1611,18 @@ describe('collab session routes', () => {
 
     expect(auth.operations).toEqual(['write']);
     expect(providerTokenService.issued).toEqual([]);
+    expect(pool.refreshAttempts[0]).toEqual(['session_server']);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'forbidden']);
   });
 
   it('does not refresh an edit session minted for a different grant', async () => {
     const auth = createAuth({ grantId: 'grant_2' });
     const providerTokenService = createProviderTokenService();
-    const app = createHttpApp(createPool({ activeSessionActorGrantId: 'grant_1' }), createUnavailableLiveMarkdownWriter(), {
-      auth,
-      providerTokenService,
-    });
+    const app = createHttpApp(
+      createPool({ activeSessionActorGrantId: 'grant_1', activeSessionActorId: 'access:token_hash', activeSessionIsGuest: false }),
+      createUnavailableLiveMarkdownWriter(),
+      { auth, providerTokenService },
+    );
 
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
@@ -1105,7 +1636,7 @@ describe('collab session routes', () => {
     const auth = createAuth({ grantId: 'grant_1', actorId: 'user_2' });
     const providerTokenService = createProviderTokenService();
     const app = createHttpApp(
-      createPool({ activeSessionActorGrantId: 'grant_1', activeSessionActorId: 'user_1' }),
+      createPool({ activeSessionActorGrantId: 'grant_1', activeSessionActorId: 'user_1', activeSessionIsGuest: false }),
       createUnavailableLiveMarkdownWriter(),
       { auth, providerTokenService },
     );
@@ -1122,7 +1653,7 @@ describe('collab session routes', () => {
     const auth = createAuth({ grantId: 'grant_1', actorId: null });
     const providerTokenService = createProviderTokenService();
     const app = createHttpApp(
-      createPool({ activeSessionActorGrantId: 'grant_1', activeSessionActorId: 'user_1' }),
+      createPool({ activeSessionActorGrantId: 'grant_1', activeSessionActorId: 'user_1', activeSessionIsGuest: false }),
       createUnavailableLiveMarkdownWriter(),
       { auth, providerTokenService },
     );
@@ -1176,8 +1707,9 @@ describe('collab session routes', () => {
   it('does not refresh a session after the latest issuance status is revoked', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionStatus: 'revoked' });
     const app = createHttpApp(
-      createPool({ activeSessionStatus: 'revoked' }),
+      pool,
       createUnavailableLiveMarkdownWriter(),
       { auth, providerTokenService },
     );
@@ -1185,9 +1717,11 @@ describe('collab session routes', () => {
     await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
       .send({ refreshToken: serverSessionRefreshToken })
-      .expect(404);
+      .expect(403, { error: 'provider_token_revoked' });
 
     expect(providerTokenService.issued).toEqual([]);
+    expect(pool.refreshAttempts[0]).toEqual(['session_server']);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'provider_token_revoked']);
   });
 
   it('does not refresh a provider token after the control-plane session row is gone', async () => {

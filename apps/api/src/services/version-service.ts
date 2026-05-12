@@ -43,6 +43,7 @@ export async function createVersionWithClient(input: CreateVersionWithClientInpu
   const versionNumber = await nextVersionNumber(input.client, input.branchId);
   const actorId = input.actorId ?? null;
   const parentVersionId = input.parentVersionId ?? null;
+  // Version audit identity must be passed from validated control-plane state, never from client-authored Y.PermanentUserData.
   const insertResult = await input.client.query<{ id: string }>(
     `insert into document_versions
        (doc_id, branch_id, parent_version_id, version_number, markdown_snapshot, hash, actor_type, actor_id, operation)

@@ -26,7 +26,7 @@ describe('relay routes anonymous alpha host policy', () => {
   it('lets an anonymous alpha host create a room and then requires the room host token for grants', async () => {
     delete process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN;
     const relayService = createInMemoryRelayRoomService();
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), { relayService });
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), { relayService, localMode: true });
 
     const roomResponse = await request(app)
       .post('/api/relay/rooms')
@@ -59,7 +59,7 @@ describe('relay routes anonymous alpha host policy', () => {
   it('uses the room host token for share state and grant revoke without a global management token', async () => {
     delete process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN;
     const relayService = createInMemoryRelayRoomService();
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), { relayService });
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), { relayService, localMode: true });
 
     const roomResponse = await request(app)
       .post('/api/relay/rooms')

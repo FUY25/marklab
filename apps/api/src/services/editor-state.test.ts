@@ -248,6 +248,8 @@ describe('applyMarkdownToBranchState', () => {
         docId: 'doc_001',
         branchId: 'br_main',
         versionId: 'ver_source',
+        actorType: 'user',
+        actorId: 'user_1',
       }),
     ).rejects.toThrow('source_version_not_found');
 
@@ -296,7 +298,7 @@ describe('applyMarkdownToBranchState', () => {
     const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
 
     expect(versionInserts.map((query) => query.params)).toEqual([
-      ['doc_001', 'br_main', 'ver_001', 2, '# Human draft\n', 'sha256:dirty', 'system', null, 'autosave'],
+      ['doc_001', 'br_main', 'ver_001', 2, '# Human draft\n', 'sha256:dirty', 'agent', null, 'autosave'],
       ['doc_001', 'br_main', 'ver_002', 3, expectedAgentMarkdown, expectedAgentHash, 'agent', null, 'write'],
     ]);
     expect(result).toMatchObject({ versionId: 'ver_003', versionNumber: 3, hash: expectedAgentHash });
@@ -407,7 +409,7 @@ describe('applyMarkdownToBranchState', () => {
     const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
 
     expect(versionInserts.map((query) => query.params)).toEqual([
-      ['doc_001', 'br_main', 'ver_001', 2, '# Live base\n', 'sha256:live-base', 'system', null, 'autosave'],
+      ['doc_001', 'br_main', 'ver_001', 2, '# Live base\n', 'sha256:live-base', 'agent', null, 'autosave'],
       [
         'doc_001',
         'br_main',

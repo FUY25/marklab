@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { toRoomName } from '../collab/persistence';
@@ -19,6 +19,35 @@ vi.mock('../services/milkdown-transformer', () => ({
   })),
   flushBranchMarkdownMirror: vi.fn(async () => undefined),
 }));
+
+const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
+const originalDevAnonymousCollab = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
+beforeEach(() => {
+  process.env.MARKLAB_REQUIRE_AUTH = 'false';
+  process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB = 'true';
+  vi.mocked(initializeBranchEditorState).mockReset();
+  vi.mocked(initializeBranchEditorState).mockResolvedValue({
+    yjsState: Uint8Array.from([0, 0]),
+    markdown: '# Branch copy\n',
+    hash: 'sha256:branch-copy',
+  });
+  vi.mocked(flushBranchMarkdownMirror).mockReset();
+  vi.mocked(flushBranchMarkdownMirror).mockImplementation(async () => undefined as never);
+});
+
+afterEach(() => {
+  restoreEnv('MARKLAB_REQUIRE_AUTH', originalRequireAuth);
+  restoreEnv('MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB', originalDevAnonymousCollab);
+});
 
 interface CapturedQuery {
   sql: string;
@@ -292,7 +321,7 @@ function createBranchScopedAuth(role: 'view' | 'edit' = 'view'): HttpRequestAuth
     async requireDocumentAccess(_req, docId, branchId, operation) {
       if (docId !== 'doc_001' || branchId !== 'br_main') throw new Error('forbidden');
       if (operation === 'write' && role !== 'edit') throw new Error('forbidden');
-      return { actorType: 'user', grantId: 'agr_1', role };
+      return { actorType: 'user', grantId: 'agr_1', grantSource: 'document_access_grants', role };
     },
   };
 }
@@ -420,6 +449,42 @@ describe('version routes', () => {
     });
   });
 
+  it('does not advertise access management to workspace members with edit access', async () => {
+    const { pool } = createFakePool();
+    const auth: HttpRequestAuth = {
+      async requireAdminAccess() {
+        throw new Error('forbidden');
+      },
+      async requireDocumentAccess(_req, docId, branchId, operation) {
+        if (docId !== 'doc_001' || branchId !== 'br_main') throw new Error('forbidden');
+        return {
+          actorType: 'user',
+          actorId: 'user_member',
+          canManageAccess: false,
+          role: operation === 'write' ? 'edit' : 'edit',
+        };
+      },
+    };
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth });
+
+    await request(app).get('/api/docs/doc_001/branches/br_main/summary').expect(200, {
+      docId: 'doc_001',
+      branchId: 'br_main',
+      title: 'Launch notes',
+      branchName: 'Main',
+      branchSlug: 'main',
+      access: {
+        canRead: true,
+        canWrite: true,
+        canManageAccess: false,
+        canManageVersions: true,
+        canSwitchBranches: false,
+        actorType: 'user',
+        role: 'edit',
+      },
+    });
+  });
+
   it('returns document_not_found for unknown document metadata requests', async () => {
     const { pool } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
@@ -449,6 +514,36 @@ describe('version routes', () => {
     });
   });
 
+  it('does not expose version history to public view grants', async () => {
+    const { pool } = createFakePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createBranchScopedAuth('view') });
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/versions')
+      .expect(403, { error: 'forbidden' });
+  });
+
+  it('does not expose version snapshots to public view grants', async () => {
+    const { pool } = createFakePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createBranchScopedAuth('view') });
+
+    await request(app)
+      .get('/api/docs/doc_001/versions/ver_001')
+      .expect(403, { error: 'forbidden' });
+  });
+
+  it('allows edit grants to inspect branch version history', async () => {
+    const { pool } = createFakePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth: createBranchScopedAuth('edit') });
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/versions')
+      .expect(200);
+    await request(app)
+      .get('/api/docs/doc_001/versions/ver_001')
+      .expect(200);
+  });
+
   it('manual save flushes active collab state before creating a manual_save checkpoint', async () => {
     const events: string[] = [];
     vi.mocked(flushBranchMarkdownMirror).mockImplementationOnce(async () => {
@@ -464,6 +559,19 @@ describe('version routes', () => {
     });
     const { pool } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      auth: {
+        async requireAdminAccess() {
+          throw new Error('forbidden');
+        },
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_member', role: 'edit' };
+        },
+      },
       async flushCollabDocument(roomName) {
         expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
         events.push('flush');
@@ -480,7 +588,10 @@ describe('version routes', () => {
       });
 
     expect(events).toEqual(['flush', 'checkpoint']);
-    expect(flushBranchMarkdownMirror).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'manual_save');
+    expect(flushBranchMarkdownMirror).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'manual_save', {
+      actorType: 'user',
+      actorId: 'user_member',
+    });
   });
 
   it('manual save returns the current head when the freshly flushed branch is unchanged', async () => {
@@ -520,6 +631,19 @@ describe('version routes', () => {
     });
     const { pool } = createFakePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      auth: {
+        async requireAdminAccess() {
+          throw new Error('forbidden');
+        },
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'agent', actorId: 'agent_001', role: 'edit' };
+        },
+      },
       async flushCollabDocument(roomName) {
         expect(roomName).toBe(toRoomName('doc_001', 'br_main'));
         events.push('flush');
@@ -536,7 +660,10 @@ describe('version routes', () => {
       });
 
     expect(events).toEqual(['flush', 'checkpoint']);
-    expect(flushBranchMarkdownMirror).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'autosave');
+    expect(flushBranchMarkdownMirror).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'autosave', {
+      actorType: 'agent',
+      actorId: 'agent_001',
+    });
   });
 
   it('hides branch-from-version through the mounted HTTP app', async () => {
@@ -569,6 +696,19 @@ describe('version routes', () => {
     const flushedRooms: string[] = [];
     const appliedRooms: Array<{ roomName: string; yjsState: Uint8Array }> = [];
     const app = createHttpApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {
+          throw new Error('forbidden');
+        },
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_member', role: 'edit' };
+        },
+      },
       async flushCollabDocument(roomName) {
         flushedRooms.push(roomName);
         events.push('flush');
@@ -617,8 +757,8 @@ describe('version routes', () => {
       3,
       '# Source snapshot\n',
       expect.any(String),
-      'system',
-      null,
+      'user',
+      'user_member',
       'rollback',
     ]);
     expect(queries.some((query) => query.sql.includes('delete from document_versions'))).toBe(false);
@@ -673,7 +813,21 @@ describe('version routes', () => {
       headHash: 'sha256:head',
     });
     const liveWriter = createRestoreLiveWriter('# Dirty live draft\n', 'sha256:dirty');
-    const app = createHttpApp(pool, liveWriter);
+    const app = createHttpApp(pool, liveWriter, {
+      auth: {
+        async requireAdminAccess() {
+          throw new Error('forbidden');
+        },
+        async requireDocumentAccess(_req, docId, branchId, operation) {
+          expect({ docId, branchId, operation }).toEqual({
+            docId: 'doc_001',
+            branchId: 'br_main',
+            operation: 'write',
+          });
+          return { actorType: 'user', actorId: 'user_member', role: 'edit' };
+        },
+      },
+    });
 
     await request(app)
       .post('/api/docs/doc_001/branches/br_main/restore')
@@ -683,6 +837,10 @@ describe('version routes', () => {
     const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
     expect(versionInserts.map((query) => query.params?.[8])).toEqual(['manual_save', 'rollback']);
     expect(versionInserts.map((query) => query.params?.[2])).toEqual(['ver_head', 'ver_checkpoint']);
+    expect(versionInserts.map((query) => [query.params?.[6], query.params?.[7]])).toEqual([
+      ['user', 'user_member'],
+      ['user', 'user_member'],
+    ]);
   });
 
   it('rejects restore requests that reference a source version from another document', async () => {

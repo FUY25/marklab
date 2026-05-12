@@ -2,7 +2,7 @@ import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { createHeadlessMilkdownRuntime } from './milkdown-headless-runtime';
 import { shouldCreateAutosaveVersion } from './save-policy';
-import { createVersionWithClient } from './version-service';
+import { createVersionWithClient, type VersionActorType } from './version-service';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export interface InitializedBranchEditorState {
@@ -12,6 +12,11 @@ export interface InitializedBranchEditorState {
 }
 
 export type FlushVersionOperation = 'autosave' | 'manual_save';
+
+export interface FlushVersionActor {
+  actorType: VersionActorType;
+  actorId?: string | null | undefined;
+}
 
 export interface FlushBranchMarkdownMirrorResult {
   branchId: string;
@@ -43,6 +48,7 @@ export async function flushBranchMarkdownMirror(
   docId: string,
   branchId: string,
   operation: FlushVersionOperation = 'autosave',
+  actor: FlushVersionActor = { actorType: 'system' },
 ): Promise<FlushBranchMarkdownMirrorResult> {
   return withTransaction(pool, async (client) => {
     const state = await client.query<{
@@ -140,7 +146,8 @@ export async function flushBranchMarkdownMirror(
       parentVersionId: row.head_version_id,
       markdown: serialized.markdown,
       hash: serialized.hash,
-      actorType: 'system',
+      actorType: actor.actorType,
+      actorId: actor.actorId ?? undefined,
       operation,
     });
 

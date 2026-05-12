@@ -5,25 +5,22 @@ import { withTransaction } from '../db/client';
 
 export type AccessOperation = 'read' | 'write';
 export type AccessGrantRole = 'view' | 'edit';
-export type AccessClientKind = 'browser' | 'agent' | 'api';
+export type AccessClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'api';
+export type AccessActorKind = 'user' | 'guest' | 'agent' | 'daemon';
+export type DocumentGrantSource = 'document_access_grants';
 
 export interface VerifiedDocumentAccess {
   actorType: 'agent' | 'user';
   actorId?: string;
   grantId?: string;
+  grantSource?: DocumentGrantSource;
+  canManageAccess?: boolean;
   role?: AccessGrantRole;
 }
 
 interface AgentTokenRow {
   can_read: boolean;
   can_write: boolean;
-  expires_at: Date | string | null;
-  revoked_at: Date | string | null;
-}
-
-interface ShareLinkRow {
-  id: string;
-  role: 'view' | 'edit';
   expires_at: Date | string | null;
   revoked_at: Date | string | null;
 }
@@ -139,6 +136,11 @@ function nextGuestName(rows: Array<{ display_name: string }>): string {
   return `Guest ${maxGuestNumber + 1}`;
 }
 
+function documentGrantActorId(token: string, tokenHash: string): string {
+  const prefix = token.startsWith('ml_share_') ? 'share' : 'access';
+  return `${prefix}:${tokenHash}`;
+}
+
 export async function verifyDocumentAccess(
   pool: DbPool,
   token: string | undefined,
@@ -149,7 +151,7 @@ export async function verifyDocumentAccess(
   if (!token) throw new Error('forbidden');
 
   const tokenHash = hashToken(token);
-  const [agentResult, shareResult, accessGrantResult] = await Promise.all([
+  const [agentResult, accessGrantResult] = await Promise.all([
     pool.query<AgentTokenRow>(
       `select t.can_read, t.can_write, t.expires_at, t.revoked_at
          from agent_tokens t
@@ -162,37 +164,26 @@ export async function verifyDocumentAccess(
           and (t.branch_id = $3 or t.branch_id is null)`,
       [tokenHash, docId, branchId],
     ),
-    pool.query<ShareLinkRow>(
-      `select s.id, s.role, s.expires_at, s.revoked_at
-         from share_links s
-         join document_branches b
-           on b.id = $3
-          and b.doc_id = s.doc_id
-          and b.is_archived = false
-        where s.token_hash = $1
-          and s.doc_id = $2
-          and (s.branch_id = $3 or s.branch_id is null)`,
-      [tokenHash, docId, branchId],
-    ),
     pool.query<AccessGrantRow>(
       `select g.id, g.role, g.expires_at, g.revoked_at
-         from access_grants g
+         from document_access_grants g
          join document_branches b
-           on b.id = g.branch_id
+           on b.id = $3
           and b.doc_id = g.doc_id
+          and b.is_archived = false
         where g.token_hash = $1
           and g.doc_id = $2
-          and g.branch_id = $3
-          and b.is_archived = false`,
+          and (g.branch_id = $3 or g.branch_id is null)`,
       [tokenHash, docId, branchId],
     ),
   ]);
 
   for (const row of accessGrantResult.rows) {
     if (!isUsable(row)) continue;
-    if (operation === 'read') return { actorType: 'user', actorId: `access:${tokenHash}`, grantId: row.id, role: row.role };
+    const actorId = documentGrantActorId(token, tokenHash);
+    if (operation === 'read') return { actorType: 'user', actorId, grantId: row.id, grantSource: 'document_access_grants', role: row.role };
     if (operation === 'write' && row.role === 'edit') {
-      return { actorType: 'user', actorId: `access:${tokenHash}`, grantId: row.id, role: row.role };
+      return { actorType: 'user', actorId, grantId: row.id, grantSource: 'document_access_grants', role: row.role };
     }
   }
 
@@ -200,14 +191,6 @@ export async function verifyDocumentAccess(
     if (!isUsable(row)) continue;
     if (operation === 'read' && row.can_read) return { actorType: 'agent', actorId: `agent:${tokenHash}` };
     if (operation === 'write' && row.can_write) return { actorType: 'agent', actorId: `agent:${tokenHash}` };
-  }
-
-  for (const row of shareResult.rows) {
-    if (!isUsable(row)) continue;
-    if (operation === 'read') return { actorType: 'user', actorId: `share:${tokenHash}`, grantId: row.id, role: row.role };
-    if (operation === 'write' && row.role === 'edit') {
-      return { actorType: 'user', actorId: `share:${tokenHash}`, grantId: row.id, role: row.role };
-    }
   }
 
   throw new Error('forbidden');
@@ -221,10 +204,10 @@ export async function createOrUpdateAccessSession(
     const normalizedName = input.displayName.trim();
     const grantResult = await client.query<AccessGrantRow>(
       `select id, role, expires_at, revoked_at
-         from access_grants
+         from document_access_grants
         where id = $1
           and doc_id = $2
-          and branch_id = $3
+          and (branch_id = $3 or branch_id is null)
         for update`,
       [input.grantId, input.docId, input.branchId],
     );
@@ -232,14 +215,16 @@ export async function createOrUpdateAccessSession(
     if (!grant || !isUsable(grant) || grant.role !== 'edit') throw new Error('forbidden');
 
     const existing = await client.query<AccessSessionRow>(
-      `update access_sessions
-          set display_name = case when $4 <> '' then $4 else display_name end,
-              last_branch_id = $3,
+      `update document_access_sessions
+          set doc_id = $3,
+              branch_id = $4,
+              display_name = case when $5 <> '' then $5 else display_name end,
+              last_branch_id = $4,
               last_seen_at = now()
         where grant_id = $1
           and client_id = $2
         returning id, grant_id, client_id, client_kind, display_name, color, last_branch_id, created_at, last_seen_at`,
-      [input.grantId, input.clientId, input.branchId, normalizedName],
+      [input.grantId, input.clientId, input.docId, input.branchId, normalizedName],
     );
     const existingRow = existing.rows[0];
     if (existingRow) return sessionFromRow(existingRow);
@@ -248,7 +233,7 @@ export async function createOrUpdateAccessSession(
     if (!displayName) {
       const guests = await client.query<{ display_name: string }>(
         `select display_name
-           from access_sessions
+           from document_access_sessions
           where grant_id = $1
             and display_name like 'Guest %'
           for update`,
@@ -259,14 +244,55 @@ export async function createOrUpdateAccessSession(
 
     const color = colorForSession(input.grantId, input.clientId);
     const inserted = await client.query<AccessSessionRow>(
-      `insert into access_sessions
-         (grant_id, client_id, client_kind, display_name, color, last_branch_id)
-       values ($1, $2, $3, $4, $5, $6)
+      `insert into document_access_sessions
+         (grant_id, doc_id, branch_id, client_id, client_kind, display_name, color, last_branch_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
        returning id, grant_id, client_id, client_kind, display_name, color, last_branch_id, created_at, last_seen_at`,
-      [input.grantId, input.clientId, input.clientKind, displayName, color, input.branchId],
+      [input.grantId, input.docId, input.branchId, input.clientId, input.clientKind, displayName, color, input.branchId],
     );
     const insertedRow = inserted.rows[0];
     if (!insertedRow) throw new Error('access_session_insert_failed');
     return sessionFromRow(insertedRow);
   });
+}
+
+export async function recordDocumentAccessSession(pool: DbPool, input: {
+  grantId?: string | null;
+  docId: string;
+  branchId: string;
+  sessionId: string;
+  clientKind: AccessClientKind;
+  actorKind: AccessActorKind;
+  actorId?: string | null;
+  displayName: string;
+}): Promise<void> {
+  const color = colorForSession(input.grantId ?? input.docId, input.sessionId);
+  // View-session audit identity is server-validated control-plane state, never client-authored Y.PermanentUserData.
+  await pool.query(
+    `insert into document_access_sessions
+       (grant_id, doc_id, branch_id, client_id, client_kind, actor_kind, actor_id, display_name, color, last_branch_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     on conflict (grant_id, client_id) do update
+       set doc_id = excluded.doc_id,
+           branch_id = excluded.branch_id,
+           client_kind = excluded.client_kind,
+           actor_kind = excluded.actor_kind,
+           actor_id = excluded.actor_id,
+           display_name = excluded.display_name,
+           color = excluded.color,
+           last_branch_id = excluded.last_branch_id,
+           last_seen_at = now()`,
+    [
+      input.grantId ?? null,
+      input.docId,
+      input.branchId,
+      input.sessionId,
+      input.clientKind,
+      input.actorKind,
+      input.actorId ?? null,
+      input.displayName,
+      color,
+      input.branchId,
+    ],
+  );
 }

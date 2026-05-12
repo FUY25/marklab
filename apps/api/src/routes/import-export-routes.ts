@@ -6,15 +6,21 @@ import { toRoomName } from '../collab/persistence';
 import type { DbPool } from '../db/client';
 import type { HttpAppOptions } from '../http/app';
 import { createDoc } from '../services/doc-create';
+import { readBranchState } from '../services/doc-read';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
+import { requireWorkspaceRole } from '../services/control-plane-access';
+import { authenticateRequestUser } from '../services/user-service';
+import { versionActorFromAccess } from '../services/version-actor';
 
 const createSchema = z.object({
   title: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
 });
 
 const importSchema = z.object({
   title: z.string().min(1),
   markdown: z.string(),
+  workspaceId: z.string().min(1).optional(),
 });
 
 class ExportVersionMismatchError extends Error {
@@ -33,14 +39,51 @@ function requiredParam(req: Request, name: string): string {
   return value;
 }
 
+async function optionalWriteAccess(options: HttpAppOptions, req: Request, docId: string, branchId: string) {
+  if (!options.auth) return undefined;
+  try {
+    return await options.auth.requireDocumentAccess(req, docId, branchId, 'write');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'forbidden') return undefined;
+    throw error;
+  }
+}
+
+async function docCreationContext(pool: DbPool, options: HttpAppOptions, req: Request, workspaceId: string | undefined) {
+  if (workspaceId) {
+    const user = await authenticateRequestUser(pool, req);
+    if (!user) throw new Error('unauthorized');
+    await requireWorkspaceRole(pool, { workspaceId, userId: user.userId, allowed: ['Owner', 'Member'] });
+    return {
+      actorType: 'user' as const,
+      actorId: user.userId,
+      ownerUserId: user.userId,
+      workspaceId,
+    };
+  }
+
+  const actor = versionActorFromAccess(await options.auth?.requireAdminAccess(req));
+  const ownerUserId =
+    actor.actorType === 'user'
+    && actor.actorId
+    && actor.actorId !== 'admin'
+    && actor.actorId !== 'dev-anonymous'
+      ? actor.actorId
+      : undefined;
+  return {
+    ...actor,
+    ...(ownerUserId ? { ownerUserId } : {}),
+  };
+}
+
 export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions = {}) {
   const router = Router();
 
   router.post('/docs', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await options.auth?.requireAdminAccess(req);
       const body = createSchema.parse(req.body);
-      const result = await createDoc({ pool, title: body.title, markdown: '', operation: 'create' });
+      const context = await docCreationContext(pool, options, req, body.workspaceId);
+      const result = await createDoc({ pool, title: body.title, markdown: '', operation: 'create', ...context });
       res.status(201).json(result);
     } catch (error) {
       next(error);
@@ -49,9 +92,9 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
 
   router.post('/docs/import', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await options.auth?.requireAdminAccess(req);
       const body = importSchema.parse(req.body);
-      const result = await createDoc({ pool, title: body.title, markdown: body.markdown, operation: 'import' });
+      const context = await docCreationContext(pool, options, req, body.workspaceId);
+      const result = await createDoc({ pool, title: body.title, markdown: body.markdown, operation: 'import', ...context });
       res.status(201).json(result);
     } catch (error) {
       next(error);
@@ -65,7 +108,10 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
 
       await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
+      const writeAccess = await optionalWriteAccess(options, req, docId, branchId);
+      const exported = writeAccess
+        ? await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save', versionActorFromAccess(writeAccess))
+        : await readBranchState(pool, docId, branchId);
 
       const metadata = await pool.query<{ title: string; branch_slug: string }>(
         `select d.title, b.slug as branch_slug
@@ -77,23 +123,23 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
       const metadataRow = metadata.rows[0];
       if (!metadataRow) throw new Error('branch_not_found');
 
-      const bodyHash = sha256Hex(flushed.markdown);
-      if (bodyHash !== flushed.hash) {
-        throw new ExportVersionMismatchError(bodyHash, flushed.hash);
+      const bodyHash = sha256Hex(exported.markdown);
+      if (bodyHash !== exported.hash) {
+        throw new ExportVersionMismatchError(bodyHash, exported.hash);
       }
 
       const filename = buildExportFilename({
         title: metadataRow.title,
         docId,
         branchSlug: metadataRow.branch_slug,
-        versionNumber: flushed.versionNumber,
+        versionNumber: exported.versionNumber,
         exportedAt: new Date(),
-        hash: flushed.hash,
+        hash: exported.hash,
       });
 
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(flushed.markdown);
+      res.send(exported.markdown);
     } catch (error) {
       if (error instanceof ExportVersionMismatchError) {
         res.status(409).json({

@@ -8,6 +8,7 @@ import { applyMarkdownToBranchState } from '../services/editor-state';
 import type { LiveMarkdownOperation, LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 import { toRoomName } from '../collab/persistence';
+import { versionActorFromAccess } from '../services/version-actor';
 
 const writeSchema = z.object({
   baseVersionId: z.string().min(1),
@@ -28,6 +29,16 @@ function requiredParam(req: Request, name: string): string {
   return value;
 }
 
+async function optionalWriteAccess(options: HttpAppOptions, req: Request, docId: string, branchId: string) {
+  if (!options.auth) return undefined;
+  try {
+    return await options.auth.requireDocumentAccess(req, docId, branchId, 'write');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'forbidden') return undefined;
+    throw error;
+  }
+}
+
 export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const router = Router();
 
@@ -37,7 +48,10 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
       const branchId = requiredParam(req, 'branchId');
       await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave');
+      const writeAccess = await optionalWriteAccess(options, req, docId, branchId);
+      if (writeAccess) {
+        await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave', versionActorFromAccess(writeAccess));
+      }
       res.json(await readBranchState(pool, docId, branchId));
     } catch (error) {
       next(error);
@@ -49,7 +63,8 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
     const branchId = requiredParam(req, 'branchId');
 
     try {
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const actor = versionActorFromAccess(access);
       const body = writeSchema.parse(req.body);
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);
@@ -63,7 +78,8 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
         parentVersionId: current.versionId,
         markdown: body.markdown,
         operation: { kind: 'write', baseVersionId: body.baseVersionId, baseHash: body.baseHash },
-        actorType: 'agent',
+        actorType: actor.actorType,
+        actorId: actor.actorId,
       });
       await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
 
@@ -91,7 +107,8 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const actor = versionActorFromAccess(access);
       const body = editSchema.parse(req.body);
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       const current = await readBranchState(pool, docId, branchId);
@@ -129,7 +146,8 @@ export function createDocAiRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, 
         parentVersionId: current.versionId,
         markdown: nextMarkdown,
         operation,
-        actorType: 'agent',
+        actorType: actor.actorType,
+        actorId: actor.actorId,
       });
       await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
 

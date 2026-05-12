@@ -2,7 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod';
 import { toRoomName } from '../collab/persistence';
 import type { DbPool } from '../db/client';
-import type { HttpAppOptions } from '../http/app';
+import type { HttpAppOptions, HttpAuthEnvironment } from '../http/app';
 import {
   createOrUpdateAccessSession,
   generateAccessToken,
@@ -13,7 +13,11 @@ import {
   verifyAdminToken,
   verifyDocumentAccess,
   type AccessClientKind,
+  type AccessOperation,
+  type VerifiedDocumentAccess,
 } from '../services/access-control';
+import { authenticateRequestUser } from '../services/user-service';
+import { requireUserDocumentAccess } from '../services/control-plane-access';
 
 interface AgentTokenRow {
   id: string;
@@ -57,6 +61,16 @@ interface AccessSessionListRow {
   last_seen_at?: Date | string;
 }
 
+interface GrantManagementAccessRow {
+  owner_id: string | null;
+  workspace_id: string | null;
+  member_role: 'Owner' | 'Member' | 'Reader' | null;
+}
+
+interface GrantManagementAccess {
+  userId: string | null;
+}
+
 const createAgentTokenSchema = z.object({
   name: z.string().min(1),
   canRead: z.boolean().optional().default(true),
@@ -76,12 +90,18 @@ const createAccessGrantSchema = z.object({
 
 const createAccessSessionSchema = z.object({
   clientId: z.string().min(1),
-  clientKind: z.enum(['browser', 'agent', 'api']).optional().default('browser'),
+  clientKind: z.enum(['browser', 'app', 'daemon', 'agent', 'api']).optional().default('browser'),
   displayName: z.string().default(''),
 });
 
-function authRequired(): boolean {
-  return process.env.MARKLAB_REQUIRE_AUTH === 'true';
+type AccessRouteOptions = Pick<HttpAppOptions, 'closeCollabDocumentConnections' | 'authEnvironment'>;
+
+function accessRouteAuthEnvironment(input?: Partial<HttpAuthEnvironment>): Pick<HttpAuthEnvironment, 'requireAuth' | 'devAnonymousAccess' | 'adminTokenHash'> {
+  return {
+    requireAuth: input?.requireAuth ?? process.env.MARKLAB_REQUIRE_AUTH === 'true',
+    devAnonymousAccess: input?.devAnonymousAccess ?? process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB === 'true',
+    adminTokenHash: input?.adminTokenHash ?? process.env.MARKLAB_ADMIN_TOKEN_HASH,
+  };
 }
 
 function bearerToken(req: Request): string | undefined {
@@ -96,20 +116,84 @@ function documentToken(req: Request): string | undefined {
   return bearerToken(req);
 }
 
-function requireAdmin(req: Request): void {
-  if (!authRequired()) return;
-  verifyAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
+function requireAdmin(req: Request, authEnvironment: Pick<HttpAuthEnvironment, 'requireAuth' | 'devAnonymousAccess' | 'adminTokenHash'>): void {
+  if (!authEnvironment.requireAuth && authEnvironment.devAnonymousAccess) return;
+  verifyAdminToken(bearerToken(req), authEnvironment.adminTokenHash);
 }
 
-function isAdminRequest(req: Request): boolean {
-  if (!authRequired()) return true;
-  return isAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
+function isAdminRequest(req: Request, authEnvironment: Pick<HttpAuthEnvironment, 'requireAuth' | 'devAnonymousAccess' | 'adminTokenHash'>): boolean {
+  if (!authEnvironment.requireAuth && authEnvironment.devAnonymousAccess) return true;
+  return isAdminToken(bearerToken(req), authEnvironment.adminTokenHash);
 }
 
-async function requireBranchWriteAccess(pool: DbPool, req: Request, docId: string, branchId: string): Promise<void> {
-  if (isAdminRequest(req)) return;
-  const access = await verifyDocumentAccess(pool, documentToken(req), docId, branchId, 'write');
-  if (!access.grantId || access.role !== 'edit') throw new Error('forbidden');
+async function verifyRequestDocumentAccess(
+  pool: DbPool,
+  req: Request,
+  docId: string,
+  branchId: string,
+  operation: AccessOperation,
+  authEnvironment: Pick<HttpAuthEnvironment, 'adminTokenHash'>,
+): Promise<VerifiedDocumentAccess> {
+  const token = documentToken(req);
+  if (isAdminToken(bearerToken(req), authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
+  const user = await authenticateRequestUser(pool, req);
+  if (user) {
+    try {
+      return await requireUserDocumentAccess(pool, { userId: user.userId, docId, branchId, operation });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'forbidden') throw error;
+      if (operation === 'write') {
+        let hasReadAccess = false;
+        try {
+          await requireUserDocumentAccess(pool, { userId: user.userId, docId, branchId, operation: 'read' });
+          hasReadAccess = true;
+        } catch (readError) {
+          if (!(readError instanceof Error) || readError.message !== 'forbidden') throw readError;
+        }
+        if (hasReadAccess) throw new Error('forbidden');
+      }
+    }
+  }
+
+  if (isAdminToken(token, authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
+  return verifyDocumentAccess(pool, token, docId, branchId, operation);
+}
+
+async function requireGrantManagementAccess(
+  pool: DbPool,
+  req: Request,
+  docId: string,
+  branchId: string | null,
+  authEnvironment: Pick<HttpAuthEnvironment, 'requireAuth' | 'devAnonymousAccess' | 'adminTokenHash'>,
+): Promise<GrantManagementAccess> {
+  if (isAdminRequest(req, authEnvironment)) return { userId: null };
+  const user = await authenticateRequestUser(pool, req);
+  if (!user) throw new Error('forbidden');
+
+  const result = await pool.query<GrantManagementAccessRow>(
+    `select d.owner_id,
+            d.workspace_id,
+            m.role as member_role
+	       from documents d
+	       left join document_branches b
+	         on b.doc_id = d.id
+	        and b.id = $2
+	        and b.is_archived = false
+       left join workspace_members m
+         on m.workspace_id = d.workspace_id
+        and m.user_id = $3
+	      where d.id = $1
+	        and ($2 is null or b.id is not null)`,
+    [docId, branchId, user.userId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('branch_not_found');
+  if (row.workspace_id) {
+    if (row.member_role === 'Owner') return { userId: user.userId };
+    throw new Error('forbidden');
+  }
+  if (row.owner_id === user.userId) return { userId: user.userId };
+  throw new Error('forbidden');
 }
 
 function requiredParam(req: Request, name: string): string {
@@ -180,28 +264,30 @@ function toAccessGrantSummary(row: AccessGrantRow) {
   };
 }
 
-export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, 'closeCollabDocumentConnections'> = {}) {
+export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {}) {
   const router = Router();
+  const authEnvironment = accessRouteAuthEnvironment(options.authEnvironment);
 
   router.get('/docs/:docId/branches/:branchId/access', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!authRequired()) {
-        res.json({ canRead: true, canWrite: true, actorType: 'user' });
-        return;
+      if (!authEnvironment.requireAuth) {
+        if (authEnvironment.devAnonymousAccess) {
+          res.json({ canRead: true, canWrite: true, actorType: 'user' });
+          return;
+        }
       }
 
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      const token = documentToken(req);
-      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) {
+      if (isAdminToken(documentToken(req), authEnvironment.adminTokenHash)) {
         res.json({ canRead: true, canWrite: true, actorType: 'user' });
         return;
       }
 
-      const readAccess = await verifyDocumentAccess(pool, token, docId, branchId, 'read');
+      const readAccess = await verifyRequestDocumentAccess(pool, req, docId, branchId, 'read', authEnvironment);
       let canWrite = false;
       try {
-        await verifyDocumentAccess(pool, token, docId, branchId, 'write');
+        await verifyRequestDocumentAccess(pool, req, docId, branchId, 'write', authEnvironment);
         canWrite = true;
       } catch (error) {
         if (!(error instanceof Error) || error.message !== 'forbidden') throw error;
@@ -221,7 +307,7 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.post('/docs/:docId/branches/:branchId/agent-tokens', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
+      requireAdmin(req, authEnvironment);
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const body = createAgentTokenSchema.parse(req.body);
@@ -250,7 +336,7 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.get('/docs/:docId/branches/:branchId/agent-tokens', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
+      requireAdmin(req, authEnvironment);
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const result = await pool.query<AgentTokenRow>(
@@ -270,7 +356,7 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.delete('/agent-tokens/:tokenId', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
+      requireAdmin(req, authEnvironment);
       const tokenId = requiredParam(req, 'tokenId');
       const result = await pool.query<{ id: string }>(
         `update agent_tokens
@@ -291,27 +377,24 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await requireBranchWriteAccess(pool, req, docId, branchId);
+      const manager = await requireGrantManagementAccess(pool, req, docId, branchId, authEnvironment);
       const body = createAccessGrantSchema.parse(req.body);
-      const branchResult = await pool.query<{ id: string }>(
-        `select id
-           from document_branches
-          where id = $1
-            and doc_id = $2
-            and is_archived = false`,
-        [branchId, docId],
-      );
-      if (!branchResult.rows[0]) throw new Error('branch_not_found');
       const token = generateAccessToken();
       const result = await pool.query<AccessGrantRow>(
-        `insert into access_grants
-           (doc_id, branch_id, token_hash, role, expires_at)
-         values ($1, $2, $3, $4, $5)
+        `insert into document_access_grants
+           (doc_id, branch_id, workspace_id, folder_id, created_by_user_id, grant_kind, token_hash, role, expires_at)
+         select d.id, b.id, d.workspace_id, d.folder_id, $6, 'access', $3, $4, $5
+           from documents d
+           join document_branches b
+             on b.doc_id = d.id
+            and b.id = $2
+            and b.is_archived = false
+          where d.id = $1
          returning id, branch_id, role, expires_at, revoked_at, created_at`,
-        [docId, branchId, hashToken(token), body.role, body.expiresAt ?? null],
+        [docId, branchId, hashToken(token), body.role, body.expiresAt ?? null, manager.userId],
       );
       const row = result.rows[0];
-      if (!row) throw new Error('access_grant_insert_failed');
+      if (!row) throw new Error('branch_not_found');
       res.status(201).json({
         grantId: row.id,
         branchId: row.branch_id,
@@ -329,7 +412,7 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await requireBranchWriteAccess(pool, req, docId, branchId);
+      await requireGrantManagementAccess(pool, req, docId, branchId, authEnvironment);
       const result = await pool.query<AccessGrantRow>(
         `select g.id,
                 g.branch_id,
@@ -354,13 +437,14 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
                 ) as sessions
            from (
              select *
-               from access_grants
+               from document_access_grants
               where doc_id = $1
                 and branch_id = $2
+                and grant_kind = 'access'
                 and revoked_at is null
            ) g
            join document_branches b on b.id = g.branch_id
-           left join access_sessions s on s.grant_id = g.id
+           left join document_access_sessions s on s.grant_id = g.id
           group by g.id, g.branch_id, b.name, g.role, g.expires_at, g.revoked_at, g.created_at
           order by g.created_at desc`,
         [docId, branchId],
@@ -376,18 +460,20 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
       const grantId = requiredParam(req, 'grantId');
       const grantResult = await pool.query<{ doc_id: string; branch_id: string }>(
         `select doc_id, branch_id
-           from access_grants
+          from document_access_grants
           where id = $1
+            and grant_kind = 'access'
             and revoked_at is null`,
         [grantId],
       );
       const grant = grantResult.rows[0];
       if (!grant) throw new Error('access_grant_not_found');
-      await requireBranchWriteAccess(pool, req, grant.doc_id, grant.branch_id);
+      await requireGrantManagementAccess(pool, req, grant.doc_id, grant.branch_id, authEnvironment);
       const result = await pool.query<{ id: string }>(
-        `update access_grants
+        `update document_access_grants
             set revoked_at = now()
           where id = $1
+            and grant_kind = 'access'
             and revoked_at is null
           returning id`,
         [grantId],
@@ -405,8 +491,8 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const body = createAccessSessionSchema.parse(req.body);
-      const access = await verifyDocumentAccess(pool, documentToken(req), docId, branchId, 'write');
-      if (!access.grantId || access.role !== 'edit') throw new Error('forbidden');
+      const access = await verifyRequestDocumentAccess(pool, req, docId, branchId, 'write', authEnvironment);
+      if (!access.grantId || access.grantSource !== 'document_access_grants' || access.role !== 'edit') throw new Error('forbidden');
 
       const session = await createOrUpdateAccessSession(pool, {
         grantId: access.grantId,
@@ -434,20 +520,26 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.post('/docs/:docId/branches/:branchId/share-links', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      const manager = await requireGrantManagementAccess(pool, req, docId, branchId, authEnvironment);
       const body = createShareLinkSchema.parse(req.body);
       const token = generateShareToken();
       const result = await pool.query<ShareLinkRow>(
-        `insert into share_links
-           (doc_id, branch_id, token_hash, role, expires_at)
-         values ($1, $2, $3, $4, $5)
+        `insert into document_access_grants
+           (doc_id, branch_id, workspace_id, folder_id, created_by_user_id, grant_kind, token_hash, role, expires_at)
+         select d.id, b.id, d.workspace_id, d.folder_id, $6, 'share', $3, $4, $5
+           from documents d
+           join document_branches b
+             on b.doc_id = d.id
+            and b.id = $2
+            and b.is_archived = false
+          where d.id = $1
          returning id, role, expires_at, created_at`,
-        [docId, branchId, hashToken(token), body.role, body.expiresAt ?? null],
+        [docId, branchId, hashToken(token), body.role, body.expiresAt ?? null, manager.userId],
       );
       const row = result.rows[0];
-      if (!row) throw new Error('share_link_insert_failed');
+      if (!row) throw new Error('branch_not_found');
       res.status(201).json({
         linkId: row.id,
         token,
@@ -461,14 +553,15 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.get('/docs/:docId/branches/:branchId/share-links', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
+      await requireGrantManagementAccess(pool, req, docId, branchId, authEnvironment);
       const result = await pool.query<ShareLinkRow>(
         `select id, role, expires_at, created_at
-           from share_links
+          from document_access_grants
           where doc_id = $1
-            and branch_id = $2
+            and (branch_id = $2 or branch_id is null)
+            and grant_kind = 'share'
             and revoked_at is null
           order by created_at desc`,
         [docId, branchId],
@@ -481,12 +574,23 @@ export function createAccessRoutes(pool: DbPool, options: Pick<HttpAppOptions, '
 
   router.delete('/share-links/:linkId', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      requireAdmin(req);
       const linkId = requiredParam(req, 'linkId');
+      const grantResult = await pool.query<{ doc_id: string; branch_id: string | null }>(
+        `select doc_id, branch_id
+          from document_access_grants
+          where id = $1
+            and grant_kind = 'share'
+            and revoked_at is null`,
+        [linkId],
+      );
+      const grant = grantResult.rows[0];
+      if (!grant) throw new Error('share_link_not_found');
+      await requireGrantManagementAccess(pool, req, grant.doc_id, grant.branch_id, authEnvironment);
       const result = await pool.query<{ id: string }>(
-        `update share_links
+        `update document_access_grants
             set revoked_at = now()
           where id = $1
+            and grant_kind = 'share'
             and revoked_at is null
           returning id`,
         [linkId],

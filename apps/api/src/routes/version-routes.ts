@@ -9,6 +9,7 @@ import type { LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 import type { VerifiedDocumentAccess } from '../services/access-control';
 import { getDocumentSummary, listBranches, listVersions, showVersion } from '../services/version-service';
+import { versionActorFromAccess } from '../services/version-actor';
 
 const restoreSchema = z.object({
   versionId: z.string().min(1),
@@ -20,12 +21,16 @@ function requiredParam(req: Request, name: string): string {
   return value;
 }
 
-function authRequired(): boolean {
-  return process.env.MARKLAB_REQUIRE_AUTH === 'true';
+function authRequired(options: HttpAppOptions): boolean {
+  return options.authEnvironment?.requireAuth ?? process.env.MARKLAB_REQUIRE_AUTH === 'true';
 }
 
 function isBranchScopedAccess(access: VerifiedDocumentAccess | void): boolean {
   return Boolean(access?.grantId);
+}
+
+function isPublicViewGrant(access: VerifiedDocumentAccess | void): boolean {
+  return access?.grantSource === 'document_access_grants' && access.role === 'view';
 }
 
 export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
@@ -37,7 +42,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
       const doc = await getDocumentSummary(pool, docId);
       let access: VerifiedDocumentAccess | void = undefined;
       if (doc.defaultBranchId) access = await options.auth?.requireDocumentAccess(req, docId, doc.defaultBranchId, 'read');
-      else if (authRequired()) throw new Error('forbidden');
+      else if (authRequired(options)) throw new Error('forbidden');
       const branches = await listBranches(pool, docId);
       res.json({
         ...doc,
@@ -58,7 +63,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
         const access = await options.auth?.requireDocumentAccess(req, docId, doc.defaultBranchId, 'read');
         if (isBranchScopedAccess(access)) throw new Error('forbidden');
       }
-      else if (authRequired()) throw new Error('forbidden');
+      else if (authRequired(options)) throw new Error('forbidden');
       res.json({ branches: await listBranches(pool, docId) });
     } catch (error) {
       next(error);
@@ -109,7 +114,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
         access: {
           canRead: true,
           canWrite,
-          canManageAccess: canWrite,
+          canManageAccess: Boolean(readAccess?.canManageAccess ?? (!authRequired(options) && canWrite)),
           canManageVersions: canWrite,
           canSwitchBranches: false,
           actorType: readAccess?.actorType ?? 'user',
@@ -126,7 +131,8 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
+      if (isPublicViewGrant(access)) throw new Error('forbidden');
       res.json({ versions: await listVersions(pool, docId, branchId) });
     } catch (error) {
       next(error);
@@ -137,9 +143,9 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save');
+      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save', versionActorFromAccess(access));
       res.json({
         created: saved.createdVersion,
         versionId: saved.versionId,
@@ -155,9 +161,9 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave');
+      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave', versionActorFromAccess(access));
       res.json({
         created: saved.createdVersion,
         versionId: saved.versionId,
@@ -174,7 +180,8 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
       const docId = requiredParam(req, 'docId');
       const versionId = requiredParam(req, 'versionId');
       const version = await showVersion(pool, docId, versionId);
-      await options.auth?.requireDocumentAccess(req, docId, version.branchId, 'read');
+      const access = await options.auth?.requireDocumentAccess(req, docId, version.branchId, 'read');
+      if (isPublicViewGrant(access)) throw new Error('forbidden');
       res.json(version);
     } catch (error) {
       next(error);
@@ -189,7 +196,8 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
     try {
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
+      const actor = versionActorFromAccess(access);
       const body = restoreSchema.parse(req.body);
       await options.flushCollabDocument?.(toRoomName(docId, branchId));
       await readBranchState(pool, docId, branchId);
@@ -199,6 +207,8 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
         docId,
         branchId,
         versionId: body.versionId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
       });
       await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });

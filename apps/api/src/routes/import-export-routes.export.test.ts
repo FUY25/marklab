@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sha256Hex } from '@marklab/shared/src/hash';
 import { createHttpApp } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
@@ -14,6 +14,17 @@ vi.mock('../services/milkdown-transformer', () => ({
 interface CapturedQuery {
   sql: string;
   params?: readonly unknown[];
+}
+
+const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
+const originalDevAnonymousCollab = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }
 
 interface ExportPoolOptions {
@@ -80,7 +91,14 @@ function createExportPool(options: ExportPoolOptions) {
 
 describe('export route version metadata consistency', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(flushBranchMarkdownMirror).mockReset();
+    process.env.MARKLAB_REQUIRE_AUTH = 'false';
+    process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB = 'true';
+  });
+
+  afterEach(() => {
+    restoreEnv('MARKLAB_REQUIRE_AUTH', originalRequireAuth);
+    restoreEnv('MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB', originalDevAnonymousCollab);
   });
 
   it('exports the exact flushed payload even when a later branch-state read would differ', async () => {
@@ -172,26 +190,30 @@ describe('export route version metadata consistency', () => {
 
     const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
 
-    expect(vi.mocked(flushBranchMarkdownMirror)).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'manual_save');
+    expect(vi.mocked(flushBranchMarkdownMirror)).toHaveBeenCalledWith(pool, 'doc_001', 'br_main', 'manual_save', {
+      actorType: 'user',
+      actorId: 'dev-anonymous',
+    });
     expect(response.text).toBe('# Exported\n');
     expect(response.headers['content-type']).toContain('text/markdown');
     expect(response.headers['content-disposition']).toContain('__v0011__');
     expect(response.headers['content-disposition']).toContain(`__sha-${flushedHash.slice('sha256:'.length, 15)}__`);
   });
 
-  it('authorizes export against the requested shared branch before flushing', async () => {
-    const flushedHash = sha256Hex('# Exported\n');
+  it('authorizes read-only export against the requested shared branch without creating a manual-save version', async () => {
+    const exportedHash = sha256Hex('# Exported\n');
     vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
       branchId: 'br_main',
-      markdown: '# Exported\n',
-      hash: flushedHash,
+      markdown: '# Should not be used\n',
+      hash: sha256Hex('# Should not be used\n'),
       versionId: 'ver_011',
       versionNumber: 11,
       createdVersion: true,
     });
     const { pool } = createExportPool({
-      currentHash: flushedHash,
-      versionHash: flushedHash,
+      currentHash: exportedHash,
+      versionHash: exportedHash,
+      currentMarkdown: '# Exported\n',
     });
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
       auth: {
@@ -199,13 +221,18 @@ describe('export route version metadata consistency', () => {
           throw new Error('forbidden');
         },
         async requireDocumentAccess(_req, docId, branchId, operation) {
-          if (docId !== 'doc_001' || branchId !== 'br_main' || operation !== 'read') throw new Error('forbidden');
-          return { actorType: 'user', grantId: 'agr_1', role: 'view' };
+          if (docId !== 'doc_001' || branchId !== 'br_main') throw new Error('forbidden');
+          if (operation === 'write') throw new Error('forbidden');
+          return { actorType: 'user', actorId: 'user_reader', grantId: 'agr_1', role: 'view' };
         },
       },
     });
 
-    await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
+
+    expect(response.text).toBe('# Exported\n');
+    expect(response.headers['content-disposition']).toContain('__v0007__');
+    expect(vi.mocked(flushBranchMarkdownMirror)).not.toHaveBeenCalled();
     await request(app).get('/api/docs/doc_001/branches/br_other/export.md').expect(403, { error: 'forbidden' });
   });
 

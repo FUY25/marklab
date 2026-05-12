@@ -150,7 +150,8 @@ async function createPreAgentCheckpointIfNeeded(
     parentVersionId: branchState.headVersionId,
     markdown: checkpointMarkdown,
     hash: checkpointHash,
-    actorType: 'system',
+    actorType: input.actorType,
+    actorId: input.actorId,
     operation: checkpointOperation,
   });
 
@@ -163,6 +164,8 @@ export interface RestoreVersionToBranchInput {
   docId: string;
   branchId: string;
   versionId: string;
+  actorType: VersionActorType;
+  actorId?: string | undefined;
 }
 
 export async function restoreVersionToBranchState(
@@ -187,7 +190,8 @@ export async function restoreVersionToBranchState(
     parentVersionId: sourceRow.id,
     markdown: sourceRow.markdown_snapshot,
     operation: { kind: 'rollback', sourceVersionId: sourceRow.id },
-    actorType: 'system',
+    actorType: input.actorType,
+    actorId: input.actorId,
   });
 }
 

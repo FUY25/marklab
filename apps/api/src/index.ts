@@ -23,7 +23,7 @@ import {
 } from './provider/ysweet-provider-websocket-proxy';
 import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
 import { createRemoteRelayRoomService } from './relay/relay-remote-service';
-import { createInMemoryRelayRoomService, createRelayRoomService } from './relay/relay-room-service';
+import { createInMemoryRelayRoomService } from './relay/relay-room-service';
 import { createRelayServer } from './relay/relay-server';
 import { isLoopbackLocalRequest } from './routes/local-file-routes';
 import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
@@ -84,11 +84,9 @@ async function main() {
   const localHostedRelay = Boolean(localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
   const hostedRelayService = localHostedRelay ? createRemoteRelayRoomService({ publicApiUrl: env.publicApiUrl }) : undefined;
   const localRelayService =
-    !localHostedRelay && useDatabase && env.databaseUrl
-      ? createRelayRoomService(pool)
-      : !localHostedRelay && process.env.MARKLAB_ENABLE_RELAY === 'true'
-        ? createInMemoryRelayRoomService()
-        : undefined;
+    localFileService && !localHostedRelay && process.env.MARKLAB_ENABLE_RELAY === 'true'
+      ? createInMemoryRelayRoomService()
+      : undefined;
   const relayService = hostedRelayService ?? localRelayService;
   const relay = localRelayService
     ? createRelayServer(localRelayService, {
@@ -176,17 +174,36 @@ async function main() {
       providerRequired: Boolean(ysweetProvider),
       ...(ysweetProvider ? { providerHealth: () => readYSweetProviderHealth(ysweetProvider) } : {}),
       schemaTables: [
+        'users',
+        'user_sessions',
+        'oidc_login_states',
+        'workspaces',
+        'workspace_members',
+        'workspace_share_keys',
+        'workspace_folders',
+        'folder_access_policies',
+        'plans',
+        'seat_limits',
+        'subscriptions',
+        'document_access_grants',
+        'document_access_sessions',
+        'share_links',
         'relay_rooms',
         'relay_access_grants',
         'relay_access_sessions',
         'document_branch_states',
         'collab_sessions',
         'provider_token_issuances',
+        'provider_token_refreshes',
       ],
       schemaColumns: {
+        documents: ['workspace_id', 'folder_id'],
+        document_access_grants: ['workspace_id', 'folder_id', 'created_by_user_id', 'grant_kind'],
+        document_access_sessions: ['doc_id', 'branch_id', 'actor_kind', 'actor_id'],
         document_branch_states: ['provider_doc_id', 'provider_doc_seeded_at'],
-        collab_sessions: ['refresh_token_hash', 'is_guest'],
-        provider_token_issuances: ['actor_type', 'actor_id', 'actor_grant_id', 'status', 'provider_error'],
+        collab_sessions: ['refresh_token_hash', 'is_guest', 'status'],
+        provider_token_issuances: ['workspace_id', 'folder_id', 'actor_type', 'actor_id', 'actor_grant_id', 'status', 'provider_error'],
+        provider_token_refreshes: ['session_id', 'issued_at', 'expires_at', 'denied_at', 'deny_reason'],
       },
     },
   });

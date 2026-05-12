@@ -1,5 +1,147 @@
 create extension if not exists pgcrypto;
 
+create table if not exists users (
+  id uuid primary key default gen_random_uuid(),
+  email text unique,
+  display_name text not null default '',
+  auth_provider text,
+  auth_subject text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (auth_provider, auth_subject)
+);
+
+create table if not exists user_sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  token_hash text not null unique,
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now()
+);
+
+create index if not exists user_sessions_user_seen_idx
+  on user_sessions (user_id, last_seen_at desc);
+
+create table if not exists oidc_login_states (
+  id uuid primary key default gen_random_uuid(),
+  state_hash text not null unique,
+  code_verifier text not null,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists oidc_login_states_expiration_idx
+  on oidc_login_states (expires_at)
+  where used_at is null;
+
+create table if not exists workspaces (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  owner_user_id uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists workspace_members (
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+  role text not null check (role in ('Owner', 'Member', 'Reader')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (workspace_id, user_id)
+);
+
+create table if not exists workspace_share_keys (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  token_hash text not null unique,
+  role text not null check (role in ('Member', 'Reader')),
+  created_by_user_id uuid references users(id) on delete set null,
+  expires_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table workspace_share_keys
+  drop constraint if exists workspace_share_keys_role_check;
+
+alter table workspace_share_keys
+  add constraint workspace_share_keys_role_check
+  check (role in ('Member', 'Reader')) not valid;
+
+create table if not exists workspace_folders (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  parent_folder_id uuid references workspace_folders(id) on delete cascade,
+  name text not null,
+  created_by_user_id uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (workspace_id, parent_folder_id, name)
+);
+
+create unique index if not exists workspace_folders_root_name_idx
+  on workspace_folders (workspace_id, name)
+  where parent_folder_id is null;
+
+create table if not exists folder_access_policies (
+  id uuid primary key default gen_random_uuid(),
+  folder_id uuid not null references workspace_folders(id) on delete cascade,
+  role text not null check (role in ('Owner', 'Member', 'Reader')),
+  can_read boolean not null default true,
+  can_write boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (folder_id, role)
+);
+
+create table if not exists plans (
+  id text primary key,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+insert into plans (id, name)
+values
+  ('free', 'Free'),
+  ('dev', 'Dev'),
+  ('team', 'Team'),
+  ('business', 'Business'),
+  ('internal', 'Internal')
+on conflict (id) do update set name = excluded.name;
+
+create table if not exists seat_limits (
+  plan_id text primary key references plans(id) on delete cascade,
+  member_seats integer not null,
+  concurrent_guest_edits integer not null,
+  updated_at timestamptz not null default now()
+);
+
+insert into seat_limits (plan_id, member_seats, concurrent_guest_edits)
+values
+  ('free', 1, 3),
+  ('dev', 1000, 1000),
+  ('team', 10, 10),
+  ('business', 50, 25),
+  ('internal', 1000, 1000)
+on conflict (plan_id) do update
+  set member_seats = excluded.member_seats,
+      concurrent_guest_edits = excluded.concurrent_guest_edits,
+      updated_at = now();
+
+create table if not exists subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  plan_id text not null references plans(id),
+  status text not null check (status in ('manual', 'trialing', 'active', 'past_due', 'canceled')),
+  current_period_end timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (workspace_id)
+);
+
 create table if not exists documents (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid,
@@ -47,6 +189,33 @@ alter table document_branch_states
 alter table documents
   add column if not exists workspace_id uuid;
 
+alter table documents
+  add column if not exists folder_id uuid;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'documents_workspace_fk'
+  ) then
+    alter table documents
+      add constraint documents_workspace_fk
+      foreign key (workspace_id) references workspaces(id)
+      on delete set null
+      not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'documents_folder_fk'
+  ) then
+    alter table documents
+      add constraint documents_folder_fk
+      foreign key (folder_id) references workspace_folders(id)
+      on delete set null
+      not valid;
+  end if;
+end
+$$;
+
 create unique index if not exists document_branch_states_provider_doc_id_idx
   on document_branch_states (provider_doc_id)
   where provider_doc_id is not null;
@@ -63,6 +232,7 @@ create table if not exists collab_sessions (
   refresh_token_hash text,
   is_guest boolean not null default false,
   role text check (role in ('view', 'edit')),
+  status text not null default 'active' check (status in ('active', 'failed', 'closed')),
   display_name text not null,
   created_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
@@ -70,7 +240,15 @@ create table if not exists collab_sessions (
 
 alter table collab_sessions
   add column if not exists refresh_token_hash text,
-  add column if not exists is_guest boolean not null default false;
+  add column if not exists is_guest boolean not null default false,
+  add column if not exists status text not null default 'active';
+
+alter table collab_sessions
+  drop constraint if exists collab_sessions_status_check;
+
+alter table collab_sessions
+  add constraint collab_sessions_status_check
+  check (status in ('active', 'failed', 'closed'));
 
 create index if not exists collab_sessions_doc_seen_idx
   on collab_sessions (doc_id, branch_id, last_seen_at desc);
@@ -83,6 +261,8 @@ create table if not exists provider_token_issuances (
   id uuid primary key default gen_random_uuid(),
   doc_id uuid not null references documents(id) on delete cascade,
   branch_id uuid not null references document_branches(id) on delete cascade,
+  workspace_id uuid,
+  folder_id uuid,
   provider_doc_id text not null,
   session_id text not null,
   client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
@@ -100,6 +280,8 @@ alter table provider_token_issuances
   add column if not exists actor_type text not null default 'user',
   add column if not exists actor_id text,
   add column if not exists actor_grant_id text,
+  add column if not exists workspace_id uuid,
+  add column if not exists folder_id uuid,
   add column if not exists status text not null default 'issued',
   add column if not exists provider_error text;
 
@@ -142,8 +324,67 @@ alter table provider_token_issuances
   add constraint provider_token_issuances_status_check
   check (status in ('pending', 'issued', 'failed', 'revoked'));
 
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+     where conname = 'provider_token_issuances_session_fk'
+       and confdeltype = 'c'
+  ) then
+    alter table provider_token_issuances
+      drop constraint provider_token_issuances_session_fk;
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'provider_token_issuances_session_fk'
+  ) then
+    alter table provider_token_issuances
+      add constraint provider_token_issuances_session_fk
+      foreign key (session_id) references collab_sessions(id)
+      not valid;
+  end if;
+end
+$$;
+
 create index if not exists provider_token_issuances_branch_issued_idx
   on provider_token_issuances (branch_id, issued_at desc);
+
+create table if not exists provider_token_refreshes (
+  id uuid primary key default gen_random_uuid(),
+  session_id text not null references collab_sessions(id) on delete restrict,
+  issuance_id uuid references provider_token_issuances(id) on delete set null,
+  issued_at timestamptz,
+  expires_at timestamptz,
+  denied_at timestamptz,
+  deny_reason text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists provider_token_refreshes_session_created_idx
+  on provider_token_refreshes (session_id, created_at desc);
+
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+     where conname = 'provider_token_refreshes_session_id_fkey'
+       and confdeltype = 'c'
+  ) then
+    alter table provider_token_refreshes
+      drop constraint provider_token_refreshes_session_id_fkey;
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'provider_token_refreshes_session_id_fkey'
+  ) then
+    alter table provider_token_refreshes
+      add constraint provider_token_refreshes_session_id_fkey
+      foreign key (session_id) references collab_sessions(id)
+      on delete restrict
+      not valid;
+  end if;
+end
+$$;
 
 create table if not exists document_versions (
   id uuid primary key default gen_random_uuid(),
@@ -188,6 +429,7 @@ create table if not exists agent_tokens (
   created_at timestamptz not null default now()
 );
 
+-- legacy, do not write: share_links
 create table if not exists share_links (
   id uuid primary key default gen_random_uuid(),
   doc_id uuid not null references documents(id) on delete cascade,
@@ -199,10 +441,25 @@ create table if not exists share_links (
   created_at timestamptz not null default now()
 );
 
-create table if not exists access_grants (
+do $$
+begin
+  if to_regclass('public.document_access_grants') is null
+     and to_regclass('public.access_grants') is not null then
+    execute 'alter table access_grants rename to document_access_grants';
+  end if;
+
+  if to_regclass('public.document_access_sessions') is null
+     and to_regclass('public.access_sessions') is not null then
+    execute 'alter table access_sessions rename to document_access_sessions';
+  end if;
+end
+$$;
+
+create table if not exists document_access_grants (
   id uuid primary key default gen_random_uuid(),
   doc_id uuid not null references documents(id) on delete cascade,
-  branch_id uuid not null references document_branches(id) on delete cascade,
+  branch_id uuid references document_branches(id) on delete cascade,
+  grant_kind text not null default 'access' check (grant_kind in ('access', 'share')),
   token_hash text not null unique,
   role text not null check (role in ('view', 'edit')),
   expires_at timestamptz,
@@ -210,11 +467,44 @@ create table if not exists access_grants (
   created_at timestamptz not null default now()
 );
 
-create table if not exists access_sessions (
+alter table document_access_grants
+  add column if not exists workspace_id uuid,
+  add column if not exists folder_id uuid,
+  add column if not exists created_by_user_id uuid,
+  add column if not exists grant_kind text not null default 'access';
+
+alter table document_access_grants
+  alter column branch_id drop not null;
+
+alter table document_access_grants
+  drop constraint if exists document_access_grants_kind_check;
+
+alter table document_access_grants
+  add constraint document_access_grants_kind_check
+  check (grant_kind in ('access', 'share'));
+
+insert into document_access_grants
+  (doc_id, branch_id, grant_kind, token_hash, role, expires_at, revoked_at, created_at)
+select s.doc_id,
+       s.branch_id,
+       'share',
+       s.token_hash,
+       s.role,
+       s.expires_at,
+       s.revoked_at,
+       s.created_at
+  from share_links s
+on conflict (token_hash) do nothing;
+
+create table if not exists document_access_sessions (
   id uuid primary key default gen_random_uuid(),
-  grant_id uuid not null references access_grants(id) on delete cascade,
+  grant_id uuid references document_access_grants(id) on delete cascade,
+  doc_id uuid references documents(id) on delete cascade,
+  branch_id uuid references document_branches(id) on delete set null,
   client_id text not null,
-  client_kind text not null default 'browser' check (client_kind in ('browser', 'agent', 'api')),
+  client_kind text not null default 'browser' check (client_kind in ('browser', 'app', 'daemon', 'agent', 'api')),
+  actor_kind text check (actor_kind in ('user', 'guest', 'agent', 'daemon')) not null default 'guest',
+  actor_id text,
   display_name text not null,
   color text not null,
   last_branch_id uuid references document_branches(id) on delete set null,
@@ -223,13 +513,79 @@ create table if not exists access_sessions (
   unique (grant_id, client_id)
 );
 
-create index if not exists access_grants_doc_active_idx
-  on access_grants (doc_id, branch_id, created_at desc)
+alter table document_access_sessions
+  alter column grant_id drop not null,
+  add column if not exists doc_id uuid,
+  add column if not exists branch_id uuid,
+  add column if not exists actor_kind text,
+  add column if not exists actor_id text;
+
+update document_access_sessions s
+   set doc_id = coalesce(s.doc_id, g.doc_id),
+       branch_id = coalesce(s.branch_id, s.last_branch_id, g.branch_id)
+  from document_access_grants g
+ where s.grant_id = g.id
+   and (s.doc_id is null or s.branch_id is null);
+
+update document_access_sessions
+   set actor_kind = 'guest'
+ where actor_kind is null;
+
+alter table document_access_sessions
+  alter column actor_kind set default 'guest',
+  alter column actor_kind set not null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'document_access_sessions_actor_kind_check'
+  ) then
+    alter table document_access_sessions
+      add constraint document_access_sessions_actor_kind_check
+      check (actor_kind in ('user', 'guest', 'agent', 'daemon'));
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'document_access_sessions_doc_fk'
+  ) then
+    alter table document_access_sessions
+      add constraint document_access_sessions_doc_fk
+      foreign key (doc_id) references documents(id) on delete cascade not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'document_access_sessions_branch_fk'
+  ) then
+    alter table document_access_sessions
+      add constraint document_access_sessions_branch_fk
+      foreign key (branch_id) references document_branches(id) on delete set null not valid;
+  end if;
+end
+$$;
+
+alter table document_access_sessions
+  drop constraint if exists access_sessions_client_kind_check,
+  drop constraint if exists document_access_sessions_client_kind_check;
+
+alter table document_access_sessions
+  add constraint document_access_sessions_client_kind_check
+  check (client_kind in ('browser', 'app', 'daemon', 'agent', 'api'));
+
+create index if not exists document_access_grants_doc_active_idx
+  on document_access_grants (doc_id, branch_id, created_at desc)
   where revoked_at is null;
 
-create index if not exists access_sessions_grant_seen_idx
-  on access_sessions (grant_id, last_seen_at desc);
+create index if not exists document_access_sessions_grant_seen_idx
+  on document_access_sessions (grant_id, last_seen_at desc);
 
+create index if not exists document_access_sessions_doc_seen_idx
+  on document_access_sessions (doc_id, branch_id, last_seen_at desc);
+
+-- legacy: host-gated alpha, do not write: relay_rooms
 create table if not exists relay_rooms (
   id uuid primary key default gen_random_uuid(),
   host_session_id text,
@@ -258,6 +614,7 @@ alter table relay_rooms
   add column if not exists host_lease_expires_at timestamptz,
   add column if not exists host_offline_reason text;
 
+-- legacy: host-gated alpha, do not write: relay_access_grants
 create table if not exists relay_access_grants (
   id uuid primary key default gen_random_uuid(),
   relay_room_id uuid not null references relay_rooms(id) on delete cascade,
@@ -276,6 +633,7 @@ alter table relay_access_grants
   add column if not exists accepted_shared_hash text,
   add column if not exists cleanup_last_run_at timestamptz;
 
+-- legacy: host-gated alpha, do not write: relay_access_sessions
 create table if not exists relay_access_sessions (
   id uuid primary key default gen_random_uuid(),
   grant_id uuid references relay_access_grants(id) on delete cascade,

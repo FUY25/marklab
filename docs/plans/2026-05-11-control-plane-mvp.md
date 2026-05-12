@@ -23,7 +23,7 @@ This plan is mostly original MarkLab work (workspace/seat/billing schema is Mark
 |---|---|---|
 | Task 3 (auth MVP) | `Learning resources/Relay/src/LoginManager.ts` | The OIDC-style claim-handling shape (`Handle OIDC user (standard OpenID Connect claims)` section). Replace Relay's Pocketbase-specific backend calls with MarkLab's chosen auth backend. |
 | Task 4 (workspace role enforcement) | `Learning resources/Relay/src/PolicyManager.ts` | The role/permission check pattern. Adapt to MarkLab's `Owner` / `Member` / `Reader` set. |
-| Task 5 (provider token refresh route) | `Learning resources/Relay/src/LiveTokenStore.ts:35-103` | The `refresh(documentId, onSuccess, onError)` server-side flow. Plan 1A already adapted this; here you extend it to re-check grant/seat/quota before issuing a fresh token. |
+| Task 5 (provider token refresh route) | `Learning resources/Relay/src/LiveTokenStore.ts:35-103` | The `refresh(documentId, onSuccess, onError)` server-side flow. Plan 1A already adapted this; here you extend it to re-check grant/session/role/expiry/revocation before issuing a fresh token. New guest sessions still enforce quota at initial token issuance. |
 | Task 6 (audit boundary) | `Learning resources/Relay/src/HasProvider.ts:77-84` (client-side example) | The pattern for binding clientID to identity. MarkLab inverts this: client binds for UI, server audits from validated session state. Copy the binding code, add the MarkLab-side audit-never-reads-PermanentUserData rule. |
 | Task 7B (workspace settings UI shell) | `Learning resources/collabmd/` | Markdown collaboration page chrome (layout, CSS, tab structure). Lift CSS/layout snippets; do not adopt collabmd's sync/server code. |
 
@@ -79,10 +79,16 @@ Decisions for this plan (codify before writing migrations):
 
 Subtasks:
 
-- [ ] Run the table-by-table inventory and confirm the decisions above against the current `schema.sql`. If a table is missing, add it here before Task 2.
-- [ ] Write the rename/extend SQL into Task 2 explicitly; do not defer it to implementation.
-- [ ] Confirm no production reader of `share_links` remains by grepping `apps/api/src` for the table name; if a reader exists, list the file in this task before continuing.
-- [ ] Acceptance: an engineer can read this task and tell exactly which tables are renamed, which are deprecated read-only, and which are dropped in a later migration.
+- [x] Run the table-by-table inventory and confirm the decisions above against the current `schema.sql`. If a table is missing, add it here before Task 2.
+- [x] Write the rename/extend SQL into Task 2 explicitly; do not defer it to implementation.
+- [x] Grep `apps/api/src` for production readers of `share_links`; legacy readers were identified before implementation, then removed after schema migration copied legacy rows into `document_access_grants`.
+- [x] Acceptance: an engineer can read this task and tell exactly which tables are renamed, which are deprecated read-only, and which are dropped in a later migration.
+
+Inventory result during execution:
+
+- `access_grants` and `access_sessions` existed and were renamed to `document_access_grants` and `document_access_sessions`.
+- `share_links` remains as a legacy read-only table. Existing rows are copied into `document_access_grants` during schema setup, production access/token paths no longer query `share_links` directly, and no production `insert into share_links` / `update share_links` remains.
+- `relay_rooms`, `relay_access_grants`, and `relay_access_sessions` remain in schema for host-gated alpha compatibility and are marked legacy read-only.
 
 ### Task 2: Data Model
 
@@ -110,75 +116,83 @@ Schema changes to existing tables (per Task 1):
 
 Refresh-related additions:
 
-- `provider_token_refreshes` — `(id, session_id, issued_at, expires_at, denied_at, deny_reason)` records every refresh attempt for audit and revocation diagnostics. Edit sessions request a new Y-Sweet `ClientToken` via this table's flow before `expires_at` minus the refresh margin.
+- `provider_token_refreshes` — `(id, session_id, issued_at, expires_at, denied_at, deny_reason)` records refresh attempts after the refresh token matches an active edit session, for audit and revocation diagnostics. Wrong refresh-token probes are rejected before inserting here to avoid unauthenticated audit-row spam. Edit sessions request a new Y-Sweet `ClientToken` via this table's flow before `expires_at` minus the refresh margin.
 
 Subtasks:
 
-- [ ] Write `apps/api/src/db/schema.test.ts` covering: workspace creation, role check constraint, plan seed insert, document `workspace_id` backfill nullable, rename preserves grant rows, FK on `provider_token_issuances.session_id` to `collab_sessions(id)` rejects unknown edit sessions.
-- [ ] Update the `/healthz` schema readiness contract in `apps/api/src/http/app.ts` and `apps/api/src/index.ts` for any renamed provider/session tables or columns. Add a health test proving missing control-plane/provider-token tables or columns return `503`.
-- [ ] Run the schema test before writing migration SQL (expect failures).
-- [ ] Add the SQL block-by-block, running the schema test after each block.
-- [ ] Preserve compatibility with existing document/import/version tests by keeping `documents.workspace_id` nullable in this plan; a later plan can require it once backfill is complete.
-- [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/api/src/db/schema.test.ts apps/api/src/routes/documents-routes.test.ts apps/api/src/routes/versions-routes.test.ts` passes.
+- [x] Write `apps/api/src/db/schema.test.ts` covering: workspace creation, role check constraint, plan seed insert, document `workspace_id` backfill nullable, rename preserves grant rows, FK on `provider_token_issuances.session_id` to `collab_sessions(id)` rejects unknown edit sessions.
+- [x] Update the `/healthz` schema readiness contract in `apps/api/src/http/app.ts` and `apps/api/src/index.ts` for any renamed provider/session tables or columns. Add a health test proving missing control-plane/provider-token tables or columns return `503`.
+- [x] Run the schema test before writing migration SQL (expect failures).
+- [x] Add the SQL block-by-block, running the schema test after each block.
+- [x] Preserve compatibility with existing document/import/version tests by keeping `documents.workspace_id` nullable in this plan; a later plan can require it once backfill is complete.
+- [x] Acceptance command: `npx -y pnpm@10.0.0 test apps/api/src/db/schema.test.ts apps/api/src/routes/documents-routes.test.ts apps/api/src/routes/versions-routes.test.ts` passes.
+
+Execution note: this repository has `apps/api/src/routes/version-routes.test.ts` and no `documents-routes.test.ts` / `versions-routes.test.ts` files. The equivalent current gate was run through the full `apps/api/src/services` and `apps/api/src/routes` acceptance suite plus `apps/api/src/db/schema.test.ts`.
 
 ### Task 3: Auth MVP
 
-- [ ] Implement a login-backed session mechanism suitable for alpha.
-- [ ] Store server-side session records and secure cookies or bearer tokens.
-- [ ] Keep anonymous access restricted to explicit dev-mode env.
-- [ ] Add tests for logged-in user, guest session, expired session, and dev-mode anonymous session.
-- [ ] Acceptance: public collab session creation fails without a valid user or guest session.
+- [x] Implement a login-backed session mechanism suitable for alpha.
+- [x] Store server-side session records and secure cookies or bearer tokens.
+- [x] Keep anonymous access restricted to explicit dev-mode env.
+- [x] Add tests for logged-in user, guest session, expired session, and dev-mode anonymous session.
+- [x] Acceptance: public collab session creation fails without a valid user or guest session.
 
 ### Task 4: Workspace Membership
 
-- [ ] Implement workspace creation for a first user.
-- [ ] Implement member roles: `Owner`, `Member`, `Reader`.
-- [ ] Implement workspace share keys for joining a workspace.
-- [ ] Enforce member-seat limit when adding named members.
-- [ ] Acceptance: a `Reader` can view allowed docs but cannot issue edit provider tokens.
+- [x] Implement workspace creation for a first user.
+- [x] Implement member roles: `Owner`, `Member`, `Reader`.
+- [x] Implement workspace share keys for joining a workspace.
+- [x] Enforce member-seat limit when adding named members.
+- [x] Acceptance: a `Reader` can view allowed docs but cannot issue edit provider tokens.
 
 ### Task 5: Document Grants, Guest Sessions, And Token Refresh
 
-- [ ] Implement view/edit document grants as long-lived share links.
-- [ ] Convert every share-link open into a server-side session.
-- [ ] Enforce guest concurrent edit quota at provider-token issuance time. **This plan enforces against hardcoded constants** (default: free plan = 3 concurrent guest edit sessions per workspace). `2026-05-11-billing-subscription-seats.md` replaces these constants with plan-table lookups; do not duplicate the check, just swap the data source.
-- [ ] Implement provider-token refresh for edit sessions. The refresh endpoint must re-check grant status, session status, role, expiry, and quota before issuing a fresh Y-Sweet `ClientToken`.
-- [ ] Deny provider token refresh after grant revocation.
-- [ ] Acceptance: revoking an edit link blocks the next token refresh and revoking a view link blocks the next snapshot fetch.
+- [x] Implement view/edit document grants as long-lived share links.
+- [x] Convert every share-link open into a server-side session.
+- [x] Enforce guest concurrent edit quota at provider-token issuance time. The implementation reads `seat_limits.concurrent_guest_edits` through the workspace subscription/plan and uses the legacy free-plan fallback constant only for documents without a workspace/plan row.
+- [x] Implement provider-token refresh for edit sessions. The refresh endpoint must re-check grant status, session status, role, expiry, and revocation before issuing a fresh Y-Sweet `ClientToken`. It must not re-run the concurrent-guest quota against already-active guest sessions because `docs/appdesigndoc.md` says quota blocks new guest sessions while existing guest sessions remain unaffected.
+- [x] Deny provider token refresh after grant revocation.
+- [x] Acceptance: revoking an edit link blocks the next token refresh and revoking a view link blocks the next snapshot fetch.
+
+Execution note: `docs/appdesigndoc.md` says concurrent-guest-edit quota blocks new guest sessions while existing guest sessions remain unaffected. The implementation therefore enforces the workspace plan quota during initial edit-token issuance and continues to refresh already-active guest sessions after re-checking grant/session/role/expiry/revocation.
 
 ### Task 6: Control-Plane Audit Metadata
 
-- [ ] Record provider token issuances with user/session/grant/workspace/document metadata (extends Plan 1A's `provider_token_issuances` for edit sessions).
-- [ ] Log **view-session accesses** in `document_access_sessions` with `actor_kind` and `actor_id`. Plan 1A intentionally deferred this; the current view-mode route in `collab-session-routes.ts` returns a control-plane snapshot without minting a provider token and does not yet write a view-session audit row. This task must add that audit write before returning the snapshot.
-- [ ] Enforce `Y.PermanentUserData` as UI attribution only:
+- [x] Record provider token issuances with user/session/grant/workspace/document metadata (extends Plan 1A's `provider_token_issuances` for edit sessions).
+- [x] Log **view-session accesses** in `document_access_sessions` with `actor_kind` and `actor_id`. Plan 1A intentionally deferred this; the current view-mode route in `collab-session-routes.ts` returns a control-plane snapshot without minting a provider token and does not yet write a view-session audit row. This task must add that audit write before returning the snapshot.
+- [x] Enforce `Y.PermanentUserData` as UI attribution only:
   - Server-side audit code (token-issuance writer, version-attribution writer, conflict-resolution writer) reads identity exclusively from the validated control-plane session, never from `Y.PermanentUserData`.
   - Add a code comment in each audit writer linking to this rule.
   - Add a server-side test that simulates a client writing a forged `PermanentUserData` mapping (different user id) and confirms the audit row records the server-validated actor, not the forged client value.
-- [ ] Add tests proving clients cannot provide authoritative actor ids in the collab session request body — the route ignores any client-supplied `actorId` and derives the actor from the session middleware.
-- [ ] Acceptance: audit records are derived from server-validated session identity for both edit and view sessions; the `PermanentUserData` forgery test passes.
+- [x] Add tests proving clients cannot provide authoritative actor ids in the collab session request body — the route ignores any client-supplied `actorId` and derives the actor from the session middleware.
+- [x] Acceptance: audit records are derived from server-validated session identity for both edit and view sessions; the `PermanentUserData` forgery test passes.
 
 ### Task 7: Client Session Contract Handoff
 
-- [ ] Do not edit `apps/collab-web` here. Record the browser requirements for Plan 3: carry login/guest session state when joining links, refresh provider tokens through the control-plane refresh endpoint, stop editing when refresh is denied, and show unavailable states for seat/quota/revocation failures.
-- [ ] Do not edit native app files here unless the files already exist and a server contract test requires a fixture. Record the native requirements for Plan 4: distinguish logged-in user, guest, and agent sessions; refresh provider tokens through the same endpoint; stop editing when refresh is denied.
-- [ ] Acceptance: server-side route/service tests prove permission, quota, expiry, and revocation failures return explicit errors that browser/native clients can surface later without falling back to anonymous edit.
+- [x] Do not edit `apps/collab-web` here. Record the browser requirements for Plan 3: carry login/guest session state when joining links, refresh provider tokens through the control-plane refresh endpoint, stop editing when refresh is denied, and show unavailable states for seat/quota/revocation failures.
+- [x] Do not edit native app files here unless the files already exist and a server contract test requires a fixture. Record the native requirements for Plan 4: distinguish logged-in user, guest, and agent sessions; refresh provider tokens through the same endpoint; stop editing when refresh is denied.
+- [x] Acceptance: server-side route/service tests prove permission, quota, expiry, and revocation failures return explicit errors that browser/native clients can surface later without falling back to anonymous edit.
+
+Execution note: legacy `apps/web` remote editing is not the formal Plan 3 `apps/collab-web` surface and is not wired to Y-Sweet `ClientToken` refresh in this plan. Plan 2 closes the hosted `/collab` websocket bypass unless `MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB=true`; Plan 3 must replace browser edit wiring with the control-plane session + Y-Sweet client flow before public browser editing is considered shipped.
 
 ### Task 7B: Workspace Settings UI Shell Contract
 
 This plan defines the server contract for a future `apps/collab-web` workspace settings surface. The actual browser UI is deferred until `2026-05-11-collab-web-app.md` creates the app. Billing screens (`2026-05-11-billing-subscription-seats.md`) and future folder/admin work will fill panels into this shell.
 
-- [ ] Implement server APIs needed by future `/workspaces/:workspaceId/settings`: member list, invite via share key, role change, remove member, and workspace document list with view/edit grant counts.
-- [ ] Record the intended browser route and tabs in Plan 3's deferred browser section: Members and Documents in v1; Plan & Billing filled by `2026-05-11-billing-subscription-seats.md`; Folders filled by a future folder plan.
-- [ ] Owner-only sensitive actions enforce role server-side.
-- [ ] Acceptance: server route tests prove Owner can list/invite/change/remove members and list workspace documents; non-Owner receives read-only or forbidden responses as appropriate.
+- [x] Implement server APIs needed by future `/workspaces/:workspaceId/settings`: member list, invite via share key, role change, remove member, and workspace document list with view/edit grant counts.
+- [x] Record the intended browser route and tabs in Plan 3's deferred browser section: Members and Documents in v1; Plan & Billing filled by `2026-05-11-billing-subscription-seats.md`; Folders filled by a future folder plan.
+- [x] Owner-only sensitive actions enforce role server-side.
+- [x] Acceptance: server route tests prove Owner can list/invite/change/remove members and list workspace documents; non-Owner receives read-only or forbidden responses as appropriate.
 
 ### Task 8: Verification
 
-- [ ] Run `npx -y pnpm@10.0.0 test apps/api/src/services apps/api/src/routes`.
-- [ ] Run `npx -y pnpm@10.0.0 exec tsc --noEmit -p apps/api/tsconfig.json`.
-- [ ] Run browser/native permission smoke.
-- [ ] Run `git diff --check`.
+- [x] Run `npx -y pnpm@10.0.0 test apps/api/src/services apps/api/src/routes`.
+- [x] Run `npx -y pnpm@10.0.0 exec tsc --noEmit -p apps/api/tsconfig.json`.
+- [x] Run browser/native permission smoke.
+- [x] Run `git diff --check`.
 - [ ] Commit with `git commit -m "feat: add control plane mvp"`.
+
+Execution note: browser/native app wiring is deferred by this plan, so the smoke gate is the automated server contract suite proving explicit errors for auth, role, quota, revocation, and refresh denial.
 
 ### Task 9: Downstream Plan Refresh
 

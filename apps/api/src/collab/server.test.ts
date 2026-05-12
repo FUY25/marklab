@@ -112,7 +112,7 @@ function createPersistencePool(
       };
     }
 
-    if (sql.includes('from access_grants') && sql.includes('token_hash = $1')) {
+    if (sql.includes('from document_access_grants') && sql.includes('token_hash = $1')) {
       const [tokenHash, docId, branchId] = params ?? [];
       return {
         rows: (options.accessGrants ?? [])
@@ -183,10 +183,12 @@ function createPersistencePool(
 
 const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
 const originalAdminHash = process.env.MARKLAB_ADMIN_TOKEN_HASH;
+const originalDevAnonymousCollab = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
 
 afterEach(() => {
   process.env.MARKLAB_REQUIRE_AUTH = originalRequireAuth;
   process.env.MARKLAB_ADMIN_TOKEN_HASH = originalAdminHash;
+  process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB = originalDevAnonymousCollab;
 });
 
 function enableAuthMode() {
@@ -372,6 +374,44 @@ describe('createCollabServer persistence hooks', () => {
           token: '',
         }),
       ).rejects.toThrow('forbidden');
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('rejects hosted collab websocket joins unless dev anonymous access is explicit', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'false';
+    delete process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: '',
+        }),
+      ).rejects.toThrow('forbidden');
+    } finally {
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('allows hosted collab websocket joins only in explicit dev anonymous mode', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'false';
+    process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB = 'true';
+    const initialState = createState('loaded');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+
+    try {
+      await expect(
+        collab.server.configuration.onAuthenticate({
+          documentName: toRoomName('doc_001', 'br_main'),
+          token: '',
+        }),
+      ).resolves.toBeUndefined();
     } finally {
       await collab.server.destroy?.();
     }
