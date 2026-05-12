@@ -24,6 +24,11 @@ This plan has no relevant prior art in `Learning resources/`. Stripe integration
 
 For a private free alpha, this plan can run in manual/free mode while preserving the same tables and enforcement paths. For paid public launch, enable payment provider integration and webhook processing before production launch.
 
+## Provider Runtime Facts From Plan 1B
+
+- Billing and quota checks remain entirely in the control plane before Y-Sweet token issuance. The API-supervised Y-Sweet provider only validates native document tokens; it has no billing or seat-limit knowledge.
+- `/healthz` now includes provider schema readiness for `collab_sessions` and `provider_token_issuances`. If this plan adds billing/quota columns used by token issuance, update the health schema contract and add a missing-column `503` regression.
+
 ## File Structure
 
 - Modify `apps/api/src/db/schema.sql`
@@ -53,6 +58,7 @@ The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.
 
 - [ ] Replace the hardcoded guest-edit quota constant in the token-issuance path with a lookup against `subscriptions` → `plans` → `seat_limits.concurrent_guest_edits` for the workspace.
 - [ ] Replace the hardcoded member-seat constant in the workspace invite path with the same chain via `seat_limits.member_seats`.
+- [ ] If quota enforcement depends on new columns or tables during provider-token issuance, add them to the `/healthz` schema readiness contract so production cannot go green with an incomplete billing schema.
 - [ ] Keep guest view sessions outside guest edit quota (already true; verify with a regression test).
 - [ ] Add tests for free-limit pass/fail and paid-limit pass/fail.
 - [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits not constants. `git grep` for the old constant names returns no app-code matches.

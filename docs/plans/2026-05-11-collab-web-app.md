@@ -40,6 +40,13 @@ This plan starts after Plan 1B makes provider runtime and health real and after 
 
 `apps/collab-web` is the single browser surface for MarkLab. This plan ships the single-document editing/view shell. `2026-05-11-control-plane-mvp.md` Task 7B extends `apps/collab-web` with a workspace settings page (Members/Documents tabs in v1); `2026-05-11-billing-subscription-seats.md` adds a Plan & Billing tab to that settings page. Both downstream plans assume this app exists, so this plan must not change its name or top-level route shape after landing.
 
+## Provider Runtime Facts From Plan 1B
+
+- The alpha provider is an API-supervised upstream Y-Sweet 0.9.1 child process in the same Fly machine as the API.
+- Edit `ClientToken`s returned by the control plane contain the provider document id and public Y-Sweet URLs. The browser should use the token through `@y-sweet/client`; do not construct provider websocket URLs from a separate env var.
+- Public provider routes are root-mounted on the API host in process mode: `/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, and `/d/<providerDocId>/update`.
+- View mode still receives no provider token and must make no provider websocket or document HTTP requests.
+
 ## Deferred Browser Wiring From Plan 2
 
 Before starting implementation, carry forward the browser items explicitly deferred from `2026-05-11-control-plane-mvp.md` because `apps/collab-web` did not exist during Plan 2:
@@ -73,7 +80,7 @@ Before starting implementation, carry forward the browser items explicitly defer
 - [ ] Add scripts: `dev`, `build`, `typecheck`, `test`.
 - [ ] Add env vars:
   - `VITE_MARKLAB_API_URL`
-  - `VITE_MARKLAB_PROVIDER_WS_URL`
+  - Do **not** add a separate provider websocket env var for process mode; the Y-Sweet `ClientToken` carries the public provider base URL.
 - [ ] Acceptance command: `npx -y pnpm@10.0.0 --filter @marklab/collab-web typecheck`.
 
 ### Task 2: Collab Session API Client

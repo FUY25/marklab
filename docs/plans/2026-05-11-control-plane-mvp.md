@@ -33,6 +33,12 @@ This plan is mostly original MarkLab work (workspace/seat/billing schema is Mark
 
 This plan makes the MVP public-login-backed. It does not build full enterprise admin, SSO, or folder collaboration. It includes folder/private-folder schema hooks so future folder work does not require a control-plane rewrite.
 
+## Provider Runtime Facts From Plan 1B
+
+- Plan 1B added a real API-supervised Y-Sweet 0.9.1 process mode and `/healthz` now gates production readiness on database, schema, relay, provider `/ready`, and authenticated provider `/check_store`.
+- The schema readiness gate already includes provider/session tables and provider columns: `document_branch_states.provider_doc_id`, `document_branch_states.provider_doc_seeded_at`, `collab_sessions`, and `provider_token_issuances`. Task 2 may rename/extend these tables for the control-plane model, but it must update the health schema contract at the same time and add a regression for missing renamed tables/columns.
+- `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` is root-mounted and HTTPS-only in API-supervised process mode; do not introduce browser/client contracts that require a path-prefixed provider URL.
+
 ## File Structure
 
 - Modify `apps/api/src/db/schema.sql`
@@ -69,7 +75,7 @@ Decisions for this plan (codify before writing migrations):
 - **Rename `access_sessions` to `document_access_sessions`** for naming consistency with `document_access_grants`. Add `actor_kind` (`user`, `guest`, `agent`, `daemon`) and `actor_id` (nullable for guests/agents).
 - **Deprecate `share_links`**: keep the table read-only; mark it `-- legacy, do not write` in schema.sql; the API stops writing to it in Task 5. Drop in a future cleanup migration.
 - **Freeze `relay_*` tables**: leave the SQL definitions but stop writing to them after this plan. Add a `-- legacy: host-gated alpha, do not write` comment. Drop after Plan 8 confirms no production reader is left.
-- **Add `provider_token_issuances` FK** for `session_id` to `document_access_sessions(client_id)` (introduced in 1A as `text` without FK). The migration adds the FK constraint after backfilling.
+- **Add `provider_token_issuances` FK** for `session_id` to `collab_sessions(id)` unless this task explicitly replaces the Plan 1B edit-session table. If replacing it, migrate the token issuance routes/services, refresh logic, and `/healthz` schema readiness contract in the same task before adding the FK.
 
 Subtasks:
 
@@ -99,7 +105,7 @@ Schema changes to existing tables (per Task 1):
 - `alter table access_grants rename to document_access_grants;` plus `add column workspace_id`, `folder_id`, `created_by_user_id`.
 - `alter table access_sessions rename to document_access_sessions;` plus `add column actor_kind`, `actor_id`.
 - `alter table documents add column workspace_id`, `folder_id` (nullable until backfilled).
-- `alter table provider_token_issuances add constraint provider_token_issuances_session_fk foreign key (session_id) references document_access_sessions(client_id)` — see Task 1; backfill before adding the constraint.
+- `alter table provider_token_issuances add constraint provider_token_issuances_session_fk foreign key (session_id) references collab_sessions(id)` — see Task 1; backfill before adding the constraint. Do not point edit-token issuances at `document_access_sessions` unless this plan also migrates all token issuance and refresh code away from `collab_sessions` in the same commit.
 - Add `-- legacy, do not write` SQL comments above `share_links`, `relay_rooms`, `relay_access_grants`, `relay_access_sessions`.
 
 Refresh-related additions:
@@ -108,7 +114,8 @@ Refresh-related additions:
 
 Subtasks:
 
-- [ ] Write `apps/api/src/db/schema.test.ts` covering: workspace creation, role check constraint, plan seed insert, document `workspace_id` backfill nullable, rename preserves grant rows, FK on `provider_token_issuances.session_id` rejects unknown sessions.
+- [ ] Write `apps/api/src/db/schema.test.ts` covering: workspace creation, role check constraint, plan seed insert, document `workspace_id` backfill nullable, rename preserves grant rows, FK on `provider_token_issuances.session_id` to `collab_sessions(id)` rejects unknown edit sessions.
+- [ ] Update the `/healthz` schema readiness contract in `apps/api/src/http/app.ts` and `apps/api/src/index.ts` for any renamed provider/session tables or columns. Add a health test proving missing control-plane/provider-token tables or columns return `503`.
 - [ ] Run the schema test before writing migration SQL (expect failures).
 - [ ] Add the SQL block-by-block, running the schema test after each block.
 - [ ] Preserve compatibility with existing document/import/version tests by keeping `documents.workspace_id` nullable in this plan; a later plan can require it once backfill is complete.

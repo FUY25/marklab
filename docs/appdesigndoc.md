@@ -214,11 +214,12 @@ MarkLab Collaboration Provider
 
 Storage
   Postgres for metadata
-  Postgres or object storage for Yjs update/snapshot data
+  Fly volume at /data/ysweet for alpha Y-Sweet checkpoints
+  S3/object storage later for provider snapshots if the provider is split or scaled
   object storage later for attachments
 ```
 
-The first deploy can still be one Fly app plus Neon Postgres. Internally, however, the code should be organized around the control-plane/provider/storage split so it can later scale or be self-hosted like Relay.
+The first deploy is one Fly app plus Neon Postgres, with the API supervising an upstream Y-Sweet 0.9.1 child process on `127.0.0.1:8080`. Provider state is stored on a Fly volume at `/data/ysweet`; local development uses `.marklab-provider-data/ysweet`. Internally, the code is still organized around the control-plane/provider/storage split so it can later scale or be self-hosted like Relay.
 
 ## Server Model
 
@@ -241,7 +242,7 @@ MarkLab should move to a Relay-like server model:
 - Provider persists Yjs updates and snapshots durably.
 - Awareness remains ephemeral and is relayed live.
 - Clients can reconnect and fetch missing updates even when another participant is offline.
-- Control plane and provider are separate logical deployments even if the first phase co-locates them in one process.
+- Control plane and provider are separate logical deployments even if the first phase co-locates them in one Fly machine.
 
 The host no longer approves every edit. The host is one client with a local Markdown projection and owner/admin controls.
 
@@ -251,9 +252,10 @@ Phase 1 can use existing infrastructure:
 
 - One Fly app.
 - Neon Postgres.
-- Web, control-plane API, and Yjs provider running in one process if needed.
+- Web, control-plane API, and API-supervised upstream Y-Sweet child process in one Fly machine.
 - Separate internal modules for web, control plane, provider, and persistence.
 - Single machine only, with sticky routing not required if there is only one machine.
+- Root-mounted public provider routes in process mode: `/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, and `/d/<providerDocId>/update` are proxied by the API to the child provider. `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` must be HTTPS and must not include a path in this mode.
 
 Phase 2 separates internal components:
 
@@ -369,6 +371,8 @@ type MarkLabProviderTokenRequest = {
 The MarkLab control plane stores the grant/session/workspace metadata and asks Y-Sweet's `DocumentManager` for a `ClientToken` with `authorization` and `validForSeconds`. The provider validates Y-Sweet's native token signature, document id, expiration, and authorization. If MarkLab later ships trusted live read-only collaborators, their provider tokens must map to Y-Sweet's `authorization: "read-only"` and must be tested with a malicious raw Yjs write attempt. Revocation in v1 relies on the short TTL plus refresh denial described above; a later phase may add an active revoke channel for high-risk cases.
 
 If MarkLab later replaces Y-Sweet with a custom provider, that provider may use JWT claims carrying `docId`, `providerDocId`, `sessionId`, `role`, `exp`, and `jti`. That is not the Y-Sweet-first MVP path.
+
+Provider runtime auth is split into two generated Y-Sweet values. `MARKLAB_YSWEET_AUTH` is the private key passed to the child provider as `Y_SWEET_AUTH`, not on the process command line. `MARKLAB_YSWEET_SERVER_TOKEN` is used by MarkLab's `DocumentManager` connection string and `/check_store` health probe.
 
 ## Canonical State And Projection
 
@@ -875,6 +879,7 @@ Only after single-file collaboration is stable:
 18. Provider tokens are Y-Sweet ClientTokens with 10-minute `validForSeconds`, 2-minute refresh margin, and 30-second client refresh check; revocation is refresh-denial only in v1. The provider has no active denylist or revoke channel in v1.
 19. V1 view links are current-state rendered read access through the control plane, not Yjs provider participants. Trusted live read-only collaboration is a later mode and must use Y-Sweet read-only authorization with malicious-write tests.
 20. Y.Text stores LF-only content. CRLF normalization happens at the disk boundary on read/write.
+21. Plan 1B pins the alpha provider runtime to an API-supervised upstream Y-Sweet 0.9.1 child process. `/healthz` must prove database, required provider schema tables/columns, relay readiness, provider `/ready`, and authenticated provider `/check_store` before production traffic is accepted.
 
 ## Spec Self-Review
 
@@ -893,7 +898,7 @@ Only after single-file collaboration is stable:
 ### Known residual risks (acceptable for implementation planning)
 
 - Provider single-machine SPOF in Phase 1; horizontal scaling is Phase 2.
-- CRDT garbage collection and snapshot compaction policy is not yet pinned (default Yjs GC = on). This affects trusted edit/live-collab history and storage, not public view links.
+- CRDT garbage collection and checkpoint policy is pinned for alpha: Y-Sweet 0.9.1 default GC stays on, `MARKLAB_YSWEET_SKIP_GC=true` is rejected because the pinned server has no `--skip-gc` flag, and production checkpoint cadence is `MARKLAB_YSWEET_CHECKPOINT_FREQ_SECONDS=10`.
 - CLI transport (IPC to local app vs HTTPS to control plane) is left to the CLI implementation ticket; the user-facing contract for `wait-for-sync` and `status` is specified.
 - Local persistence format for MarkLab.app's offline Y.Doc state is left to the app implementation ticket (y-leveldb or platform-native equivalent).
 - `apps/web` (existing web shell) coexistence with `apps/collab-web` is left to the deployment ticket.

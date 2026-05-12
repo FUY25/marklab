@@ -29,6 +29,12 @@ This plan is mostly MarkLab-original packaging and CLI work. The one reference o
 
 This plan does not build billing or production deploy. It makes local installation, CLI operation, and user docs reliable enough for alpha smoke testing.
 
+## Provider Runtime Facts From Plan 1B
+
+- Packaged hosted defaults should point users at the hosted API/web origin. Edit clients receive provider URLs from Y-Sweet `ClientToken`s; the CLI should not expose or require a separate provider websocket URL for normal users.
+- The hosted API supervises the upstream Y-Sweet child process and proxies public provider document routes at the API root. `marklab doctor --json` should report provider readiness from `/healthz.provider`, not by probing the child provider port directly.
+- Troubleshooting docs should mention `provider.ready`, `provider.storeReady`, provider schema readiness, and the root-mounted `/d/<providerDocId>/...` route shape when diagnosing provider failures.
+
 ## File Structure
 
 - Modify `apps/cli/marklab.mjs`
@@ -50,6 +56,7 @@ This plan does not build billing or production deploy. It makes local installati
 - [ ] Ensure packaged CLI defaults to hosted alpha API/provider URLs.
 - [ ] Ensure local dev can override URLs with env vars.
 - [ ] Ensure `marklab doctor` prints which runtime source and URLs are active.
+- [ ] Ensure `marklab doctor --json` includes `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready` so provider process, provider storage, and provider schema failures are distinguishable.
 - [ ] Acceptance command: `node apps/cli/marklab.mjs doctor --json` shows hosted/default/local override state.
 
 ### Task 2: CLI Command Coverage

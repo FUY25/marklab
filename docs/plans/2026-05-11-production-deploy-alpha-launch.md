@@ -30,6 +30,15 @@ This plan is mostly MarkLab-specific deploy/ops work. The one valuable reference
 
 This plan is the launch gate. It does not add product features. It verifies the feature set implemented by previous plans and publishes it to alpha users.
 
+## Provider Runtime Facts From Plan 1B
+
+- The alpha deploy shape is co-located: one Fly app serves API/web and supervises an upstream Y-Sweet 0.9.1 child process on `127.0.0.1:8080`.
+- Provider public URL prefix is `https://<fly-app>.fly.dev` in process mode and must be root-mounted; path-prefixed public provider URLs are rejected.
+- Fly volume `marklab_ysweet_data` is mounted at `/data`, with provider store path `/data/ysweet`. Local provider data is `.marklab-provider-data/ysweet`.
+- Provider secrets are `MARKLAB_YSWEET_AUTH` (private key forwarded to child as `Y_SWEET_AUTH`, not argv) and `MARKLAB_YSWEET_SERVER_TOKEN` (SDK/check_store token). Both come from `y-sweet gen-auth --json`.
+- `/healthz` must show `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`. Schema readiness includes provider/session tables and required provider columns.
+- Docker image build acceptance may be blocked locally if the Docker daemon is not running; record that separately from Fly deploy credentials.
+
 ## File Structure
 
 - Modify `fly.toml`
@@ -70,9 +79,10 @@ This plan is the launch gate. It does not add product features. It verifies the 
   - `DATABASE_URL`;
   - public API URL;
   - public web URL;
-  - public provider websocket URL;
-  - provider connection string;
-  - provider store path or object-store credentials;
+  - `MARKLAB_YSWEET_PUBLIC_URL_PREFIX=https://<fly-app>.fly.dev` if the Fly app name differs from checked-in `fly.toml`;
+  - `MARKLAB_YSWEET_AUTH`;
+  - `MARKLAB_YSWEET_SERVER_TOKEN`;
+  - provider store path or object-store credentials if the Plan 1B Fly-volume default is changed;
   - auth/session secret;
   - billing secrets when Plan 7 is enabled.
 - [ ] Set secrets in Fly.
@@ -83,11 +93,12 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - [ ] Apply `apps/api/src/db/schema.sql` or the migration command produced by earlier plans to Neon.
 - [ ] Record whether migrations are one-shot SQL, an app-owned migration command, or a CI deploy step.
 - [ ] Verify required tables and columns exist.
-- [ ] Acceptance: `/healthz` reports `database.ready=true` and `schema.ready=true`.
+- [ ] Acceptance: `/healthz` reports `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`; the database migration task does not pass the launch gate unless relay and provider readiness also remain green.
 
 ### Task 5: Provider Persistence Gate
 
 - [ ] Deploy provider storage.
+- [ ] Ensure Fly volume `marklab_ysweet_data` exists in the deployed region and is mounted at `/data`.
 - [ ] Run a persistence smoke:
   - create collab session;
   - write provider doc;

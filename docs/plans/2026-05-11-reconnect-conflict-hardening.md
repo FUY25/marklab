@@ -38,6 +38,12 @@ Relay's `src/differ/` directory is a working MIT-licensed side-by-side diff UI w
 
 This plan does not add AI-assisted merge or hunk-level merge. It ships the simple Relay-like choices: keep shared, accept local, or paste resolved content.
 
+## Provider Runtime Facts From Plan 1B
+
+- Provider restart durability is now covered by `apps/api/src/provider/ysweet-provider-smoke.ts`, which writes 200 updates, gracefully restarts the API-supervised Y-Sweet 0.9.1 child process, and verifies restored `Y.Text("contents")`.
+- Reconnect/conflict E2E should run against the same root-mounted provider document routes used by production process mode (`/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, `/d/<providerDocId>/update`), not a direct child-process port.
+- `/healthz` already verifies provider `/ready`, authenticated `/check_store`, and required provider schema tables/columns; conflict smokes can treat a healthy response as the provider/control-plane readiness gate.
+
 ## File Structure
 
 - Modify `apps/api/src/local/local-conflict-store.ts`
@@ -105,6 +111,7 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
   - host offline, browser edit, local disk edit, conflict opens;
   - grant revoked, token refresh denied;
   - view link never connects to provider;
+  - provider child process restart, client reconnects through API-root provider routes, no data loss;
   - same-Mac two-user smoke.
 - [ ] Acceptance: matrix passes locally and failing cases show actionable errors.
 

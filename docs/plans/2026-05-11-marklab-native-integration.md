@@ -36,6 +36,12 @@ Two MIT-licensed sources dominate this plan: **MarkEdit** for the macOS app shel
 
 This plan starts after the control-plane session/grant/token-refresh contract exists and after the browser app has proven provider connection, session, cursor, and view behavior. It does not add folder collaboration or rich/WYSIWYG editing.
 
+## Provider Runtime Facts From Plan 1B
+
+- Native edit sessions consume the same Y-Sweet `ClientToken` shape as browser edit sessions. The token contains the provider doc id and public provider URLs; native code should not hardcode provider websocket paths or read a separate provider websocket env var.
+- In API-supervised process mode, public provider traffic is root-mounted on the API host and proxied to the child provider only for document routes: `/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, and `/d/<providerDocId>/update`.
+- Provider durability for alpha is the child Y-Sweet store on `/data/ysweet` in Fly and `.marklab-provider-data/ysweet` locally; native/local persistence is still responsible only for offline client state and disk projection, not provider checkpoint storage.
+
 ## File Structure
 
 - Create `apps/marklab-macos/` or equivalent native app folder after confirming the MarkEdit import strategy.
@@ -99,6 +105,7 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 - [ ] Ensure `marklab share`, `create-link`, `revoke-link`, `status`, `wait`, `conflict`, and `export` can operate when the native app is running.
 - [ ] Ensure the CLI can start or find the local daemon without stealing focus from the native app.
 - [ ] Ensure native edit sessions refresh provider tokens through the same control-plane endpoint as browser edit sessions.
+- [ ] Use the `ClientToken` returned by the control plane as the source of provider connection URLs; do not duplicate `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` or provider route construction in native code.
 - [ ] Acceptance command: `node apps/cli/marklab.mjs share README.md --json` returns a usable link while the app owns the file.
 
 ### Task 7: Native E2E Smoke
