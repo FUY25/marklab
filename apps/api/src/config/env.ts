@@ -277,6 +277,9 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     if (!localProductionSmoke && (!ysweetProviderConfig || ysweetProviderConfig.mode === 'disabled')) {
       issues.push('MARKLAB_YSWEET_PROVIDER_MODE is required');
     }
+    if (!localProductionSmoke && ysweetProviderConfig && ysweetProviderConfig.mode !== 'process') {
+      issues.push('MARKLAB_YSWEET_PROVIDER_MODE must be process in hosted production alpha');
+    }
     if (!localProductionSmoke && ysweetProviderConfig?.mode === 'process') {
       requireProductionValue(env, 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX', issues);
     }
@@ -292,6 +295,9 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
       }
       if (ysweetProviderConfig.mode === 'process' && ysweetPublicUrl.pathname !== '/') {
         issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must not include a path in process mode');
+      }
+      if (ysweetProviderConfig.mode === 'process' && publicApiUrl && ysweetPublicUrl.origin !== publicApiUrl.origin) {
+        issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must match MARKLAB_PUBLIC_API_URL origin in process mode');
       }
     }
     if (!localProductionSmoke) {

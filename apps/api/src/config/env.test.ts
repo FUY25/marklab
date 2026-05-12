@@ -72,6 +72,17 @@ describe('loadApiEnv', () => {
     );
   });
 
+  it('requires process-mode provider public URL to share the API origin', () => {
+    expectInvalid(
+      {
+        ...productionBaseEnv,
+        MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://typo.example.com',
+        MARKLAB_ALLOWED_ORIGINS: 'https://marklab.fly.dev, https://typo.example.com',
+      },
+      'MARKLAB_YSWEET_PUBLIC_URL_PREFIX must match MARKLAB_PUBLIC_API_URL origin in process mode',
+    );
+  });
+
   it('rejects localhost and loopback public URLs in hosted production mode', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: 'https://localhost:5175' }, 'localhost');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_API_URL: 'https://127.0.0.1:3001' }, 'loopback');
@@ -92,12 +103,13 @@ describe('loadApiEnv', () => {
     );
 
     const env = loadApiEnv({
-      ...productionBaseEnv,
-      MARKLAB_PUBLIC_WEB_URL: 'https://app.example.com',
-      MARKLAB_PUBLIC_API_URL: 'https://api.example.com',
-      MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://relay.example.com/relay',
-      MARKLAB_ALLOWED_ORIGINS: 'https://app.example.com, https://api.example.com, https://relay.example.com',
-    });
+        ...productionBaseEnv,
+        MARKLAB_PUBLIC_WEB_URL: 'https://app.example.com',
+        MARKLAB_PUBLIC_API_URL: 'https://api.example.com',
+        MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://api.example.com',
+        MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://relay.example.com/relay',
+        MARKLAB_ALLOWED_ORIGINS: 'https://app.example.com, https://api.example.com, https://relay.example.com',
+      });
 
     expect(env.allowedOrigins).toEqual([
       'https://app.example.com',
@@ -205,8 +217,8 @@ describe('loadApiEnv', () => {
     expect(env.ysweetConnectionString).toBeUndefined();
   });
 
-  it('supports an externally managed provider in production', () => {
-    const env = loadApiEnv({
+  it('rejects externally managed provider mode in hosted production alpha', () => {
+    expectInvalid({
       ...productionBaseEnv,
       MARKLAB_YSWEET_PROVIDER_MODE: 'external',
       MARKLAB_YSWEET_SERVER_URL: 'https://ysweet.example.com',
@@ -214,16 +226,7 @@ describe('loadApiEnv', () => {
       MARKLAB_YSWEET_STORE_PATH: undefined,
       MARKLAB_YSWEET_AUTH: undefined,
       MARKLAB_YSWEET_SERVER_TOKEN: 'external-token',
-    });
-
-    expect(env).toMatchObject({
-      ysweetProviderMode: 'external',
-      ysweetServerUrl: 'https://ysweet.example.com',
-      ysweetPublicUrlPrefix: 'https://ysweet.example.com',
-      ysweetServerToken: 'external-token',
-      ysweetConnectionString: 'yss://external-token@ysweet.example.com',
-    });
-    expect(env.ysweetStorePath).toBeUndefined();
+    }, 'MARKLAB_YSWEET_PROVIDER_MODE must be process');
   });
 });
 

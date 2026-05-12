@@ -52,7 +52,6 @@ export interface HttpHealthOptions {
   relayRequired?: boolean;
   relayReady?: boolean;
   providerRequired?: boolean;
-  providerReady?: boolean;
   providerHealth?: () => Promise<HttpProviderHealthSnapshot>;
   schemaTables?: readonly string[];
   schemaColumns?: Readonly<Record<string, readonly string[]>>;
@@ -173,7 +172,7 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
   };
   const provider = {
     required: Boolean(input.providerRequired),
-    ready: !input.providerRequired || input.providerReady === true,
+    ready: !input.providerRequired,
     storeReady: null as boolean | null,
     mode: null as string | null,
     serverUrl: null as string | null,
@@ -187,11 +186,14 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
       provider.serverUrl = providerSnapshot.serverUrl;
       provider.storeReady = providerSnapshot.storeReady ?? null;
       provider.error = providerSnapshot.error ?? null;
-      provider.ready = providerSnapshot.ready && providerSnapshot.storeReady !== false;
+      provider.ready = providerSnapshot.ready && (provider.required ? providerSnapshot.storeReady === true : providerSnapshot.storeReady !== false);
     } catch (error) {
       provider.ready = false;
       provider.error = error instanceof Error ? error.message : 'provider_health_failed';
     }
+  } else if (provider.required) {
+    provider.ready = false;
+    provider.error = 'provider_health_not_configured';
   }
   const providerReadyForGate = !provider.required || provider.ready;
 

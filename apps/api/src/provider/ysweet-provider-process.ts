@@ -70,6 +70,33 @@ const defaultCheckpointFrequencySeconds = 10;
 const defaultHealthProbeTimeoutMs = 1500;
 const defaultStorePath = '.marklab-provider-data/ysweet';
 const defaultYSweetCommandPath = 'apps/api/node_modules/.bin/y-sweet';
+const childEnvAllowlist = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'NODE_ENV',
+  'RUST_LOG',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_REGION',
+  'AWS_DEFAULT_REGION',
+  'AWS_PROFILE',
+  'AWS_SDK_LOAD_CONFIG',
+  'AWS_ENDPOINT_URL',
+  'AWS_ENDPOINT_URL_S3',
+  'AWS_S3_USE_PATH_STYLE',
+] as const;
 
 function raw(env: EnvSource, key: string): string | undefined {
   const value = env[key]?.trim();
@@ -140,6 +167,16 @@ function defaultYSweetCommand(cwd: string): string {
 function normalizeStorePath(value: string, cwd: string): string {
   if (value.startsWith('s3://')) return value;
   return resolve(cwd, value);
+}
+
+function buildYSweetChildEnv(config: YSweetProviderProcessConfig, source: EnvSource = process.env): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of childEnvAllowlist) {
+    const value = source[key];
+    if (value) childEnv[key] = value;
+  }
+  if (config.auth) childEnv.Y_SWEET_AUTH = config.auth;
+  return childEnv;
 }
 
 export function loadYSweetProviderProcessConfig(
@@ -230,14 +267,9 @@ export function startYSweetProviderProcess(
   const spawn = deps.spawn ?? ((command: string, args: string[], options: SpawnOptions) => (
     nodeSpawn(command, args, options) as SpawnedYSweetChild
   ));
-  const childEnv = { ...process.env };
-  if (config.auth) {
-    delete childEnv.MARKLAB_YSWEET_AUTH;
-    childEnv.Y_SWEET_AUTH = config.auth;
-  }
   const child = spawn(config.command, config.args, {
     detached: true,
-    env: childEnv,
+    env: buildYSweetChildEnv(config),
     stdio: 'ignore',
   });
   const handle: YSweetProviderHandle = {

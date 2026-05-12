@@ -6,7 +6,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import type { DbPool } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
-import { createHttpApp } from './app';
+import { createHttpApp, type HttpHealthOptions } from './app';
 
 function createLocalOnlyPool(): DbPool {
   async function unavailable(): Promise<never> {
@@ -166,6 +166,62 @@ describe('http app readiness', () => {
             mode: 'process',
             serverUrl: 'http://127.0.0.1:8080',
             error: 'provider_ready_failed:503',
+          },
+        });
+      });
+  });
+
+  it('does not accept a static provider ready flag without a provider health probe', async () => {
+    const health = {
+      providerRequired: true,
+      providerReady: true,
+    } as unknown as HttpHealthOptions;
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), { health });
+
+    await request(app)
+      .get('/healthz')
+      .expect(503)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          ok: false,
+          provider: {
+            required: true,
+            ready: false,
+            storeReady: null,
+            mode: null,
+            serverUrl: null,
+            error: 'provider_health_not_configured',
+          },
+        });
+      });
+  });
+
+  it('requires store readiness when provider health is required', async () => {
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      health: {
+        providerRequired: true,
+        providerHealth: async () => ({
+          mode: 'process',
+          ready: true,
+          serverUrl: 'http://127.0.0.1:8080',
+          error: null,
+        }),
+      },
+    });
+
+    await request(app)
+      .get('/healthz')
+      .expect(503)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          ok: false,
+          provider: {
+            required: true,
+            ready: false,
+            storeReady: null,
+            mode: 'process',
+            serverUrl: 'http://127.0.0.1:8080',
+            error: null,
           },
         });
       });

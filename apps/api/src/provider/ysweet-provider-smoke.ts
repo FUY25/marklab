@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import net from 'node:net';
 import { promisify } from 'node:util';
 import { createYjsProvider, STATUS_CONNECTED, type YSweetProvider } from '@y-sweet/client';
-import { DocumentManager, type ClientToken } from '@y-sweet/sdk';
+import { DocConnection, type ClientToken } from '@y-sweet/sdk';
 import { WebSocket } from 'ws';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
@@ -297,13 +297,24 @@ async function main(): Promise<void> {
 
     provider = startYSweetProviderProcess(providerConfig);
     await waitForProviderReady(provider);
-    const manager = new DocumentManager(connectionString);
-    const update = await manager.getDocAsUpdate(providerDocId);
+    const publicConnection = new DocConnection(clientToken);
+    const update = await publicConnection.getAsUpdate();
     const readDoc = new Y.Doc();
     Y.applyUpdate(readDoc, update);
     const restored = readDoc.getText('contents').toString();
     if (!restored.startsWith('contents\nline 1') || !restored.endsWith('line 200')) {
       throw new Error('provider_restart_content_mismatch');
+    }
+    const httpUpdateDoc = new Y.Doc();
+    Y.applyUpdate(httpUpdateDoc, update);
+    httpUpdateDoc.getText('contents').insert(httpUpdateDoc.getText('contents').length, '\nvia http proxy');
+    await publicConnection.updateDoc(Y.encodeStateAsUpdate(httpUpdateDoc));
+    const httpUpdate = await publicConnection.getAsUpdate();
+    const httpReadDoc = new Y.Doc();
+    Y.applyUpdate(httpReadDoc, httpUpdate);
+    const restoredAfterHttpUpdate = httpReadDoc.getText('contents').toString();
+    if (!restoredAfterHttpUpdate.endsWith('line 200\nvia http proxy')) {
+      throw new Error('provider_http_proxy_content_mismatch');
     }
     const storeStats = await countStoreFiles(storePath);
     if (storeStats.files !== 1) {
@@ -313,7 +324,7 @@ async function main(): Promise<void> {
       ok: true,
       providerDocId,
       linesWritten: 200,
-      restoredBytes: restored.length,
+      restoredBytes: restoredAfterHttpUpdate.length,
       storeFiles: storeStats.files,
       storeBytes: storeStats.bytes,
     }));
