@@ -44,6 +44,13 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 - Reconnect/conflict E2E should run against the same root-mounted provider document routes used by production process mode (`/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, `/d/<providerDocId>/update`), not a direct child-process port.
 - `/healthz` already verifies provider `/ready`, authenticated `/check_store`, and required provider schema tables/columns; conflict smokes can treat a healthy response as the provider/control-plane readiness gate.
 
+## Control Plane Facts From Plan 2
+
+- Hosted `/collab` websocket bypasses are closed outside local/dev-anonymous mode. Conflict E2E must use the control-plane session route and Y-Sweet `ClientToken`, not legacy relay/websocket shortcuts.
+- Edit refresh denial is the revocation/role-downgrade enforcement point. The API returns explicit errors such as `grant_revoked`, `grant_expired`, `provider_token_revoked`, `forbidden`, and `collab_session_not_found`; browser/native conflict UI should surface these as unavailable, not as merge conflicts.
+- Guest edit quota is enforced only on new guest edit sessions. Existing guest edit sessions can refresh after grant/session/role/expiry/revocation checks, so reconnect tests should not expect quota exhaustion to evict already-active guest sessions.
+- View links and read-only export/read routes do not receive provider credentials and must not create durable version rows. Conflict tests must not rely on view/read/export calls to checkpoint shared state.
+
 ## File Structure
 
 - Modify `apps/api/src/local/local-conflict-store.ts`
@@ -110,6 +117,8 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
   - host offline, browser edit, host returns with disk unchanged;
   - host offline, browser edit, local disk edit, conflict opens;
   - grant revoked, token refresh denied;
+  - role downgrade, token refresh denied without opening a merge conflict;
+  - guest quota exhausted blocks a new guest edit session but does not evict an already-active guest refresh;
   - view link never connects to provider;
   - provider child process restart, client reconnects through API-root provider routes, no data loss;
   - same-Mac two-user smoke.

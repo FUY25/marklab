@@ -190,20 +190,22 @@ This plan defines the server contract for a future `apps/collab-web` workspace s
 - [x] Run `npx -y pnpm@10.0.0 exec tsc --noEmit -p apps/api/tsconfig.json`.
 - [x] Run browser/native permission smoke.
 - [x] Run `git diff --check`.
-- [ ] Commit with `git commit -m "feat: add control plane mvp"`.
+- [x] Commit with `git commit -m "feat: add control plane mvp"`.
 
 Execution note: browser/native app wiring is deferred by this plan, so the smoke gate is the automated server contract suite proving explicit errors for auth, role, quota, revocation, and refresh denial.
 
 ### Task 9: Downstream Plan Refresh
 
-- [ ] Review schema, route contracts, session cookies/tokens, guest quota behavior, and revocation behavior.
-- [ ] Update `docs/appdesigndoc.md` if any product permission decision changed.
-- [ ] Update these downstream plans:
+- [x] Review schema, route contracts, session cookies/tokens, guest quota behavior, and revocation behavior.
+- [x] Update `docs/appdesigndoc.md` if any product permission decision changed.
+- [x] Update these downstream plans:
   - `docs/plans/2026-05-11-collab-web-app.md`
   - `docs/plans/2026-05-11-marklab-native-integration.md`
   - `docs/plans/2026-05-11-reconnect-conflict-hardening.md`
   - `docs/plans/2026-05-11-packaging-cli-distribution-docs.md`
   - `docs/plans/2026-05-11-billing-subscription-seats.md`
   - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "anonymous|guest|seat|workspace|share key|subscription|revocation|refresh" docs/plans docs/appdesigndoc.md`.
+- [x] Run `rg -n "anonymous|guest|seat|workspace|share key|subscription|revocation|refresh" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh plans after control plane"`.
+
+Execution note: no `docs/appdesigndoc.md` edit was needed because the implementation matched the existing permission model. The refresh captured implementation facts in downstream plan files: workspace-owned create/import via `workspaceId`, production-disabled dev login, delivered workspace settings APIs, plan-table-backed member/guest limits, and refresh-token behavior.

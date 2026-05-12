@@ -39,6 +39,14 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - `/healthz` must show `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`. Schema readiness includes provider/session tables and required provider columns.
 - Docker image build acceptance may be blocked locally if the Docker daemon is not running; record that separately from Fly deploy credentials.
 
+## Control Plane Facts From Plan 2
+
+- Production must run login-backed: set `MARKLAB_REQUIRE_AUTH=true`, leave `MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB` unset/false, and do not depend on `/api/auth/dev-login`. `NODE_ENV=production` disables dev login even if `MARKLAB_ENABLE_DEV_AUTH=true`.
+- Schema readiness must include the control-plane tables and columns added in Plan 2: `users`, `workspaces`, `workspace_members`, `workspace_share_keys`, `workspace_folders`, `folder_access_policies`, `plans`, `seat_limits`, `subscriptions`, `document_access_grants`, `document_access_sessions`, `collab_sessions`, `provider_token_issuances`, and `provider_token_refreshes`.
+- Hosted public editing must go through the control-plane session route and Y-Sweet `ClientToken`s. Legacy hosted relay/websocket shortcuts are not a production acceptance path.
+- Launch smoke must create or select a workspace, create/import a workspace-owned document with `workspaceId`, create a view/edit grant, join as browser/native, refresh edit provider tokens, and verify revocation denial.
+- Guest quota and member-seat checks are already plan-table-backed for workspace-owned documents. Plan 7 may add Stripe/manual billing management, but production manual/free mode must still prove deterministic limits.
+
 ## File Structure
 
 - Modify `fly.toml`
@@ -79,6 +87,8 @@ This plan is the launch gate. It does not add product features. It verifies the 
   - `DATABASE_URL`;
   - public API URL;
   - public web URL;
+  - `MARKLAB_REQUIRE_AUTH=true`;
+  - auth/session signing secret or OIDC config selected by the auth implementation;
   - `MARKLAB_YSWEET_PUBLIC_URL_PREFIX=https://<fly-app>.fly.dev` if the Fly app name differs from checked-in `fly.toml`;
   - `MARKLAB_YSWEET_AUTH`;
   - `MARKLAB_YSWEET_SERVER_TOKEN`;
@@ -121,11 +131,12 @@ This plan is the launch gate. It does not add product features. It verifies the 
 
 - [ ] Run browser edit smoke.
 - [ ] Run view-link no-provider-websocket smoke.
+- [ ] Run workspace-owned document smoke: login, create workspace, create/import document with `workspaceId`, list it through `/api/workspaces/:workspaceId/documents`, create edit/view grants.
 - [ ] Run native host plus browser guest smoke.
 - [ ] Run CLI share/join/status/wait smoke.
 - [ ] Run conflict/reconnect smoke.
 - [ ] Run revoked link smoke.
-- [ ] Run seat/guest quota smoke if Plan 7 is enabled.
+- [ ] Run member-seat and guest-edit-quota smoke in manual/free mode; add Stripe-specific smoke only if Plan 7 stripe mode is enabled.
 - [ ] Acceptance: every smoke has a recorded command, result, and timestamp in the launch runbook.
 
 ### Task 8: Observability And Rollback

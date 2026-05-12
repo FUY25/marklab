@@ -52,9 +52,11 @@ This plan starts after Plan 1B makes provider runtime and health real and after 
 Before starting implementation, carry forward the browser items explicitly deferred from `2026-05-11-control-plane-mvp.md` because `apps/collab-web` did not exist during Plan 2:
 
 - Joining links must carry the server-issued login or guest session state; do not fall back to anonymous edit in public mode.
-- Edit sessions must refresh provider tokens through `POST /api/docs/:docId/branches/:branchId/collab/session/:sessionId/provider-token/refresh` and stop editing when refresh is denied.
-- The browser UI must surface seat, quota, expiry, and revocation failures from the control-plane contract.
-- The app should reserve a future `/workspaces/:workspaceId/settings` route shape for Members and Documents tabs, but this plan only implements it if the Control Plane MVP delivered the corresponding server APIs and the work fits without weakening the single-document editor/view acceptance gates.
+- Edit sessions must persist the returned `session.refreshToken`, refresh provider tokens through `POST /api/docs/:docId/branches/:branchId/collab/session/:sessionId/provider-token/refresh`, and stop editing when refresh is denied. The refresh request sends only the session refresh token; it must not require the raw share token again.
+- The browser UI must surface seat, guest quota, expiry, revocation, role downgrade, and provider-token-revoked failures from the control-plane contract.
+- Plan 2 delivered the server APIs for `/workspaces/:workspaceId/settings`: member list, workspace share-key invite, member role change, member removal, and workspace document list with active view/edit grant counts. This plan should implement the Members and Documents tabs when doing so does not weaken the single-document editor/view acceptance gates. Plan & Billing remains in `2026-05-11-billing-subscription-seats.md`; Folders remain future work.
+- Document creation/import now accepts `workspaceId` on `POST /api/docs` and `POST /api/docs/import`. When present, the API requires a logged-in workspace `Owner` or `Member`, writes `documents.owner_id` and `documents.workspace_id`, and lists the document through `/api/workspaces/:workspaceId/documents`.
+- Production mode must not use `/api/auth/dev-login`: `NODE_ENV=production` disables dev login even if `MARKLAB_ENABLE_DEV_AUTH=true`. Browser tests that need dev auth must run outside production mode.
 
 ## File Structure
 
@@ -67,6 +69,7 @@ Before starting implementation, carry forward the browser items explicitly defer
 - Create `apps/collab-web/src/editor/ReadOnlyMarkdownView.tsx`
 - Create `apps/collab-web/src/presence/awareness.ts`
 - Create `apps/collab-web/src/presence/remote-cursors.ts`
+- Create `apps/collab-web/src/workspaces/WorkspaceSettings.tsx` if implementing the Members/Documents settings shell in this plan.
 - Create `apps/collab-web/src/styles.css`
 - Modify `pnpm-workspace.yaml` only if the current workspace glob does not already include `apps/*`.
 - Modify `infra/docker/api.Dockerfile` or create a dedicated collab-web build path after deploy shape is confirmed.
@@ -88,6 +91,7 @@ Before starting implementation, carry forward the browser items explicitly defer
 - [ ] Implement `apps/collab-web/src/api/collab-session.ts`.
 - [ ] It calls `POST /api/docs/:docId/branches/:branchId/collab/session`.
 - [ ] It refreshes edit provider tokens through the control-plane token-refresh endpoint before the configured refresh margin (default 2 minutes; sourced from a shared `provider-token-policy` module mirroring `apps/api/src/config/provider-token-policy.ts`, not a magic number).
+- [ ] It stores the edit session refresh token separately from the Y-Sweet `ClientToken` and sends `{ refreshToken }` on refresh.
 - [ ] It parses `mode=view` responses without provider token.
 - [ ] It parses `mode=edit` responses with provider token.
 - [ ] Add Vitest tests for both response shapes.
@@ -118,6 +122,7 @@ Before starting implementation, carry forward the browser items explicitly defer
 - [ ] Render selectable/copyable Markdown content.
 - [ ] Do not mount CodeMirror as an editor.
 - [ ] Do not create Y.Doc, Y-Sweet provider, awareness provider, or IndexedDB Yjs persistence.
+- [ ] Read-only routes must not create durable version rows; do not assume `read` or `export.md` checkpoints the document for view grants.
 - [ ] Add a test that view mode never calls the provider connection factory.
 - [ ] Acceptance: view link opens a rendered document and browser devtools network has no provider websocket.
 
@@ -137,6 +142,15 @@ Before starting implementation, carry forward the browser items explicitly defer
 - [ ] Update Docker/Fly config according to that decision.
 - [ ] Ensure `MARKLAB_PUBLIC_WEB_URL` points to the browser collaborator route that real share links open.
 - [ ] Acceptance command: production build serves the collab-web entry and does not break existing `apps/web` routes.
+
+### Task 7B: Workspace Settings Shell
+
+- [ ] Add `/workspaces/:workspaceId/settings`.
+- [ ] Add a Members tab backed by `GET /api/workspaces/:workspaceId/members`, `POST /api/workspaces/:workspaceId/share-keys`, `PATCH /api/workspaces/:workspaceId/members/:userId`, and `DELETE /api/workspaces/:workspaceId/members/:userId`.
+- [ ] Add a Documents tab backed by `GET /api/workspaces/:workspaceId/documents`.
+- [ ] Enforce Owner-only sensitive actions server-side; the UI may hide controls for non-owners but must surface server `403` responses correctly.
+- [ ] Do not add Plan & Billing or Folders tabs here beyond disabled placeholders; those belong to downstream plans.
+- [ ] Acceptance: Owner can list members, create a share key, change/remove a member, and inspect workspace document grant counts from the browser shell; Reader can inspect read-only state but cannot mutate settings.
 
 ### Task 8: Verification
 

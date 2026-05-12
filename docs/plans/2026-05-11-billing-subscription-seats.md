@@ -29,6 +29,14 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Billing and quota checks remain entirely in the control plane before Y-Sweet token issuance. The API-supervised Y-Sweet provider only validates native document tokens; it has no billing or seat-limit knowledge.
 - `/healthz` now includes provider schema readiness for `collab_sessions` and `provider_token_issuances`. If this plan adds billing/quota columns used by token issuance, update the health schema contract and add a missing-column `503` regression.
 
+## Control Plane Facts From Plan 2
+
+- Plan 2 already created `plans`, `seat_limits`, and `subscriptions`, seeds `free`, `dev`, `team`, `business`, and `internal`, and creates a `free`/`manual` subscription when a workspace is created.
+- Plan 2 already enforces named-member seats through `workspace_share_keys` joins and `seat_limits.member_seats`.
+- Plan 2 already enforces concurrent guest edit quota during initial edit-token issuance through `subscriptions` -> `seat_limits.concurrent_guest_edits`. Existing guest edit sessions can refresh without re-running quota after grant/session/role/expiry/revocation checks.
+- Documents with `workspace_id is null` still use the legacy fallback guest quota so old/local documents keep working. Billing should not make that fallback path the public hosted default.
+- The workspace settings browser shell is not created by Plan 2; Plan 2 delivered only server APIs. Plan 3 creates the `apps/collab-web` shell and Members/Documents tabs, and this plan adds Plan & Billing once that shell exists.
+
 ## File Structure
 
 - Modify `apps/api/src/db/schema.sql`
@@ -39,29 +47,29 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Modify `apps/api/src/routes/collab-session-routes.ts`
 - Modify `apps/api/src/http/app.ts`
 - Add tests beside services/routes.
-- Modify the workspace settings UI inside `apps/collab-web` (created in `2026-05-11-collab-web-app.md`, scope-extended in `2026-05-11-control-plane-mvp.md`).
+- Modify the workspace settings UI inside `apps/collab-web` (created in `2026-05-11-collab-web-app.md`; Plan 2 delivered the backing server APIs).
 - Modify docs and downstream deploy plan.
 
 ## Tasks
 
 ### Task 1: Plan And Subscription Model
 
-- [ ] Seed plan records for free, team, and internal/admin plans.
-- [ ] Store subscription status per workspace.
-- [ ] Store named-member seat limit and concurrent guest-edit limit.
-- [ ] Add tests proving default workspace gets the free plan.
+- [ ] Verify and extend the existing plan records seeded by Plan 2 instead of creating a parallel model.
+- [ ] Store Stripe/manual billing metadata on the existing workspace subscription records.
+- [ ] Extend named-member seat limits and concurrent guest-edit limits through existing `seat_limits` rows.
+- [ ] Add tests proving default workspaces still get the free/manual subscription created by Plan 2.
 - [ ] Acceptance: a workspace without an active paid subscription still has deterministic limits.
 
 ### Task 2: Seat Enforcement
 
-The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.md` Task 5: that plan added the guest-edit quota check at provider-token issuance time, enforcing against hardcoded constants. This task does **not** add a parallel check — it only replaces the constants with plan-table lookups.
+The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.md` Task 5: that plan added member-seat checks and guest-edit quota checks backed by `subscriptions` and `seat_limits`. This task does **not** add parallel checks. It extracts those lookups into billing/seat-limit services, adds billing-mode metadata, and expands plan coverage.
 
-- [ ] Replace the hardcoded guest-edit quota constant in the token-issuance path with a lookup against `subscriptions` → `plans` → `seat_limits.concurrent_guest_edits` for the workspace.
-- [ ] Replace the hardcoded member-seat constant in the workspace invite path with the same chain via `seat_limits.member_seats`.
+- [ ] Replace any remaining legacy fallback-only quota assumptions with explicit `subscriptions` -> `seat_limits.concurrent_guest_edits` service calls for workspace-owned documents.
+- [ ] Replace any remaining inline member-seat SQL with a shared lookup against `seat_limits.member_seats`.
 - [ ] If quota enforcement depends on new columns or tables during provider-token issuance, add them to the `/healthz` schema readiness contract so production cannot go green with an incomplete billing schema.
 - [ ] Keep guest view sessions outside guest edit quota (already true; verify with a regression test).
 - [ ] Add tests for free-limit pass/fail and paid-limit pass/fail.
-- [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits not constants. `git grep` for the old constant names returns no app-code matches.
+- [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits for workspace documents. Existing guest edit sessions still refresh when quota is full.
 
 ### Task 3: Billing Provider Integration
 
@@ -74,7 +82,7 @@ The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.
 
 ### Task 4: Control UI
 
-The workspace settings shell already exists in `apps/collab-web` from `2026-05-11-control-plane-mvp.md` Task 7B (Members/Documents tabs). This task adds the **Plan & Billing** tab into that existing shell. Do not create a new app.
+The workspace settings server APIs exist from `2026-05-11-control-plane-mvp.md` Task 7B. The browser shell is created in `2026-05-11-collab-web-app.md` with Members/Documents tabs. This task adds the **Plan & Billing** tab into that shell. Do not create a new app.
 
 - [ ] Add a Plan & Billing tab to `/workspaces/:workspaceId/settings` in `apps/collab-web`.
 - [ ] Show current plan, member seats used, guest edit sessions used, and upgrade/manage button.

@@ -35,6 +35,14 @@ This plan does not build billing or production deploy. It makes local installati
 - The hosted API supervises the upstream Y-Sweet child process and proxies public provider document routes at the API root. `marklab doctor --json` should report provider readiness from `/healthz.provider`, not by probing the child provider port directly.
 - Troubleshooting docs should mention `provider.ready`, `provider.storeReady`, provider schema readiness, and the root-mounted `/d/<providerDocId>/...` route shape when diagnosing provider failures.
 
+## Control Plane Facts From Plan 2
+
+- Public hosted mode is login-backed. Packaged CLI/native flows must obtain or reuse a user session; they must not rely on `MARKLAB_ENABLE_DEV_AUTH`, `MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB`, or admin-token-only document creation in production.
+- `POST /api/docs` and `POST /api/docs/import` accept `workspaceId` for workspace-owned documents. `marklab share` should create/select a workspace, pass `workspaceId`, and avoid creating orphan admin documents.
+- Workspace APIs exist for alpha docs and troubleshooting: `/api/workspaces`, `/api/workspaces/:workspaceId/members`, `/api/workspaces/:workspaceId/share-keys`, `/api/workspaces/join`, and `/api/workspaces/:workspaceId/documents`.
+- Provider token refresh uses a control-plane session refresh token returned by the edit-session route. CLI docs should distinguish that refresh token from raw share tokens and Y-Sweet `ClientToken`s.
+- Revoked/expired links and provider-token revocation surface as explicit API errors; troubleshooting docs should name `grant_revoked`, `grant_expired`, `provider_token_revoked`, and `collab_session_not_found`.
+
 ## File Structure
 
 - Modify `apps/cli/marklab.mjs`
@@ -83,6 +91,7 @@ Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
 The CLI is not the home for the agent edit `begin/end` protocol described in the spec; that protocol stays out of v1 (see Task 3).
 
 - [ ] Add tests for hosted-default config and local override config.
+- [ ] Add tests proving `share` creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode.
 - [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli`.
 
 ### Task 3: AI Agent Workflow
@@ -107,6 +116,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 - [ ] Update `docs/product/marklab-alpha-user-guide.md` with host and collaborator flows.
 - [ ] Update `docs/production/local-daemon-distribution.md` with app/CLI lifecycle.
 - [ ] Update troubleshooting for host offline, internal error, token expired, revoked link, conflict required, and sync timeout.
+- [ ] Document the hosted login/workspace requirement for `share`: normal users create or select a workspace, then the CLI creates a workspace-owned document and edit link.
 - [ ] Acceptance: docs include exact commands and no stale Plan 04A relay-only instructions.
 
 ### Task 6: Package Smoke

@@ -42,6 +42,14 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 - In API-supervised process mode, public provider traffic is root-mounted on the API host and proxied to the child provider only for document routes: `/d/<providerDocId>/ws/<providerDocId>`, `/d/<providerDocId>/as-update`, and `/d/<providerDocId>/update`.
 - Provider durability for alpha is the child Y-Sweet store on `/data/ysweet` in Fly and `.marklab-provider-data/ysweet` locally; native/local persistence is still responsible only for offline client state and disk projection, not provider checkpoint storage.
 
+## Control Plane Facts From Plan 2
+
+- Public hosted mode is login-backed. Dev anonymous and dev login are internal-only; `NODE_ENV=production` disables `/api/auth/dev-login` even when the env flag is set.
+- Document create/import accepts `workspaceId` on `POST /api/docs` and `POST /api/docs/import`. Native share/start-sharing must create or select a workspace first, then create the document as a logged-in `Owner` or `Member`; do not create admin-only orphan documents.
+- Workspace APIs already exist for membership/share-key/settings data: `/api/workspaces`, `/api/workspaces/:workspaceId/members`, `/api/workspaces/:workspaceId/share-keys`, `/api/workspaces/join`, and `/api/workspaces/:workspaceId/documents`.
+- Edit sessions return a control-plane session refresh token alongside the Y-Sweet `ClientToken`. Native code must persist the session refresh token securely enough for alpha, refresh through the control-plane endpoint, and stop editing when refresh is denied for revocation, expiry, role downgrade, or provider-token revocation.
+- View links receive control-plane snapshots only and no provider token. Native code must not try to join the provider for view-only links.
+
 ## File Structure
 
 - Create `apps/marklab-macos/` or equivalent native app folder after confirming the MarkEdit import strategy.
@@ -82,6 +90,7 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
   - revoke link;
   - show share state;
   - copy browser link.
+- [ ] On first share, require login, create/select a workspace, and pass `workspaceId` to the document create/import route so the shared document is workspace-owned and appears in workspace document lists.
 - [ ] Connect these actions to local daemon/control-plane APIs rather than directly mutating provider state.
 - [ ] Acceptance: a user can create an edit link from MarkLab.app and join it from `apps/collab-web`.
 
@@ -105,6 +114,7 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 - [ ] Ensure `marklab share`, `create-link`, `revoke-link`, `status`, `wait`, `conflict`, and `export` can operate when the native app is running.
 - [ ] Ensure the CLI can start or find the local daemon without stealing focus from the native app.
 - [ ] Ensure native edit sessions refresh provider tokens through the same control-plane endpoint as browser edit sessions.
+- [ ] Persist and use the control-plane session refresh token returned by the edit-session route; do not attempt refresh with the original share token or with provider token internals.
 - [ ] Use the `ClientToken` returned by the control plane as the source of provider connection URLs; do not duplicate `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` or provider route construction in native code.
 - [ ] Acceptance command: `node apps/cli/marklab.mjs share README.md --json` returns a usable link while the app owns the file.
 
