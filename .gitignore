@@ -18,6 +18,7 @@ playwright-report/
 .env
 .env.*
 !.env.example
+.marklab-provider-data/
 
 # Reference-only source clone; not part of this product repo.
 Learning resources/

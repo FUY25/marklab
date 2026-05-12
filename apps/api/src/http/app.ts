@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import express, { type ErrorRequestHandler, type NextFunction, type Request, type Response } from 'express';
+import express, { type ErrorRequestHandler, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
@@ -37,6 +37,7 @@ export interface HttpAppOptions {
   relayService?: RelayRoomService;
   relayServer?: RelayServerHandle;
   providerTokenService?: ProviderTokenService;
+  providerHttpProxy?: RequestHandler;
   allowedOrigins?: readonly string[];
   enforceAllowedOrigins?: boolean;
   health?: HttpHealthOptions;
@@ -50,7 +51,19 @@ export interface HttpHealthOptions {
   databaseRequired?: boolean;
   relayRequired?: boolean;
   relayReady?: boolean;
+  providerRequired?: boolean;
+  providerReady?: boolean;
+  providerHealth?: () => Promise<HttpProviderHealthSnapshot>;
   schemaTables?: readonly string[];
+  schemaColumns?: Readonly<Record<string, readonly string[]>>;
+}
+
+export interface HttpProviderHealthSnapshot {
+  mode: string;
+  ready: boolean;
+  storeReady?: boolean;
+  serverUrl: string;
+  error?: string | null;
 }
 
 export interface StaticWebOptions {
@@ -158,14 +171,38 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
     ready: !input.relayRequired || input.relayReady === true || Boolean(relayServer),
     connectionCount: relayServer?.connectionCount ?? 0,
   };
+  const provider = {
+    required: Boolean(input.providerRequired),
+    ready: !input.providerRequired || input.providerReady === true,
+    storeReady: null as boolean | null,
+    mode: null as string | null,
+    serverUrl: null as string | null,
+    error: null as string | null,
+  };
+
+  if (input.providerHealth) {
+    try {
+      const providerSnapshot = await input.providerHealth();
+      provider.mode = providerSnapshot.mode;
+      provider.serverUrl = providerSnapshot.serverUrl;
+      provider.storeReady = providerSnapshot.storeReady ?? null;
+      provider.error = providerSnapshot.error ?? null;
+      provider.ready = providerSnapshot.ready && providerSnapshot.storeReady !== false;
+    } catch (error) {
+      provider.ready = false;
+      provider.error = error instanceof Error ? error.message : 'provider_health_failed';
+    }
+  }
+  const providerReadyForGate = !provider.required || provider.ready;
 
   if (!input.databaseRequired) {
     return {
-      ok: relay.ready,
+      ok: relay.ready && providerReadyForGate,
       process: { ready: true },
       database,
       schema,
       relay,
+      provider,
     };
   }
 
@@ -178,7 +215,11 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
 
   if (database.ready) {
     try {
-      const tables = input.schemaTables ?? ['relay_rooms', 'relay_access_grants', 'relay_access_sessions'];
+      const schemaColumns = input.schemaColumns ?? {};
+      const tables = Array.from(new Set([
+        ...(input.schemaTables ?? ['relay_rooms', 'relay_access_grants', 'relay_access_sessions']),
+        ...Object.keys(schemaColumns),
+      ]));
       const result = await pool.query<{ table_name: string }>(
         `select table_name
            from information_schema.tables
@@ -188,6 +229,26 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
       );
       const present = new Set(result.rows.map((row) => row.table_name));
       schema.missing = tables.filter((table) => !present.has(table));
+
+      const columnTables = Object.keys(schemaColumns).filter((table) => present.has(table));
+      const columnNames = Array.from(new Set(Object.values(schemaColumns).flat()));
+      if (columnTables.length > 0 && columnNames.length > 0) {
+        const columnResult = await pool.query<{ table_name: string; column_name: string }>(
+          `select table_name, column_name
+             from information_schema.columns
+            where table_schema = 'public'
+              and table_name = any($1::text[])
+              and column_name = any($2::text[])`,
+          [columnTables, columnNames],
+        );
+        const presentColumns = new Set(columnResult.rows.map((row) => `${row.table_name}.${row.column_name}`));
+        for (const table of columnTables) {
+          for (const column of schemaColumns[table] ?? []) {
+            const key = `${table}.${column}`;
+            if (!presentColumns.has(key)) schema.missing.push(key);
+          }
+        }
+      }
       schema.ready = schema.missing.length === 0;
     } catch (error) {
       schema.error = error instanceof Error ? error.message : 'schema_unavailable';
@@ -195,11 +256,12 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
   }
 
   return {
-    ok: database.ready && schema.ready && relay.ready,
+    ok: database.ready && schema.ready && relay.ready && providerReadyForGate,
     process: { ready: true },
     database,
     schema,
     relay,
+    provider,
   };
 }
 
@@ -440,6 +502,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     enforceAllowedOrigins: options.enforceAllowedOrigins ?? false,
   }));
   app.use(express.json({ limit: '2mb' }));
+  if (options.providerHttpProxy) app.use(options.providerHttpProxy);
 
   app.get('/healthz', async (_req: Request, res: Response, next: NextFunction) => {
     try {

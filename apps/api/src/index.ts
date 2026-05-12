@@ -8,6 +8,19 @@ import { createPool, type DbPool } from './db/client';
 import { createHttpApp } from './http/app';
 import { createLocalFileServiceWithOptions } from './local/local-file-service';
 import { createLocalRelayHostController, createLocalRelayMirrorController } from './local/local-relay-client';
+import {
+  loadYSweetProviderProcessConfig,
+  readYSweetProviderHealth,
+  startYSweetProviderProcess,
+  stopYSweetProviderProcess,
+} from './provider/ysweet-provider-process';
+import {
+  isYSweetProviderHttpPath,
+  isYSweetProviderWebSocketOriginAllowed,
+  isYSweetProviderWebSocketPath,
+  proxyYSweetProviderHttpRequest,
+  proxyYSweetProviderWebSocketUpgrade,
+} from './provider/ysweet-provider-websocket-proxy';
 import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
 import { createRemoteRelayRoomService } from './relay/relay-remote-service';
 import { createInMemoryRelayRoomService, createRelayRoomService } from './relay/relay-room-service';
@@ -52,13 +65,21 @@ async function main() {
     : undefined;
   const useDatabase = !localFileService || process.env.MARKLAB_LOCAL_USE_DATABASE === 'true';
   const pool = useDatabase ? createPool(env.databaseUrl) : createLocalOnlyPool();
+  const ysweetProviderConfig = !localFileService && env.ysweetProviderMode !== 'disabled'
+    ? loadYSweetProviderProcessConfig(process.env, {
+        requireAuth: env.mode === 'production' && process.env.MARKLAB_LOCAL_PRODUCTION_SMOKE !== 'true' && env.ysweetProviderMode === 'process',
+        requireServerToken: env.mode === 'production' && process.env.MARKLAB_LOCAL_PRODUCTION_SMOKE !== 'true',
+        requireStorePath: env.mode === 'production' && process.env.MARKLAB_LOCAL_PRODUCTION_SMOKE !== 'true' && env.ysweetProviderMode === 'process',
+      })
+    : undefined;
+  const ysweetProvider = ysweetProviderConfig ? startYSweetProviderProcess(ysweetProviderConfig) : undefined;
   const providerTokenService =
-    !localFileService && (env.mode === 'production' || env.ysweetConnectionString)
-      ? createYSweetTokenService(env.ysweetConnectionString ? { connectionString: env.ysweetConnectionString } : {})
+    !localFileService && ysweetProviderConfig?.connectionString
+      ? createYSweetTokenService({ connectionString: ysweetProviderConfig.connectionString })
       : undefined;
   const collabSnapshotService =
-    providerTokenService && env.ysweetConnectionString
-      ? createYSweetSnapshotService({ pool, connectionString: env.ysweetConnectionString })
+    providerTokenService && ysweetProviderConfig?.connectionString
+      ? createYSweetSnapshotService({ pool, connectionString: ysweetProviderConfig.connectionString })
       : undefined;
   const localHostedRelay = Boolean(localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
   const hostedRelayService = localHostedRelay ? createRemoteRelayRoomService({ publicApiUrl: env.publicApiUrl }) : undefined;
@@ -118,6 +139,17 @@ async function main() {
     applyCollabDocumentState: collab.applyDocumentState,
     closeCollabDocumentConnections: collab.closeDocumentConnections,
     ...(providerTokenService ? { providerTokenService } : {}),
+    ...(ysweetProvider
+      ? {
+          providerHttpProxy: (req, res, next) => {
+            if (!isYSweetProviderHttpPath(req.originalUrl ?? req.url)) {
+              next();
+              return;
+            }
+            proxyYSweetProviderHttpRequest(ysweetProvider.serverUrl, req, res);
+          },
+        }
+      : {}),
     ...(collabSnapshotService ? { collabSnapshotService } : {}),
     ...(localFileService
       ? {
@@ -141,7 +173,21 @@ async function main() {
       databaseRequired: env.mode === 'production',
       relayRequired: Boolean(relayService),
       relayReady: localHostedRelay,
-      schemaTables: ['relay_rooms', 'relay_access_grants', 'relay_access_sessions'],
+      providerRequired: Boolean(ysweetProvider),
+      ...(ysweetProvider ? { providerHealth: () => readYSweetProviderHealth(ysweetProvider) } : {}),
+      schemaTables: [
+        'relay_rooms',
+        'relay_access_grants',
+        'relay_access_sessions',
+        'document_branch_states',
+        'collab_sessions',
+        'provider_token_issuances',
+      ],
+      schemaColumns: {
+        document_branch_states: ['provider_doc_id', 'provider_doc_seeded_at'],
+        collab_sessions: ['refresh_token_hash', 'is_guest'],
+        provider_token_issuances: ['actor_type', 'actor_id', 'actor_grant_id', 'status', 'provider_error'],
+      },
     },
   });
   const httpServer = http.createServer(app);
@@ -187,6 +233,22 @@ async function main() {
       return;
     }
 
+    if (isYSweetProviderWebSocketPath(request.url)) {
+      if (
+        !ysweetProvider
+        || !isYSweetProviderWebSocketOriginAllowed({
+          origin: request.headers.origin,
+          allowedOrigins: env.allowedOrigins,
+          enforceAllowedOrigins: env.mode === 'production',
+        })
+      ) {
+        socket.destroy();
+        return;
+      }
+      proxyYSweetProviderWebSocketUpgrade(ysweetProvider.serverUrl, request, socket, head);
+      return;
+    }
+
     if (!request.url?.startsWith('/collab')) {
       socket.destroy();
       return;
@@ -216,6 +278,7 @@ async function main() {
         httpServer.close(() => resolve());
       });
       await relay?.close();
+      await stopYSweetProviderProcess(ysweetProvider);
       await (collab.server as unknown as { destroy?: () => Promise<void> | void }).destroy?.();
     } catch (error) {
       console.error(error);

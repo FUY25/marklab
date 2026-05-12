@@ -26,9 +26,12 @@ RUN pnpm --filter @marklab/markdown typecheck \
   && pnpm --filter @marklab/web typecheck \
   && pnpm --filter @marklab/web build
 
+RUN mkdir -p /data/ysweet
+
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV MARKLAB_WEB_DIST_DIR=/app/apps/web/dist
+VOLUME ["/data"]
 EXPOSE 3001
 
 CMD ["pnpm", "--filter", "@marklab/api", "start"]

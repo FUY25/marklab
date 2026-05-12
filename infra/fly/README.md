@@ -21,6 +21,8 @@ The default Fly app name is `marklab-relay-alpha`. Use it unless Fly reports the
 
 The Plan 04A Fly image serves the API, relay websocket, and built web app from the same Fly hostname. Browser relay links such as `/relay/<room>` must resolve on this app; do not deploy an API-only image for the alpha.
 
+Plan 1B also co-locates the upstream Y-Sweet provider in the same Fly machine. The API supervises a child `y-sweet serve` process on `127.0.0.1:8080`, stores provider checkpoints on a Fly volume at `/data/ysweet`, and proxies public Y-Sweet document routes to that child process. Current Y-Sweet 0.9.1 client tokens use `/d/<providerDocId>/ws/<providerDocId>` for websocket sync plus `/d/<providerDocId>/as-update` and `/d/<providerDocId>/update` for token-scoped document HTTP traffic.
+
 Plan 04A uses anonymous public relay room creation for the npm alpha. The daemon gets a per-room host token and uses that token for room-scoped link creation, share-state reads, grant revocation, and host-offline marking. Do not give ordinary users a global relay management token. Account login is a later hosted-auth plan.
 
 Run the Plan 04A alpha as one Fly machine:
@@ -29,7 +31,7 @@ Run the Plan 04A alpha as one Fly machine:
 fly scale count 1 -a marklab-relay-alpha --yes
 ```
 
-Relay websocket sessions, host-online state, and immediate revoke disconnects are in-process for Plan 04A. Scaling to multiple machines requires a later sticky-routing or shared relay fanout change.
+Relay websocket sessions, host-online state, immediate revoke disconnects, and the co-located provider volume are single-machine assumptions for the alpha. Scaling to multiple machines requires a later sticky-routing or shared relay/provider fanout change.
 
 ## 2. Install And Authenticate Fly CLI
 
@@ -68,7 +70,27 @@ fly launch --no-deploy --name <fly-app> --region sin
 
 If Fly generates a local `fly.toml`, compare it against `infra/fly/fly.toml.example`. The checked-in example is the contract for Plan 04A and must contain no secrets.
 
+Create the provider volume before deploying:
+
+```bash
+fly volumes create marklab_ysweet_data --region sin --size 1 -a marklab-relay-alpha
+```
+
+For a different app name:
+
+```bash
+fly volumes create marklab_ysweet_data --region sin --size 1 -a <fly-app>
+```
+
 ## 5. Set Runtime Secrets And Public URLs
+
+Generate Y-Sweet provider auth values from the repo:
+
+```bash
+npx -y pnpm@10.0.0 --filter @marklab/api exec y-sweet gen-auth --json
+```
+
+Use `private_key` for `MARKLAB_YSWEET_AUTH`. Use `server_token` for `MARKLAB_YSWEET_SERVER_TOKEN`. They are a matched pair; do not invent one from the other by hand.
 
 For the default app name:
 
@@ -83,7 +105,9 @@ fly secrets set \
   MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS='86400' \
   MARKLAB_RELAY_HOST_LEASE_SECONDS='30' \
   MARKLAB_RELAY_MAX_ROOM_CONNECTIONS='32' \
-  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576'
+  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576' \
+  MARKLAB_YSWEET_AUTH='<private_key-from-y-sweet-gen-auth>' \
+  MARKLAB_YSWEET_SERVER_TOKEN='<server_token-from-y-sweet-gen-auth>'
 ```
 
 For a different app name:
@@ -99,10 +123,15 @@ fly secrets set \
   MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS='86400' \
   MARKLAB_RELAY_HOST_LEASE_SECONDS='30' \
   MARKLAB_RELAY_MAX_ROOM_CONNECTIONS='32' \
-  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576'
+  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576' \
+  MARKLAB_YSWEET_PUBLIC_URL_PREFIX='https://<fly-app>.fly.dev' \
+  MARKLAB_YSWEET_AUTH='<private_key-from-y-sweet-gen-auth>' \
+  MARKLAB_YSWEET_SERVER_TOKEN='<server_token-from-y-sweet-gen-auth>'
 ```
 
-`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, and relay websocket joins must resolve to the same deployed host unless a later custom-domain plan changes all three together.
+`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, relay websocket joins, and Y-Sweet client token websocket URLs must resolve to the same deployed host unless a later custom-domain plan changes all of them together.
+
+Provider env defaults that are not secrets live in `fly.toml`: `MARKLAB_YSWEET_PROVIDER_MODE=process`, `MARKLAB_YSWEET_SERVER_URL=http://127.0.0.1:8080`, `MARKLAB_YSWEET_STORE_PATH=/data/ysweet`, `MARKLAB_YSWEET_HOST=127.0.0.1`, `MARKLAB_YSWEET_PORT=8080`, `MARKLAB_YSWEET_CHECKPOINT_FREQ_SECONDS=10`, and `MARKLAB_YSWEET_SKIP_GC=false`. Keep `MARKLAB_YSWEET_SKIP_GC=false` while MarkLab pins Y-Sweet 0.9.1; true is rejected because that server version has no `--skip-gc` serve flag.
 
 ## 6. Deploy
 
@@ -128,7 +157,7 @@ curl https://marklab-relay-alpha.fly.dev/healthz
 
 The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production should do the same through the migration path owned by the API integration work. Until the API exposes a source-integrated migration command, the operator must apply the checked-in schema to Neon before accepting alpha traffic.
 
-`/healthz` reports process liveness separately from database readiness, schema readiness, and relay readiness. A production response is not alpha-ready unless `ok`, `database.ready`, `schema.ready`, and `relay.ready` are all `true`.
+`/healthz` reports process liveness separately from database readiness, schema readiness, relay readiness, and provider readiness. A production response is not alpha-ready unless `ok`, `database.ready`, `schema.ready`, `relay.ready`, `provider.ready`, and `provider.storeReady` are all `true`.
 
 ## 8. Release Gate
 
@@ -138,6 +167,7 @@ Before an alpha user tries the relay:
 curl https://<fly-app>.fly.dev/healthz
 fly status
 fly logs
+npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-smoke.ts
 ```
 
 Then run the product smoke:

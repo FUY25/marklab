@@ -10,7 +10,12 @@ const productionBaseEnv = {
   MARKLAB_PUBLIC_WEB_URL: 'https://marklab.fly.dev',
   MARKLAB_PUBLIC_API_URL: 'https://marklab.fly.dev',
   MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://marklab.fly.dev/relay',
-  MARKLAB_YSWEET_CONNECTION_STRING: 'ysweet://test-production-provider',
+  MARKLAB_YSWEET_PROVIDER_MODE: 'process',
+  MARKLAB_YSWEET_SERVER_URL: 'http://127.0.0.1:8080',
+  MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://marklab.fly.dev',
+  MARKLAB_YSWEET_STORE_PATH: '/data/ysweet',
+  MARKLAB_YSWEET_AUTH: 'test-production-provider-private-key',
+  MARKLAB_YSWEET_SERVER_TOKEN: 'test-production-provider-server-token',
   MARKLAB_ALLOWED_ORIGINS: 'https://marklab.fly.dev',
   MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: '86400',
   MARKLAB_RELAY_HOST_LEASE_SECONDS: '30',
@@ -29,7 +34,10 @@ describe('loadApiEnv', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: undefined }, 'MARKLAB_PUBLIC_WEB_URL');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_API_URL: undefined }, 'MARKLAB_PUBLIC_API_URL');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_RELAY_WS_URL: undefined }, 'MARKLAB_PUBLIC_RELAY_WS_URL');
-    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_CONNECTION_STRING: undefined }, 'MARKLAB_YSWEET_CONNECTION_STRING');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_PUBLIC_URL_PREFIX: undefined }, 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_AUTH: undefined }, 'MARKLAB_YSWEET_AUTH');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_SERVER_TOKEN: undefined }, 'MARKLAB_YSWEET_SERVER_TOKEN');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_STORE_PATH: undefined }, 'MARKLAB_YSWEET_STORE_PATH');
   });
 
   it('requires auth in hosted production mode', () => {
@@ -50,10 +58,25 @@ describe('loadApiEnv', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_RELAY_WS_URL: 'https://marklab.fly.dev/relay' }, 'wss://');
   });
 
+  it('requires an https provider public URL in hosted production mode', () => {
+    expectInvalid(
+      { ...productionBaseEnv, MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'http://marklab.fly.dev' },
+      'MARKLAB_YSWEET_PUBLIC_URL_PREFIX must use https://',
+    );
+  });
+
+  it('rejects path-prefixed provider public URLs in API-supervised process mode', () => {
+    expectInvalid(
+      { ...productionBaseEnv, MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://marklab.fly.dev/ysweet' },
+      'MARKLAB_YSWEET_PUBLIC_URL_PREFIX must not include a path',
+    );
+  });
+
   it('rejects localhost and loopback public URLs in hosted production mode', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: 'https://localhost:5175' }, 'localhost');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_API_URL: 'https://127.0.0.1:3001' }, 'loopback');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://[::1]:3001/relay' }, 'loopback');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'http://127.0.0.1:8080' }, 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX');
   });
 
   it('rejects host mismatches unless MARKLAB_ALLOWED_ORIGINS includes each host', () => {
@@ -122,7 +145,17 @@ describe('loadApiEnv', () => {
       publicWebUrl: 'https://marklab.fly.dev',
       publicApiUrl: 'https://marklab.fly.dev',
       publicRelayWebSocketUrl: 'wss://marklab.fly.dev/relay',
-      ysweetConnectionString: 'ysweet://test-production-provider',
+      ysweetProviderMode: 'process',
+      ysweetServerUrl: 'http://127.0.0.1:8080',
+      ysweetPublicUrlPrefix: 'https://marklab.fly.dev',
+      ysweetStorePath: '/data/ysweet',
+      ysweetAuth: 'test-production-provider-private-key',
+      ysweetServerToken: 'test-production-provider-server-token',
+      ysweetConnectionString: 'ys://test-production-provider-server-token@127.0.0.1:8080',
+      ysweetHost: '127.0.0.1',
+      ysweetPort: 8080,
+      ysweetCheckpointFreqSeconds: 10,
+      ysweetSkipGc: false,
       relayEphemeralTtlSeconds: 86400,
       relayHostLeaseSeconds: 30,
       relayMaxRoomConnections: 32,
@@ -146,6 +179,51 @@ describe('loadApiEnv', () => {
       publicApiUrl: 'http://127.0.0.1:3001',
       publicRelayWebSocketUrl: 'ws://127.0.0.1:3001/relay',
     });
+  });
+
+  it('allows local production smoke to run without provider secrets', () => {
+    const env = loadApiEnv({
+      NODE_ENV: 'production',
+      PORT: '3001',
+      DATABASE_URL: 'postgres://marklab:marklab@127.0.0.1:54329/marklab',
+      MARKLAB_LOCAL_PRODUCTION_SMOKE: 'true',
+      MARKLAB_REQUIRE_AUTH: 'true',
+      MARKLAB_PUBLIC_WEB_URL: 'http://127.0.0.1:8080',
+      MARKLAB_PUBLIC_API_URL: 'http://127.0.0.1:3001',
+      MARKLAB_PUBLIC_RELAY_WS_URL: 'ws://127.0.0.1:3001/relay',
+      MARKLAB_ALLOWED_ORIGINS: 'http://127.0.0.1:8080',
+      MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: '86400',
+      MARKLAB_RELAY_HOST_LEASE_SECONDS: '30',
+      MARKLAB_RELAY_MAX_ROOM_CONNECTIONS: '32',
+      MARKLAB_RELAY_MAX_MESSAGE_BYTES: '1048576',
+    });
+
+    expect(env).toMatchObject({
+      mode: 'production',
+      ysweetProviderMode: 'disabled',
+    });
+    expect(env.ysweetConnectionString).toBeUndefined();
+  });
+
+  it('supports an externally managed provider in production', () => {
+    const env = loadApiEnv({
+      ...productionBaseEnv,
+      MARKLAB_YSWEET_PROVIDER_MODE: 'external',
+      MARKLAB_YSWEET_SERVER_URL: 'https://ysweet.example.com',
+      MARKLAB_YSWEET_PUBLIC_URL_PREFIX: undefined,
+      MARKLAB_YSWEET_STORE_PATH: undefined,
+      MARKLAB_YSWEET_AUTH: undefined,
+      MARKLAB_YSWEET_SERVER_TOKEN: 'external-token',
+    });
+
+    expect(env).toMatchObject({
+      ysweetProviderMode: 'external',
+      ysweetServerUrl: 'https://ysweet.example.com',
+      ysweetPublicUrlPrefix: 'https://ysweet.example.com',
+      ysweetServerToken: 'external-token',
+      ysweetConnectionString: 'yss://external-token@ysweet.example.com',
+    });
+    expect(env.ysweetStorePath).toBeUndefined();
   });
 });
 

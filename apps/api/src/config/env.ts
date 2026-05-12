@@ -1,3 +1,9 @@
+import {
+  loadYSweetProviderProcessConfig,
+  type YSweetProviderMode,
+  type YSweetProviderProcessConfig,
+} from '../provider/ysweet-provider-process';
+
 export type ApiEnvMode = 'development' | 'production' | 'local';
 
 export interface ApiEnv {
@@ -8,7 +14,17 @@ export interface ApiEnv {
   publicWebUrl: string;
   publicApiUrl: string;
   publicRelayWebSocketUrl: string;
+  ysweetProviderMode: YSweetProviderMode;
+  ysweetServerUrl: string;
+  ysweetPublicUrlPrefix: string;
+  ysweetStorePath?: string;
+  ysweetAuth?: string;
+  ysweetServerToken?: string;
   ysweetConnectionString?: string;
+  ysweetHost: string;
+  ysweetPort: number;
+  ysweetCheckpointFreqSeconds: number;
+  ysweetSkipGc: boolean;
   allowedOrigins: string[];
   relayEphemeralTtlSeconds: number;
   relayHostLeaseSeconds: number;
@@ -215,7 +231,16 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
       fallback: `ws://127.0.0.1:${port || defaultPort}/relay`,
     },
   );
-  const ysweetConnectionString = raw(env, 'MARKLAB_YSWEET_CONNECTION_STRING');
+  let ysweetProviderConfig: YSweetProviderProcessConfig | undefined;
+  try {
+    ysweetProviderConfig = loadYSweetProviderProcessConfig(env, {
+      requireAuth: productionMode && !localProductionSmoke && raw(env, 'MARKLAB_YSWEET_PROVIDER_MODE') === 'process',
+      requireServerToken: productionMode && !localProductionSmoke,
+      requireStorePath: productionMode && !localProductionSmoke && raw(env, 'MARKLAB_YSWEET_PROVIDER_MODE') === 'process',
+    });
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : 'MARKLAB_YSWEET_PROVIDER_MODE is invalid');
+  }
   const allowedOrigins = parseAllowedOrigins(env, issues, productionMode ? [] : developmentCorsOrigins);
 
   const relayEphemeralTtlSeconds = parsePositiveInteger(
@@ -248,17 +273,34 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     requireProductionValue(env, 'MARKLAB_PUBLIC_API_URL', issues);
     requireProductionValue(env, 'MARKLAB_PUBLIC_RELAY_WS_URL', issues);
     requireProductionValue(env, 'MARKLAB_ALLOWED_ORIGINS', issues);
-    requireProductionValue(env, 'MARKLAB_YSWEET_CONNECTION_STRING', issues);
 
+    if (!localProductionSmoke && (!ysweetProviderConfig || ysweetProviderConfig.mode === 'disabled')) {
+      issues.push('MARKLAB_YSWEET_PROVIDER_MODE is required');
+    }
+    if (!localProductionSmoke && ysweetProviderConfig?.mode === 'process') {
+      requireProductionValue(env, 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX', issues);
+    }
     if (!databaseUrl) issues.push('DATABASE_URL is required');
     if (!requireAuth) issues.push('MARKLAB_REQUIRE_AUTH must be true in hosted production mode');
     if (!localProductionSmoke && publicRelayWebSocketUrl?.protocol !== 'wss:') {
       issues.push('MARKLAB_PUBLIC_RELAY_WS_URL must use wss:// in hosted production mode');
     }
+    if (!localProductionSmoke && ysweetProviderConfig && ysweetProviderConfig.mode !== 'disabled') {
+      const ysweetPublicUrl = new URL(ysweetProviderConfig.publicUrlPrefix);
+      if (ysweetPublicUrl.protocol !== 'https:') {
+        issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must use https:// in hosted production mode');
+      }
+      if (ysweetProviderConfig.mode === 'process' && ysweetPublicUrl.pathname !== '/') {
+        issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must not include a path in process mode');
+      }
+    }
     if (!localProductionSmoke) {
       assertNoLoopbackPublicUrl(publicWebUrl, 'MARKLAB_PUBLIC_WEB_URL', issues);
       assertNoLoopbackPublicUrl(publicApiUrl, 'MARKLAB_PUBLIC_API_URL', issues);
       assertNoLoopbackPublicUrl(publicRelayWebSocketUrl, 'MARKLAB_PUBLIC_RELAY_WS_URL', issues);
+      if (ysweetProviderConfig && ysweetProviderConfig.mode !== 'disabled') {
+        assertNoLoopbackPublicUrl(new URL(ysweetProviderConfig.publicUrlPrefix), 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX', issues);
+      }
     }
     assertAllowedHostCoverage(
       [publicWebUrl, publicApiUrl, publicRelayWebSocketUrl].filter((url): url is URL => Boolean(url)),
@@ -277,7 +319,17 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     publicWebUrl: formatUrl(publicWebUrl, defaultWebUrl),
     publicApiUrl: formatUrl(publicApiUrl, `http://127.0.0.1:${port}`),
     publicRelayWebSocketUrl: formatUrl(publicRelayWebSocketUrl, `ws://127.0.0.1:${port}/relay`),
-    ...(ysweetConnectionString ? { ysweetConnectionString } : {}),
+    ysweetProviderMode: ysweetProviderConfig?.mode ?? 'disabled',
+    ysweetServerUrl: ysweetProviderConfig?.serverUrl ?? 'http://127.0.0.1:8080',
+    ysweetPublicUrlPrefix: ysweetProviderConfig?.publicUrlPrefix ?? 'http://127.0.0.1:8080',
+    ...(ysweetProviderConfig?.storePath ? { ysweetStorePath: ysweetProviderConfig.storePath } : {}),
+    ...(ysweetProviderConfig?.auth ? { ysweetAuth: ysweetProviderConfig.auth } : {}),
+    ...(ysweetProviderConfig?.serverToken ? { ysweetServerToken: ysweetProviderConfig.serverToken } : {}),
+    ...(ysweetProviderConfig?.connectionString ? { ysweetConnectionString: ysweetProviderConfig.connectionString } : {}),
+    ysweetHost: ysweetProviderConfig?.host ?? '127.0.0.1',
+    ysweetPort: ysweetProviderConfig?.port ?? 8080,
+    ysweetCheckpointFreqSeconds: ysweetProviderConfig?.checkpointFrequencySeconds ?? 10,
+    ysweetSkipGc: ysweetProviderConfig?.skipGc ?? false,
     allowedOrigins,
     relayEphemeralTtlSeconds,
     relayHostLeaseSeconds,
