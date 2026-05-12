@@ -158,12 +158,9 @@ async function main() {
           ...(localRelayMirror ? { localRelayMirror } : {}),
         }
       : {}),
-    ...(localRelayService && relay
-      ? {
-          relayService: localRelayService,
-          relayServer: relay,
-        }
-      : {}),
+    ...(relayService ? { relayRouteService: relayService } : {}),
+    ...(localRelayService ? { relayService: localRelayService } : {}),
+    ...(relay ? { relayServer: relay } : {}),
     allowedOrigins: env.allowedOrigins,
     enforceAllowedOrigins: env.mode === 'production',
     ...(process.env.MARKLAB_WEB_DIST_DIR ? { staticWeb: { distDir: process.env.MARKLAB_WEB_DIST_DIR } } : {}),

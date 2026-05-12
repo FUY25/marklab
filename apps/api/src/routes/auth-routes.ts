@@ -34,6 +34,7 @@ export interface AuthRouteOptions {
 }
 
 const OIDC_STATE_COOKIE = 'marklab_oidc_state';
+const USER_SESSION_COOKIE_PATH = '/api';
 
 function authToken(): string {
   return randomBytes(32).toString('base64url');
@@ -41,7 +42,7 @@ function authToken(): string {
 
 function sessionCookie(token: string, options: AuthRouteOptions): string {
   const secure = options.cookieSecure ? '; Secure' : '';
-  return `${USER_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}`;
+  return `${USER_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=${USER_SESSION_COOKIE_PATH}; HttpOnly; SameSite=Lax${secure}`;
 }
 
 function oidcStateCookie(state: string, options: AuthRouteOptions): string {
@@ -55,6 +56,11 @@ function clearOidcStateCookie(options: AuthRouteOptions): string {
 }
 
 function clearSessionCookie(options: AuthRouteOptions): string {
+  const secure = options.cookieSecure ? '; Secure' : '';
+  return `${USER_SESSION_COOKIE}=; Path=${USER_SESSION_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+function clearLegacyRootSessionCookie(options: AuthRouteOptions): string {
   const secure = options.cookieSecure ? '; Secure' : '';
   return `${USER_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
@@ -123,7 +129,7 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
         config: options.oidcConfig,
       });
       const session = await createUserSession(pool, claims);
-      res.setHeader('set-cookie', [sessionCookie(session.token, options), clearOidcStateCookie(options)]);
+      res.setHeader('set-cookie', [sessionCookie(session.token, options), clearOidcStateCookie(options), clearLegacyRootSessionCookie(options)]);
       res.status(201).json(session);
     } catch (error) {
       next(error);
@@ -142,7 +148,7 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
         ...(body.givenName ? { givenName: body.givenName } : {}),
         ...(body.familyName ? { familyName: body.familyName } : {}),
       });
-      res.setHeader('set-cookie', sessionCookie(session.token, options));
+      res.setHeader('set-cookie', [sessionCookie(session.token, options), clearLegacyRootSessionCookie(options)]);
       res.status(201).json(session);
     } catch (error) {
       next(error);
@@ -165,7 +171,7 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
   router.post('/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
     try {
       await revokeUserSession(pool, userSessionToken(req));
-      res.setHeader('set-cookie', clearSessionCookie(options));
+      res.setHeader('set-cookie', [clearSessionCookie(options), clearLegacyRootSessionCookie(options)]);
       res.status(204).end();
     } catch (error) {
       next(error);

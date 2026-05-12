@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { RequestHandler } from 'express';
@@ -68,6 +68,15 @@ async function createWebDist() {
 }
 
 describe('http app hosted web serving', () => {
+  it('keeps local-mode relay compatibility wired to remote or in-memory relay services', async () => {
+    const indexSource = await readFile('apps/api/src/index.ts', 'utf8');
+
+    expect(indexSource).toContain('...(relayService ? { relayRouteService: relayService } : {})');
+    expect(indexSource).toContain('...(localRelayService ? { relayService: localRelayService } : {})');
+    expect(indexSource).toContain('...(relay ? { relayServer: relay } : {})');
+    expect(indexSource).not.toContain('...(localRelayService && relay');
+  });
+
   it('serves built web assets and falls hosted relay routes back to index.html', async () => {
     const distDir = await createWebDist();
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {

@@ -23,7 +23,7 @@ import {
 import type { LiveMarkdownWriter } from '../services/live-writer';
 import type { LocalFileService } from '../local/local-file-service';
 import type { LocalRelayHostController, LocalRelayMirrorController } from '../local/local-relay-client';
-import type { RelayRoomService } from '../relay/relay-room-service';
+import type { RelayRoomService, RelayRouteService } from '../relay/relay-room-service';
 import type { RelayServerHandle } from '../relay/relay-server';
 import type { ProviderTokenService } from '../provider/ysweet-token-service';
 import { authenticateRequestUser } from '../services/user-service';
@@ -40,6 +40,7 @@ export interface HttpAppOptions {
   localDaemonToken?: string;
   localMode?: boolean;
   relayService?: RelayRoomService;
+  relayRouteService?: RelayRouteService;
   relayServer?: RelayServerHandle;
   providerTokenService?: ProviderTokenService;
   providerHttpProxy?: RequestHandler;
@@ -390,6 +391,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '22P02') {
+    res.status(400).json({ error: 'invalid_request' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'branch_not_found') {
     res.status(404).json({ error: 'branch_not_found' });
     return;
@@ -659,7 +665,8 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   const authEnvironment = readAuthEnvironment(options.authEnvironment);
   const routeOptions = { ...options, authEnvironment, auth: options.auth ?? createRequestAuth(pool, authEnvironment) };
   const relayRouteOptions: Parameters<typeof createRelayRoutes>[0] = {};
-  if (options.relayService) relayRouteOptions.relayService = options.relayService;
+  const relayRouteService = options.relayRouteService ?? options.relayService;
+  if (relayRouteService) relayRouteOptions.relayService = relayRouteService;
   if (options.relayServer) relayRouteOptions.relayServer = options.relayServer;
   const localMode = options.localMode ?? Boolean(options.localFileService);
   app.use(createCorsMiddleware({
@@ -681,6 +688,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   if (localMode) {
     app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
     app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
+    // Local-file compatibility only: index.ts wires this to in-memory relay state, not the frozen DB-backed relay_* tables.
     app.use('/api', createRelayRoutes(relayRouteOptions));
   } else {
     app.use('/api', createAuthRoutes(pool, {

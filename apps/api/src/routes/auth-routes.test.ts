@@ -173,6 +173,9 @@ describe('auth routes', () => {
     });
     expect(sessions[0]?.token_hash).toBe(hashToken(login.body.token));
     expect(sessions[0]?.token_hash).not.toBe(login.body.token);
+    const sessionCookie = setCookies(login).find((cookie) => cookie.startsWith('marklab_session='));
+    expect(sessionCookie).toContain('Path=/api');
+    expect(sessionCookie).not.toContain('Path=/;');
 
     await request(app)
       .get('/api/auth/session')

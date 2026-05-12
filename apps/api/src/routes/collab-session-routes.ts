@@ -3,8 +3,9 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod';
 import { GUEST_EDIT_SESSION_IDLE_TIMEOUT_SECONDS, GUEST_EDIT_SESSION_QUOTA } from '../config/collab-session-policy';
 import { PROVIDER_TOKEN_TTL_SECONDS } from '../config/provider-token-policy';
-import type { DbPool } from '../db/client';
+import { withTransaction, type DbPool } from '../db/client';
 import type { HttpAppOptions, HttpRequestAuth } from '../http/app';
+import type { IssuedProviderToken, IssueProviderTokenInput, ProviderTokenService } from '../provider/ysweet-token-service';
 import { toRoomName } from '../collab/persistence';
 import { readBranchState } from '../services/doc-read';
 import { recordDocumentAccessSession, type AccessActorKind } from '../services/access-control';
@@ -15,6 +16,7 @@ import {
   collabSessionActorId,
   ensureProviderDocId,
   findActiveProviderTokenSession,
+  lockProviderDocSeedScope,
   markCollabSessionFailed,
   markProviderDocSeeded,
   markProviderTokenIssuanceStatus,
@@ -23,6 +25,7 @@ import {
   markProviderTokenRefreshIssued,
   providerTokenIssuanceCanIssue,
   providerTokenIssuanceDenyReason,
+  readProviderDocSeedStateForUpdate,
   recordCollabSession,
   recordProviderTokenIssuanceWithPolicy,
   recordProviderTokenRefreshAttempt,
@@ -276,6 +279,51 @@ async function readCurrentMarkdownSnapshot(pool: DbPool, options: HttpAppOptions
   }
 }
 
+async function issueProviderTokenWithSeedLock(pool: DbPool, input: {
+  providerTokenService: ProviderTokenService;
+  tokenRequest: IssueProviderTokenInput;
+  docId: string;
+  branchId: string;
+  providerDocId: string;
+  seedYjsState?: Uint8Array;
+  recheckBeforeMarkIssued?: () => Promise<void>;
+}): Promise<IssuedProviderToken> {
+  async function issueAndRecheck(tokenRequest: IssueProviderTokenInput): Promise<IssuedProviderToken> {
+    const providerToken = await input.providerTokenService.issueProviderToken(tokenRequest);
+    await input.recheckBeforeMarkIssued?.();
+    return providerToken;
+  }
+
+  if (!input.seedYjsState) return issueAndRecheck(input.tokenRequest);
+
+  return withTransaction(pool, async (client) => {
+    await lockProviderDocSeedScope(client, {
+      docId: input.docId,
+      branchId: input.branchId,
+    });
+    const seedState = await readProviderDocSeedStateForUpdate(client, {
+      docId: input.docId,
+      branchId: input.branchId,
+      providerDocId: input.providerDocId,
+    });
+    const tokenRequest: IssueProviderTokenInput = { ...input.tokenRequest };
+    if (seedState.seededAt) {
+      delete tokenRequest.seedYjsState;
+      return issueAndRecheck(tokenRequest);
+    }
+
+    tokenRequest.seedYjsState = seedState.initialYjsState;
+    const providerToken = await issueAndRecheck(tokenRequest);
+    await markProviderDocSeeded(client, {
+      docId: input.docId,
+      branchId: input.branchId,
+      providerDocId: input.providerDocId,
+      seededYjsState: seedState.initialYjsState,
+    });
+    return providerToken;
+  });
+}
+
 async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, input: {
   docId: string;
   branchId: string;
@@ -323,11 +371,18 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
         sessionId: input.sessionId,
       }));
     }
-    const providerToken = await providerTokenService.issueProviderToken({
+    const providerToken = await issueProviderTokenWithSeedLock(pool, {
+      providerTokenService,
+      docId: input.docId,
+      branchId: input.branchId,
       providerDocId: input.providerDocId,
-      sessionId: input.sessionId,
-      authorization: 'full',
-      validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
+      ...(input.seedYjsState ? { seedYjsState: input.seedYjsState } : {}),
+      ...(input.recheckBeforeMarkIssued ? { recheckBeforeMarkIssued: input.recheckBeforeMarkIssued } : {}),
+      tokenRequest: {
+        providerDocId: input.providerDocId,
+        sessionId: input.sessionId,
+        authorization: 'full',
+        validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
         sessionIdentity: {
           sessionId: input.sessionId,
           actorType: input.actor.actorType,
@@ -339,17 +394,9 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
           displayName: input.displayName,
           isGuest: input.isGuestSession,
         },
-      ...(input.seedYjsState ? { seedYjsState: input.seedYjsState } : {}),
+        ...(input.seedYjsState ? { seedYjsState: input.seedYjsState } : {}),
+      },
     });
-    await input.recheckBeforeMarkIssued?.();
-    if (input.seedYjsState) {
-      await markProviderDocSeeded(pool, {
-        docId: input.docId,
-        branchId: input.branchId,
-        providerDocId: input.providerDocId,
-        seededYjsState: input.seedYjsState,
-      });
-    }
     const markedIssued = await markProviderTokenIssuanceIssuedIfSessionActive(pool, {
       issuanceId: issuance.issuanceId,
       docId: input.docId,

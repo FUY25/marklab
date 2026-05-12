@@ -1,9 +1,12 @@
 import type {
   CreatedRelayAccessGrant,
+  RelayAccessSessionIdentity,
   RelayAccessRole,
+  RelayClientKind,
   RelayRoom,
-  RelayRoomHostService,
+  RelayRouteService,
   RelayShareState,
+  VerifiedRelayAccess,
 } from './relay-room-service';
 
 export interface RemoteRelayRoomServiceOptions {
@@ -16,6 +19,10 @@ function trimTrailingSlash(value: string): string {
 
 function encodeBase64(value: Uint8Array | null | undefined): string | null {
   return value ? Buffer.from(value).toString('base64') : null;
+}
+
+function decodeBase64(value: string | null | undefined): Uint8Array | null {
+  return value ? new Uint8Array(Buffer.from(value, 'base64')) : null;
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -31,10 +38,11 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return json as T;
 }
 
-export class RemoteRelayRoomService implements RelayRoomHostService {
+export class RemoteRelayRoomService implements RelayRouteService {
   private readonly publicApiUrl: string;
   private readonly hostTokensByRoom = new Map<string, string>();
   private readonly roomIdsByGrant = new Map<string, string>();
+  private readonly tokensByGrant = new Map<string, string>();
 
   constructor(options: RemoteRelayRoomServiceOptions) {
     this.publicApiUrl = trimTrailingSlash(options.publicApiUrl);
@@ -52,6 +60,10 @@ export class RemoteRelayRoomService implements RelayRoomHostService {
 
   rememberHostToken(relayRoomId: string, hostAuthToken: string): void {
     this.hostTokensByRoom.set(relayRoomId, hostAuthToken);
+  }
+
+  async verifyHost(relayRoomId: string, hostToken: string | undefined): Promise<void> {
+    if (!hostToken || hostToken !== this.hostToken(relayRoomId)) throw new Error('forbidden');
   }
 
   async createRoom(input: {
@@ -103,7 +115,83 @@ export class RemoteRelayRoomService implements RelayRoomHostService {
     });
     const grant = await readJsonResponse<CreatedRelayAccessGrant>(response);
     this.roomIdsByGrant.set(grant.grantId, grant.relayRoomId);
+    this.tokensByGrant.set(grant.grantId, grant.token);
     return grant;
+  }
+
+  async verifyAccess(input: {
+    relayRoomId: string;
+    token: string | undefined;
+    operation: 'read' | 'write';
+  }): Promise<VerifiedRelayAccess> {
+    if (!input.token) throw new Error('forbidden');
+    const url = new URL(this.apiUrl(`/api/relay/rooms/${encodeURIComponent(input.relayRoomId)}/access`));
+    url.searchParams.set('token', input.token);
+    const response = await fetch(url);
+    const access = await readJsonResponse<{
+      relayRoomId: string;
+      grantId: string;
+      role: RelayAccessRole;
+      canRead: boolean;
+      canWrite: boolean;
+      hostOnline: boolean;
+      hostSessionId: string | null;
+      sharedRevision: number;
+      lastSharedHash: string | null;
+      yjsStateBase64: string | null;
+      cacheUpdatedAt: string;
+      ephemeralCacheExpiresAt: string;
+      stale: boolean;
+    }>(response);
+    if (input.operation === 'write' && !access.canWrite) throw new Error('forbidden');
+    this.tokensByGrant.set(access.grantId, input.token);
+    return {
+      ...access,
+      canView: access.canRead,
+      canEdit: access.canWrite,
+      lastEphemeralYjsState: decodeBase64(access.yjsStateBase64),
+    };
+  }
+
+  async createOrUpdateSession(input: {
+    grantId: string;
+    relayRoomId: string;
+    clientId: string;
+    clientKind: RelayClientKind;
+    displayName: string;
+  }): Promise<RelayAccessSessionIdentity> {
+    const token = this.tokensByGrant.get(input.grantId);
+    if (!token) throw new Error('forbidden');
+    const response = await fetch(this.apiUrl(`/api/relay/rooms/${encodeURIComponent(input.relayRoomId)}/access-sessions`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        clientId: input.clientId,
+        clientKind: input.clientKind,
+        displayName: input.displayName,
+      }),
+    });
+    const session = await readJsonResponse<{
+      grantId: string | null;
+      sessionId: string;
+      displayName: string;
+      color: string;
+      role: RelayAccessRole | 'host';
+    }>(response);
+    const now = new Date().toISOString();
+    return {
+      grantId: session.grantId,
+      relayRoomId: input.relayRoomId,
+      sessionId: session.sessionId,
+      clientId: input.clientId,
+      clientKind: input.clientKind,
+      displayName: session.displayName,
+      color: session.color,
+      role: session.role,
+      createdAt: now,
+      lastSeenAt: now,
+    };
   }
 
   async listShareState(relayRoomId: string, localPath: string | null = null): Promise<RelayShareState> {
@@ -137,6 +225,21 @@ export class RemoteRelayRoomService implements RelayRoomHostService {
     });
     await readJsonResponse(response);
     return null;
+  }
+
+  async getRoom(relayRoomId: string): Promise<RelayRoom> {
+    const shareState = await this.listShareState(relayRoomId);
+    const now = new Date().toISOString();
+    return {
+      relayRoomId,
+      hostSessionId: shareState.hostSessionId,
+      state: shareState.hostOnline ? 'host_online' : 'host_offline',
+      lastEphemeralYjsState: null,
+      lastSharedHash: shareState.lastSharedHash,
+      sharedRevision: shareState.sharedRevision ?? 0,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 }
 

@@ -1,11 +1,11 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { RelayServerHandle } from '../relay/relay-server';
-import type { RelayRoomService, RelayAccessRole, RelayClientKind } from '../relay/relay-room-service';
+import type { RelayAccessRole, RelayClientKind, RelayRouteService } from '../relay/relay-room-service';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 
 export interface RelayRoutesOptions {
-  relayService?: RelayRoomService;
+  relayService?: RelayRouteService;
   relayServer?: RelayServerHandle;
 }
 
@@ -59,7 +59,7 @@ function hasRelayManagement(req: Request): boolean {
 
 async function requireRelayManagementOrRoomHost(
   req: Request,
-  service: RelayRoomService,
+  service: RelayRouteService,
   relayRoomId: string,
 ): Promise<void> {
   if (hasRelayManagement(req)) return;
@@ -89,7 +89,7 @@ function suggestedFilenameFromMarkdown(markdown: string, fallback: string): stri
   return `${safeBase || 'shared-notes'}.md`;
 }
 
-function requireRelayService(service: RelayRoomService | undefined): RelayRoomService {
+function requireRelayService(service: RelayRouteService | undefined): RelayRouteService {
   if (!service) throw new Error('relay_service_not_configured');
   return service;
 }

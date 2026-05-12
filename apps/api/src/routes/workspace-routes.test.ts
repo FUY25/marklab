@@ -87,6 +87,12 @@ function createWorkspacePool() {
       return { rows: [], rowCount: 1 };
     }
 
+    if (params?.includes('not-a-uuid')) {
+      const error = new Error('invalid input syntax for type uuid') as Error & { code: string };
+      error.code = '22P02';
+      throw error;
+    }
+
     if (sql.includes('update user_sessions') && sql.includes('from users')) {
       const userId = sessions.get(String(params?.[0]));
       const user = users.find((candidate) => candidate.id === userId);
@@ -320,6 +326,16 @@ describe('workspace routes', () => {
       .expect(204);
     expect(members.some((member) => member.user_id === 'user_reader')).toBe(false);
     expect(advisoryLocks).toContain('workspace_members:ws_existing');
+  });
+
+  it('returns a bad request instead of internal_error for invalid workspace ids', async () => {
+    const { pool } = createWorkspacePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/workspaces/not-a-uuid/members')
+      .set({ Authorization: 'Bearer owner-token' })
+      .expect(400, { error: 'invalid_request' });
   });
 
   it('rejects owner workspace share keys because bearer invites cannot elevate ownership', async () => {

@@ -95,6 +95,49 @@ export async function markProviderDocSeeded(pool: DbExecutor, input: {
   if ((updated.rowCount ?? 0) === 0) throw new Error('provider_doc_seed_stale');
 }
 
+export async function lockProviderDocSeedScope(pool: DbExecutor, input: {
+  docId: string;
+  branchId: string;
+}): Promise<void> {
+  await pool.query(
+    `select pg_advisory_xact_lock(hashtext($1)::bigint)`,
+    [`provider_doc_seed:${input.docId}:${input.branchId}`],
+  );
+}
+
+export interface ProviderDocSeedState {
+  seededAt: Date | string | null;
+  initialYjsState: Uint8Array;
+}
+
+export async function readProviderDocSeedStateForUpdate(pool: DbExecutor, input: {
+  docId: string;
+  branchId: string;
+  providerDocId: string;
+}): Promise<ProviderDocSeedState> {
+  const locked = await pool.query<{
+    provider_doc_seeded_at: Date | string | null;
+    yjs_state: Buffer | Uint8Array;
+  }>(
+    `select s.provider_doc_seeded_at, s.yjs_state
+       from document_branch_states s
+       join document_branches b
+         on b.id = s.branch_id
+        and b.doc_id = $2
+        and b.is_archived = false
+      where s.branch_id = $1
+        and s.provider_doc_id = $3
+      for update of s`,
+    [input.branchId, input.docId, input.providerDocId],
+  );
+  const row = locked.rows[0];
+  if (!row) throw new Error('provider_doc_seed_stale');
+  return {
+    seededAt: row.provider_doc_seeded_at,
+    initialYjsState: new Uint8Array(row.yjs_state),
+  };
+}
+
 export type ProviderTokenClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
 
 export interface ActiveProviderTokenSession {

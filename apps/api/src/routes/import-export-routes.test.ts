@@ -54,6 +54,12 @@ function createDocWritePool(input: { workspaceRole?: WorkspaceRole } = {}) {
   ): Promise<DbQueryResult<Row>> => {
     queries.push(params === undefined ? { sql } : { sql, params });
 
+    if (params?.includes('not-a-uuid')) {
+      const error = new Error('invalid input syntax for type uuid') as Error & { code: string };
+      error.code = '22P02';
+      throw error;
+    }
+
     if (sql.includes('update user_sessions') && sql.includes('from users')) {
       const userId = sessions.get(String(params?.[0]));
       const user = users.find((candidate) => candidate.id === userId);
@@ -230,6 +236,17 @@ describe('import/export routes with real Milkdown transformer', () => {
       .expect(403, { error: 'forbidden' });
 
     expect(documents).toEqual([]);
+  });
+
+  it('returns a bad request instead of internal_error for invalid workspace ids', async () => {
+    const { pool } = createDocWritePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .post('/api/docs')
+      .set({ Authorization: 'Bearer member-token' })
+      .send({ title: 'Invalid workspace', workspaceId: 'not-a-uuid' })
+      .expect(400, { error: 'invalid_request' });
   });
 
   it('imports markdown with decodable non-empty Yjs branch state', async () => {

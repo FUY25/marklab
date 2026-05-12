@@ -1,10 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import {
+  buildYSweetProviderProxyHeaders,
+  buildYSweetProviderResponseHeaders,
   buildYSweetProviderWebSocketTarget,
   isYSweetProviderHttpPath,
   isYSweetProviderWebSocketOriginAllowed,
   isYSweetProviderWebSocketPath,
 } from './ysweet-provider-websocket-proxy';
+
+const originalAdminHash = process.env.MARKLAB_ADMIN_TOKEN_HASH;
+const originalRelayManagementToken = process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN;
+const originalLocalToken = process.env.MARKLAB_LOCAL_TOKEN;
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
+afterEach(() => {
+  restoreEnv('MARKLAB_ADMIN_TOKEN_HASH', originalAdminHash);
+  restoreEnv('MARKLAB_RELAY_MANAGEMENT_TOKEN', originalRelayManagementToken);
+  restoreEnv('MARKLAB_LOCAL_TOKEN', originalLocalToken);
+});
 
 describe('ysweet provider websocket proxy helpers', () => {
   it('recognizes only upstream Y-Sweet websocket document paths', () => {
@@ -27,6 +48,86 @@ describe('ysweet provider websocket proxy helpers', () => {
       .toBe('http://127.0.0.1:8080/base/d/doc_1/as-update?z=cache');
     expect(buildYSweetProviderWebSocketTarget('https://provider.example.com/ysweet/', '/d/doc_1/ws/doc_1?token=secret').toString())
       .toBe('https://provider.example.com/ysweet/d/doc_1/ws/doc_1?token=secret');
+  });
+
+  it('does not forward MarkLab control-plane cookies to the provider', () => {
+    expect(buildYSweetProviderProxyHeaders({
+      host: 'marklab.example.test',
+      cookie: 'marklab_session=ml_user_secret; other=value',
+      accept: 'application/json',
+    }, '127.0.0.1:8080')).toEqual({
+      host: '127.0.0.1:8080',
+      accept: 'application/json',
+    });
+  });
+
+  it('does not forward control-plane authorization headers to the provider', () => {
+    for (const authorization of [
+      'Bearer ml_user_secret',
+      'Bearer ml_share_secret',
+      'Bearer ml_access_secret',
+      'Bearer ml_agent_secret',
+      'Bearer admin-secret',
+      'Bearer legacy-user-token',
+    ]) {
+      expect(buildYSweetProviderProxyHeaders({
+        host: 'marklab.example.test',
+        authorization,
+      }, '127.0.0.1:8080')).toEqual({
+        host: '127.0.0.1:8080',
+      });
+    }
+  });
+
+  it('preserves provider-native HTTP bearer tokens when explicitly allowed', () => {
+    expect(buildYSweetProviderProxyHeaders({
+      host: 'marklab.example.test',
+      authorization: 'Bearer ysweet-client-token',
+    }, '127.0.0.1:8080', { preserveProviderAuthorization: true })).toEqual({
+      host: '127.0.0.1:8080',
+      authorization: 'Bearer ysweet-client-token',
+    });
+  });
+
+  it('does not preserve known MarkLab bearer tokens on provider HTTP requests', () => {
+    process.env.MARKLAB_ADMIN_TOKEN_HASH = sha256Hex('admin-secret');
+    process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN = 'relay-management-secret';
+    process.env.MARKLAB_LOCAL_TOKEN = 'local-daemon-secret';
+
+    for (const authorization of [
+      'Bearer ml_user_secret',
+      'Bearer ml_share_secret',
+      'Bearer ml_access_secret',
+      'Bearer ml_agent_secret',
+      'Bearer ml_workspace_secret',
+      'Bearer ml_relay_secret',
+      'Bearer ml_relay_host_secret',
+      'Bearer admin-secret',
+      'Bearer relay-management-secret',
+      'Bearer local-daemon-secret',
+    ]) {
+      expect(buildYSweetProviderProxyHeaders({
+        host: 'marklab.example.test',
+        authorization,
+      }, '127.0.0.1:8080', { preserveProviderAuthorization: true })).toEqual({
+        host: '127.0.0.1:8080',
+      });
+    }
+  });
+
+  it('does not forward provider Set-Cookie response headers back to browsers', () => {
+    expect(buildYSweetProviderResponseHeaders({
+      'set-cookie': ['marklab_session=evil; Path=/', 'provider_cookie=value'],
+      upgrade: 'websocket',
+    })).toEqual({
+      upgrade: 'websocket',
+    });
+    expect(buildYSweetProviderResponseHeaders({
+      'Set-Cookie': 'marklab_oidc_state=evil; Path=/api/auth/oidc',
+      'content-type': 'application/octet-stream',
+    })).toEqual({
+      'content-type': 'application/octet-stream',
+    });
   });
 
   it('recognizes only token-scoped Y-Sweet document HTTP paths', () => {

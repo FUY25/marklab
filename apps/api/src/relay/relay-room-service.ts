@@ -101,6 +101,23 @@ export interface RelayRoomHostService {
   markHostOffline(relayRoomId: string, hostSessionId?: string | null): Promise<RelayRoom | null>;
 }
 
+export interface RelayRouteService extends RelayRoomHostService {
+  verifyHost(relayRoomId: string, hostToken: string | undefined): Promise<void>;
+  verifyAccess(input: {
+    relayRoomId: string;
+    token: string | undefined;
+    operation: 'read' | 'write';
+  }): Promise<VerifiedRelayAccess>;
+  createOrUpdateSession(input: {
+    grantId: string;
+    relayRoomId: string;
+    clientId: string;
+    clientKind: RelayClientKind;
+    displayName: string;
+  }): Promise<RelayAccessSessionIdentity>;
+  revokeAccessGrant(grantId: string): Promise<{ grantId: string; relayRoomId: string }>;
+}
+
 export interface VerifiedRelayAccess {
   grantId: string;
   relayRoomId: string;

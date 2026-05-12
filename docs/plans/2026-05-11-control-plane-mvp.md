@@ -74,7 +74,7 @@ Decisions for this plan (codify before writing migrations):
 - **Extend, do not parallel-create.** Rename `access_grants` to `document_access_grants` via a SQL `alter table … rename` (preserves rows, FK, and indexes) and add `workspace_id`, `folder_id`, and `created_by_user_id` columns. Do not create a second `document_access_grants` table.
 - **Rename `access_sessions` to `document_access_sessions`** for naming consistency with `document_access_grants`. Add `actor_kind` (`user`, `guest`, `agent`, `daemon`) and `actor_id` (nullable for guests/agents).
 - **Deprecate `share_links`**: keep the table read-only; mark it `-- legacy, do not write` in schema.sql; the API stops writing to it in Task 5. Drop in a future cleanup migration.
-- **Freeze `relay_*` tables**: leave the SQL definitions but stop writing to them after this plan. Add a `-- legacy: host-gated alpha, do not write` comment. Drop after Plan 8 confirms no production reader is left.
+- **Freeze DB-backed hosted `relay_*` tables**: leave the SQL definitions but stop writing to them from the hosted/public control-plane app after this plan. Add a `-- legacy: host-gated alpha, do not write` comment. Drop after Plan 8 confirms no production reader is left. The local-file compatibility relay API may remain mounted in `localMode` only when backed by the in-memory/remote local relay services wired in `apps/api/src/index.ts`; it must not be wired to the DB-backed `relay_*` persistence path.
 - **Add `provider_token_issuances` FK** for `session_id` to `collab_sessions(id)` unless this task explicitly replaces the Plan 1B edit-session table. If replacing it, migrate the token issuance routes/services, refresh logic, and `/healthz` schema readiness contract in the same task before adding the FK.
 
 Subtasks:
@@ -88,7 +88,7 @@ Inventory result during execution:
 
 - `access_grants` and `access_sessions` existed and were renamed to `document_access_grants` and `document_access_sessions`.
 - `share_links` remains as a legacy read-only table. Existing rows are copied into `document_access_grants` during schema setup, production access/token paths no longer query `share_links` directly, and no production `insert into share_links` / `update share_links` remains.
-- `relay_rooms`, `relay_access_grants`, and `relay_access_sessions` remain in schema for host-gated alpha compatibility and are marked legacy read-only.
+- `relay_rooms`, `relay_access_grants`, and `relay_access_sessions` remain in schema for host-gated alpha compatibility and are marked legacy read-only. Hosted/public control-plane routing no longer writes them; local-file relay compatibility remains local-mode-only and is wired to in-memory or remote relay services by `apps/api/src/index.ts`, not to the DB-backed `relay_*` persistence path.
 
 ### Task 2: Data Model
 

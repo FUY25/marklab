@@ -43,6 +43,7 @@ function createPool(input: {
   missingBranchState?: boolean;
   initialProviderDocId?: string | null;
   initialProviderDocSeededAt?: string | null;
+  providerDocSeededBeforeTokenIssue?: boolean;
   failSeedMarkOnce?: boolean;
 	  documentAccessGrantTokenHash?: string;
 	  documentAccessGrantRole?: 'view' | 'edit';
@@ -57,6 +58,8 @@ function createPool(input: {
 	  collabSessionTouches: readonly (readonly unknown[])[];
   collabSessionFailures: readonly (readonly unknown[])[];
 	  providerDocSeedMarks: readonly (readonly unknown[])[];
+	  providerDocSeedReads: readonly (readonly unknown[])[];
+	  providerDocSeedLocks: readonly (readonly unknown[])[];
 	  issuances: readonly (readonly unknown[])[];
 	  statusUpdates: readonly (readonly unknown[])[];
 	  refreshAttempts: readonly (readonly unknown[])[];
@@ -74,6 +77,8 @@ function createPool(input: {
 	  const collabSessionTouches: (readonly unknown[])[] = [];
   const collabSessionFailures: (readonly unknown[])[] = [];
 	  const providerDocSeedMarks: (readonly unknown[])[] = [];
+	  const providerDocSeedReads: (readonly unknown[])[] = [];
+	  const providerDocSeedLocks: (readonly unknown[])[] = [];
 	  const issuances: (readonly unknown[])[] = [];
 	  const statusUpdates: (readonly unknown[])[] = [];
 	  const refreshAttempts: (readonly unknown[])[] = [];
@@ -131,7 +136,10 @@ function createPool(input: {
 	      return { rows: [], rowCount: 1 };
 	    }
     if (/^(begin|commit|rollback)$/iu.test(sql.trim())) return { rows: [], rowCount: 0 };
-    if (/pg_advisory_xact_lock/u.test(sql)) return { rows: [{} as Row], rowCount: 1 };
+    if (/pg_advisory_xact_lock/u.test(sql)) {
+      providerDocSeedLocks.push(params ?? []);
+      return { rows: [{} as Row], rowCount: 1 };
+    }
     if (/update user_sessions/u.test(sql) && /from users/u.test(sql)) {
       if (params?.[0] === hashToken('reader-token')) {
         return {
@@ -248,6 +256,19 @@ function createPool(input: {
         rowCount: sessionId === activeSessionId ? 1 : 0,
       };
     }
+    if (/select .*provider_doc_id/us.test(sql) && /for update of s/u.test(sql)) {
+      providerDocSeedReads.push(params ?? []);
+      return {
+        rows: [{
+          provider_doc_id: providerDocId,
+          provider_doc_seeded_at: input.providerDocSeededBeforeTokenIssue
+            ? '2026-05-11T00:00:00.000Z'
+            : providerDocSeededAt,
+          yjs_state: Buffer.from([1, 2, 3]),
+        } as Row],
+        rowCount: 1,
+      };
+    }
     if (/select .*provider_doc_id/us.test(sql)) {
       return {
         rows: [{
@@ -281,6 +302,8 @@ function createPool(input: {
 	    collabSessionTouches,
     collabSessionFailures,
 	    providerDocSeedMarks,
+	    providerDocSeedReads,
+	    providerDocSeedLocks,
 	    issuances,
 	    statusUpdates,
 	    refreshAttempts,
@@ -739,6 +762,29 @@ describe('collab session routes', () => {
       expect.objectContaining({ seedYjsState: new Uint8Array([1, 2, 3]) }),
     ]);
     expect(pool.providerDocSeedMarks).toHaveLength(1);
+  });
+
+  it('skips provider document seeding when another first edit session wins the seed lock', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      initialProviderDocSeededAt: null,
+      providerDocSeededBeforeTokenIssue: true,
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Alice' })
+      .expect(201);
+
+    expect(pool.providerDocSeedLocks).toContainEqual(['provider_doc_seed:doc_1:branch_1']);
+    expect(pool.providerDocSeedReads).toEqual([['branch_1', 'doc_1', 'ml_doc_existing']]);
+    expect(providerTokenService.issued).toHaveLength(1);
+    expect(providerTokenService.issued[0]).toEqual(expect.not.objectContaining({
+      seedYjsState: expect.anything(),
+    }));
+    expect(pool.providerDocSeedMarks).toEqual([]);
   });
 
   it('denies guest edit token minting when the branch guest quota is exhausted', async () => {
