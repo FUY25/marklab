@@ -41,9 +41,43 @@ alter table document_branch_states
 alter table document_branch_states
   add column if not exists provider_doc_id text;
 
+alter table document_branch_states
+  add column if not exists provider_doc_seeded_at timestamptz;
+
+alter table documents
+  add column if not exists workspace_id uuid;
+
 create unique index if not exists document_branch_states_provider_doc_id_idx
   on document_branch_states (provider_doc_id)
   where provider_doc_id is not null;
+
+create table if not exists collab_sessions (
+  id text primary key,
+  doc_id uuid not null references documents(id) on delete cascade,
+  branch_id uuid not null references document_branches(id) on delete cascade,
+  mode text not null check (mode in ('view', 'edit')),
+  client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
+  actor_type text not null check (actor_type in ('user', 'agent')),
+  actor_id text,
+  actor_grant_id text,
+  refresh_token_hash text,
+  is_guest boolean not null default false,
+  role text check (role in ('view', 'edit')),
+  display_name text not null,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now()
+);
+
+alter table collab_sessions
+  add column if not exists refresh_token_hash text,
+  add column if not exists is_guest boolean not null default false;
+
+create index if not exists collab_sessions_doc_seen_idx
+  on collab_sessions (doc_id, branch_id, last_seen_at desc);
+
+create index if not exists collab_sessions_refresh_token_hash_idx
+  on collab_sessions (refresh_token_hash)
+  where refresh_token_hash is not null;
 
 create table if not exists provider_token_issuances (
   id uuid primary key default gen_random_uuid(),
@@ -52,10 +86,61 @@ create table if not exists provider_token_issuances (
   provider_doc_id text not null,
   session_id text not null,
   client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
+  actor_type text not null default 'user' check (actor_type in ('user', 'agent')),
+  actor_id text,
+  actor_grant_id text,
   authorization text not null check (authorization in ('full', 'read-only')),
   valid_for_seconds integer not null,
+  status text not null default 'issued' check (status in ('pending', 'issued', 'failed', 'revoked')),
+  provider_error text,
   issued_at timestamptz not null default now()
 );
+
+alter table provider_token_issuances
+  add column if not exists actor_type text not null default 'user',
+  add column if not exists actor_id text,
+  add column if not exists actor_grant_id text,
+  add column if not exists status text not null default 'issued',
+  add column if not exists provider_error text;
+
+alter table provider_token_issuances
+  alter column actor_grant_id type text using actor_grant_id::text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'provider_token_issuances_client_kind_check'
+  ) then
+    alter table provider_token_issuances
+      add constraint provider_token_issuances_client_kind_check
+      check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'provider_token_issuances_actor_type_check'
+  ) then
+    alter table provider_token_issuances
+      add constraint provider_token_issuances_actor_type_check
+      check (actor_type in ('user', 'agent'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'provider_token_issuances_authorization_check'
+  ) then
+    alter table provider_token_issuances
+      add constraint provider_token_issuances_authorization_check
+      check (authorization in ('full', 'read-only'));
+  end if;
+
+end
+$$;
+
+alter table provider_token_issuances
+  drop constraint if exists provider_token_issuances_status_check;
+
+alter table provider_token_issuances
+  add constraint provider_token_issuances_status_check
+  check (status in ('pending', 'issued', 'failed', 'revoked'));
 
 create index if not exists provider_token_issuances_branch_issued_idx
   on provider_token_issuances (branch_id, issued_at desc);

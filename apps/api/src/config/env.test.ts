@@ -10,6 +10,7 @@ const productionBaseEnv = {
   MARKLAB_PUBLIC_WEB_URL: 'https://marklab.fly.dev',
   MARKLAB_PUBLIC_API_URL: 'https://marklab.fly.dev',
   MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://marklab.fly.dev/relay',
+  MARKLAB_YSWEET_CONNECTION_STRING: 'ysweet://test-production-provider',
   MARKLAB_ALLOWED_ORIGINS: 'https://marklab.fly.dev',
   MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: '86400',
   MARKLAB_RELAY_HOST_LEASE_SECONDS: '30',
@@ -28,6 +29,7 @@ describe('loadApiEnv', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: undefined }, 'MARKLAB_PUBLIC_WEB_URL');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_API_URL: undefined }, 'MARKLAB_PUBLIC_API_URL');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_RELAY_WS_URL: undefined }, 'MARKLAB_PUBLIC_RELAY_WS_URL');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_CONNECTION_STRING: undefined }, 'MARKLAB_YSWEET_CONNECTION_STRING');
   });
 
   it('requires auth in hosted production mode', () => {
@@ -120,6 +122,7 @@ describe('loadApiEnv', () => {
       publicWebUrl: 'https://marklab.fly.dev',
       publicApiUrl: 'https://marklab.fly.dev',
       publicRelayWebSocketUrl: 'wss://marklab.fly.dev/relay',
+      ysweetConnectionString: 'ysweet://test-production-provider',
       relayEphemeralTtlSeconds: 86400,
       relayHostLeaseSeconds: 30,
       relayMaxRoomConnections: 32,

@@ -1,7 +1,6 @@
 import { Hocuspocus } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
-import { isAdminToken, verifyDocumentAccess } from '../services/access-control';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import { createEmptyYjsState, loadYjsStateWithMetadata, parseRoomName, storeYjsState } from './persistence';
 
@@ -28,7 +27,15 @@ export interface CollabRoomStore {
     roomName: string,
     yjsState: Uint8Array,
     expectedStateFingerprint: string | null,
-  ): Promise<{ stored: boolean; stateFingerprint?: string }>;
+  ): Promise<{
+    stored: boolean;
+    stateFingerprint?: string;
+    yjsState?: Uint8Array;
+    prepare?: () => Promise<void>;
+    markApplied?: () => Promise<void>;
+    commit?: () => Promise<boolean | void>;
+    abort?: () => Promise<void>;
+  }>;
 }
 
 export interface CreateCollabServerOptions {
@@ -41,8 +48,10 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
   const requireAuth = process.env.MARKLAB_REQUIRE_AUTH === 'true';
   const loadedStateByDocument = new WeakMap<Y.Doc, LoadedDocumentState>();
   const activeDocumentByRoomName = new Map<string, Y.Doc>();
+  const applyingLocalStoreUpdate = new WeakSet<Y.Doc>();
   const localStore = options.localStore;
   const localOnly = options.localOnly ?? Boolean(localStore);
+  const localStoreUpdateOrigin = Symbol('marklab.local-store-update');
 
   function localStoreForRoom(documentName: string): CollabRoomStore | null {
     return localStore?.canHandleRoom(documentName) ? localStore : null;
@@ -91,14 +100,66 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
     options: StoreDocumentStateOptions = {},
   ): Promise<void> {
     const update = Y.encodeStateAsUpdate(document);
+    const updateFingerprint = encodeYjsStateFingerprint(update);
     const loaded = loadedStateByDocument.get(document);
     const local = localStoreForRoom(documentName);
     if (local) {
+      if (applyingLocalStoreUpdate.has(document)) return;
+      const providerDocumentChanged = () => encodeYjsStateFingerprint(Y.encodeStateAsUpdate(document)) !== updateFingerprint;
       const stored = await local.storeRoomState(documentName, update, loaded?.stateFingerprint ?? null);
-      if (stored.stored && stored.stateFingerprint !== undefined) {
+      if (!stored.stored) {
+        handleStoreFailure(document, loaded ?? null, options);
+        return;
+      }
+
+      if (stored.stateFingerprint !== undefined) {
+        const storedUpdate = stored.yjsState ?? update;
+        if (providerDocumentChanged()) {
+          await stored.abort?.();
+          handleStoreFailure(document, loaded ?? null, options);
+          return;
+        }
+        if (stored.yjsState) {
+          const validationDocument = new Y.Doc();
+          try {
+            Y.applyUpdate(validationDocument, stored.yjsState);
+          } finally {
+            validationDocument.destroy();
+          }
+        }
+        await stored.prepare?.();
+        if (providerDocumentChanged()) {
+          await stored.abort?.();
+          handleStoreFailure(document, loaded ?? null, options);
+          return;
+        }
+        if (stored.yjsState) {
+          applyingLocalStoreUpdate.add(document);
+          try {
+            Y.applyUpdate(document, stored.yjsState, localStoreUpdateOrigin);
+          } catch (error) {
+            await stored.abort?.();
+            throw error;
+          } finally {
+            applyingLocalStoreUpdate.delete(document);
+          }
+        }
+        const postApplyUpdate = Y.encodeStateAsUpdate(document);
+        const postApplyFingerprint = encodeYjsStateFingerprint(postApplyUpdate);
+        await stored.markApplied?.();
+        if (encodeYjsStateFingerprint(Y.encodeStateAsUpdate(document)) !== postApplyFingerprint) {
+          await stored.abort?.();
+          handleStoreFailure(document, loaded ?? null, options);
+          return;
+        }
+        const committed = await stored.commit?.();
+        if (committed === false) {
+          handleStoreFailure(document, loaded ?? null, options);
+          return;
+        }
         loadedStateByDocument.set(document, {
           stateFingerprint: stored.stateFingerprint,
-          yjsState: update,
+          yjsState: stored.yjsState ? postApplyUpdate : storedUpdate,
         });
         return;
       }
@@ -143,13 +204,8 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
       }
       assertLocalRoomAllowed(documentName);
       if (!requireAuth) return;
-      try {
-        if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return;
-        const { docId, branchId } = parseRoomName(documentName);
-        await verifyDocumentAccess(pool, token, docId, branchId, 'write');
-      } catch {
-        throw new Error('forbidden');
-      }
+      parseRoomName(documentName);
+      throw new Error('forbidden');
     },
     async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
       const local = localStoreForRoom(documentName);

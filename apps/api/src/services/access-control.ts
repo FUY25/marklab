@@ -9,6 +9,7 @@ export type AccessClientKind = 'browser' | 'agent' | 'api';
 
 export interface VerifiedDocumentAccess {
   actorType: 'agent' | 'user';
+  actorId?: string;
   grantId?: string;
   role?: AccessGrantRole;
 }
@@ -21,6 +22,7 @@ interface AgentTokenRow {
 }
 
 interface ShareLinkRow {
+  id: string;
   role: 'view' | 'edit';
   expires_at: Date | string | null;
   revoked_at: Date | string | null;
@@ -149,19 +151,27 @@ export async function verifyDocumentAccess(
   const tokenHash = hashToken(token);
   const [agentResult, shareResult, accessGrantResult] = await Promise.all([
     pool.query<AgentTokenRow>(
-      `select can_read, can_write, expires_at, revoked_at
-         from agent_tokens
-        where token_hash = $1
-          and doc_id = $2
-          and (branch_id = $3 or branch_id is null)`,
+      `select t.can_read, t.can_write, t.expires_at, t.revoked_at
+         from agent_tokens t
+         join document_branches b
+           on b.id = $3
+          and b.doc_id = t.doc_id
+          and b.is_archived = false
+        where t.token_hash = $1
+          and t.doc_id = $2
+          and (t.branch_id = $3 or t.branch_id is null)`,
       [tokenHash, docId, branchId],
     ),
     pool.query<ShareLinkRow>(
-      `select role, expires_at, revoked_at
-         from share_links
-         where token_hash = $1
-           and doc_id = $2
-           and (branch_id = $3 or branch_id is null)`,
+      `select s.id, s.role, s.expires_at, s.revoked_at
+         from share_links s
+         join document_branches b
+           on b.id = $3
+          and b.doc_id = s.doc_id
+          and b.is_archived = false
+        where s.token_hash = $1
+          and s.doc_id = $2
+          and (s.branch_id = $3 or s.branch_id is null)`,
       [tokenHash, docId, branchId],
     ),
     pool.query<AccessGrantRow>(
@@ -180,20 +190,24 @@ export async function verifyDocumentAccess(
 
   for (const row of accessGrantResult.rows) {
     if (!isUsable(row)) continue;
-    if (operation === 'read') return { actorType: 'user', grantId: row.id, role: row.role };
-    if (operation === 'write' && row.role === 'edit') return { actorType: 'user', grantId: row.id, role: row.role };
+    if (operation === 'read') return { actorType: 'user', actorId: `access:${tokenHash}`, grantId: row.id, role: row.role };
+    if (operation === 'write' && row.role === 'edit') {
+      return { actorType: 'user', actorId: `access:${tokenHash}`, grantId: row.id, role: row.role };
+    }
   }
 
   for (const row of agentResult.rows) {
     if (!isUsable(row)) continue;
-    if (operation === 'read' && row.can_read) return { actorType: 'agent' };
-    if (operation === 'write' && row.can_write) return { actorType: 'agent' };
+    if (operation === 'read' && row.can_read) return { actorType: 'agent', actorId: `agent:${tokenHash}` };
+    if (operation === 'write' && row.can_write) return { actorType: 'agent', actorId: `agent:${tokenHash}` };
   }
 
   for (const row of shareResult.rows) {
     if (!isUsable(row)) continue;
-    if (operation === 'read') return { actorType: 'user' };
-    if (operation === 'write' && row.role === 'edit') return { actorType: 'user' };
+    if (operation === 'read') return { actorType: 'user', actorId: `share:${tokenHash}`, grantId: row.id, role: row.role };
+    if (operation === 'write' && row.role === 'edit') {
+      return { actorType: 'user', actorId: `share:${tokenHash}`, grantId: row.id, role: row.role };
+    }
   }
 
   throw new Error('forbidden');

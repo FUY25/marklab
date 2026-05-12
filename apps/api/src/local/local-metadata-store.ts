@@ -25,6 +25,15 @@ export interface StoredLocalDocument {
   lastProjectedMarkdown?: string;
   lastProjectedHash?: string;
   lastProviderStateFingerprint?: string;
+  pendingProviderApply?: {
+    markdown: string;
+    yjsStateBase64: string;
+    stateFingerprint: string;
+    previousYjsStateBase64?: string;
+    previousStateFingerprint?: string;
+    createdAt: string;
+    providerAppliedAt?: string;
+  };
   updatedAt: string;
 }
 

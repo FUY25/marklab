@@ -8,6 +8,7 @@ import { createPool, type DbPool } from './db/client';
 import { createHttpApp } from './http/app';
 import { createLocalFileServiceWithOptions } from './local/local-file-service';
 import { createLocalRelayHostController, createLocalRelayMirrorController } from './local/local-relay-client';
+import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
 import { createRemoteRelayRoomService } from './relay/relay-remote-service';
 import { createInMemoryRelayRoomService, createRelayRoomService } from './relay/relay-room-service';
 import { createRelayServer } from './relay/relay-server';
@@ -51,6 +52,14 @@ async function main() {
     : undefined;
   const useDatabase = !localFileService || process.env.MARKLAB_LOCAL_USE_DATABASE === 'true';
   const pool = useDatabase ? createPool(env.databaseUrl) : createLocalOnlyPool();
+  const providerTokenService =
+    !localFileService && (env.mode === 'production' || env.ysweetConnectionString)
+      ? createYSweetTokenService(env.ysweetConnectionString ? { connectionString: env.ysweetConnectionString } : {})
+      : undefined;
+  const collabSnapshotService =
+    providerTokenService && env.ysweetConnectionString
+      ? createYSweetSnapshotService({ pool, connectionString: env.ysweetConnectionString })
+      : undefined;
   const localHostedRelay = Boolean(localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
   const hostedRelayService = localHostedRelay ? createRemoteRelayRoomService({ publicApiUrl: env.publicApiUrl }) : undefined;
   const localRelayService =
@@ -108,6 +117,8 @@ async function main() {
     flushCollabDocument: collab.flushDocument,
     applyCollabDocumentState: collab.applyDocumentState,
     closeCollabDocumentConnections: collab.closeDocumentConnections,
+    ...(providerTokenService ? { providerTokenService } : {}),
+    ...(collabSnapshotService ? { collabSnapshotService } : {}),
     ...(localFileService
       ? {
           localFileService,

@@ -29,6 +29,7 @@ export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
   applyCollabDocumentState?: (roomName: string, yjsState: Uint8Array) => Promise<void>;
   closeCollabDocumentConnections?: (roomName: string) => void;
+  collabSnapshotService?: CollabSnapshotService;
   auth?: HttpRequestAuth;
   localFileService?: LocalFileService;
   localDaemonToken?: string;
@@ -54,6 +55,19 @@ export interface HttpHealthOptions {
 
 export interface StaticWebOptions {
   distDir: string;
+}
+
+export interface CollabMarkdownSnapshot {
+  docId: string;
+  branchId: string;
+  versionId: string | null;
+  versionNumber: number | null;
+  hash: string;
+  markdown: string;
+}
+
+export interface CollabSnapshotService {
+  readCurrentMarkdownSnapshot(input: { docId: string; branchId: string }): Promise<CollabMarkdownSnapshot | null>;
 }
 
 export interface HttpRequestAuth {
@@ -215,9 +229,9 @@ function createRequestAuth(pool: DbPool): HttpRequestAuth {
       verifyAdminToken(bearerToken(req), process.env.MARKLAB_ADMIN_TOKEN_HASH);
     },
     async requireDocumentAccess(req: Request, docId: string, branchId: string, operation: AccessOperation) {
-      if (!authRequired()) return { actorType: 'user' };
+      if (!authRequired()) return { actorType: 'user', actorId: 'dev-anonymous' };
       const token = documentToken(req);
-      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return { actorType: 'user' };
+      if (isAdminToken(token, process.env.MARKLAB_ADMIN_TOKEN_HASH)) return { actorType: 'user', actorId: 'admin' };
       return verifyDocumentAccess(pool, token, docId, branchId, operation);
     },
   };
@@ -256,6 +270,26 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   if (error instanceof Error && error.message === 'provider_token_service_not_configured') {
     res.status(503).json({ error: 'provider_token_service_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'collab_snapshot_service_not_configured') {
+    res.status(503).json({ error: 'collab_snapshot_service_not_configured' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'collab_snapshot_unavailable') {
+    res.status(503).json({ error: 'collab_snapshot_unavailable' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'collab_session_not_found') {
+    res.status(404).json({ error: 'collab_session_not_found' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'guest_session_quota_exceeded') {
+    res.status(429).json({ error: 'guest_session_quota_exceeded' });
     return;
   }
 

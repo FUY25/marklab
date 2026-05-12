@@ -107,6 +107,7 @@ function createFakePool(options: FakePoolOptions = {}) {
         rows: (options.shareLinks ?? [])
           .filter((row) => row.tokenHash === tokenHash && row.docId === docId && (row.branchId === branchId || row.branchId === null))
           .map((row) => ({
+            id: 'share_1',
             role: row.role,
             expires_at: null,
             revoked_at: null,

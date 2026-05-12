@@ -8,6 +8,7 @@ export interface ApiEnv {
   publicWebUrl: string;
   publicApiUrl: string;
   publicRelayWebSocketUrl: string;
+  ysweetConnectionString?: string;
   allowedOrigins: string[];
   relayEphemeralTtlSeconds: number;
   relayHostLeaseSeconds: number;
@@ -214,6 +215,7 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
       fallback: `ws://127.0.0.1:${port || defaultPort}/relay`,
     },
   );
+  const ysweetConnectionString = raw(env, 'MARKLAB_YSWEET_CONNECTION_STRING');
   const allowedOrigins = parseAllowedOrigins(env, issues, productionMode ? [] : developmentCorsOrigins);
 
   const relayEphemeralTtlSeconds = parsePositiveInteger(
@@ -246,6 +248,7 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     requireProductionValue(env, 'MARKLAB_PUBLIC_API_URL', issues);
     requireProductionValue(env, 'MARKLAB_PUBLIC_RELAY_WS_URL', issues);
     requireProductionValue(env, 'MARKLAB_ALLOWED_ORIGINS', issues);
+    requireProductionValue(env, 'MARKLAB_YSWEET_CONNECTION_STRING', issues);
 
     if (!databaseUrl) issues.push('DATABASE_URL is required');
     if (!requireAuth) issues.push('MARKLAB_REQUIRE_AUTH must be true in hosted production mode');
@@ -274,6 +277,7 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     publicWebUrl: formatUrl(publicWebUrl, defaultWebUrl),
     publicApiUrl: formatUrl(publicApiUrl, `http://127.0.0.1:${port}`),
     publicRelayWebSocketUrl: formatUrl(publicRelayWebSocketUrl, `ws://127.0.0.1:${port}/relay`),
+    ...(ysweetConnectionString ? { ysweetConnectionString } : {}),
     allowedOrigins,
     relayEphemeralTtlSeconds,
     relayHostLeaseSeconds,

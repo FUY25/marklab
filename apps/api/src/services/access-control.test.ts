@@ -166,6 +166,7 @@ describe('access-control service', () => {
 
     await expect(verifyDocumentAccess(pool, rawToken, 'doc_001', 'br_main', 'read')).resolves.toEqual({
       actorType: 'agent',
+      actorId: `agent:${hashToken(rawToken)}`,
     });
   });
 
@@ -212,12 +213,14 @@ describe('access-control service', () => {
     const pool = createAccessPool({
       shareLinks: [
         {
+          id: 'share_view',
           token_hash: hashToken(viewToken),
           doc_id: 'doc_001',
           branch_id: null,
           role: 'view',
         },
         {
+          id: 'share_edit',
           token_hash: hashToken(editToken),
           doc_id: 'doc_001',
           branch_id: 'br_main',
@@ -228,10 +231,16 @@ describe('access-control service', () => {
 
     await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'read')).resolves.toEqual({
       actorType: 'user',
+      actorId: `share:${hashToken(viewToken)}`,
+      grantId: 'share_view',
+      role: 'view',
     });
     await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'write')).rejects.toThrow('forbidden');
     await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_main', 'write')).resolves.toEqual({
       actorType: 'user',
+      actorId: `share:${hashToken(editToken)}`,
+      grantId: 'share_edit',
+      role: 'edit',
     });
   });
 
@@ -259,6 +268,7 @@ describe('access-control service', () => {
 
     await expect(verifyDocumentAccess(pool, viewToken, 'doc_001', 'br_main', 'read')).resolves.toMatchObject({
       actorType: 'user',
+      actorId: `access:${hashToken(viewToken)}`,
       grantId: 'grant_view',
       role: 'view',
     });
@@ -267,6 +277,7 @@ describe('access-control service', () => {
     await expect(verifyDocumentAccess(pool, viewToken, 'doc_002', 'br_main', 'read')).rejects.toThrow('forbidden');
     await expect(verifyDocumentAccess(pool, editToken, 'doc_001', 'br_main', 'write')).resolves.toMatchObject({
       actorType: 'user',
+      actorId: `access:${hashToken(editToken)}`,
       grantId: 'grant_edit',
       role: 'edit',
     });
