@@ -8,6 +8,30 @@
 
 **Tech Stack:** Vite, React, TypeScript, CodeMirror 6, Yjs, y-indexeddb, Y-Sweet provider client, Vitest, Playwright.
 
+## Reference Implementations (MIT — OK to copy)
+
+**This plan has the highest code-reuse leverage of any plan.** Relay's entire `y-codemirror.next/` directory is a production-tested CodeMirror+Yjs+awareness integration that maps almost 1:1 onto what this plan needs. Copy the relevant files into MarkLab-owned packages (probably `packages/collab-editor/` so the native app can share them in Plan 4); do not re-derive.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** This plan especially: Relay's `y-codemirror.next/` directory took real engineering effort to debug. Lift those files into `packages/collab-editor/` (so Plan 4's native app can share them) and adapt — do not re-derive remote-cursor rendering or CodeMirror+Y.Text binding from scratch. The reference table below is your "already-done" inventory.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into MarkLab-owned files.
+3. **Preserve attribution.** Copy `Learning resources/Relay/src/y-codemirror.next/LICENSE` as a comment header into each MarkLab file that adopts code from this directory. `Learning resources/Relay/src/client/types.ts` is a worked example of the attribution-comment style.
+4. **Strip Obsidian-specific calls** (`Vault`, `TFile`, `MarkdownView`, `getPatcher()`, plugin lifecycle hooks) and replace with browser DOM / React equivalents.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 2 (collab session API client) | `Learning resources/y-sweet/js-pkg/sdk/` and `Learning resources/y-sweet/js-pkg/react/` | The `ClientToken` parsing (already in Plan 1A's `apps/api`) and React provider hooks. The hooks pattern is directly liftable. |
+| Task 2 (token refresh client) | `Learning resources/Relay/src/TokenStore.ts:55-248` + `Learning resources/Relay/src/LiveTokenStore.ts:21-103` | The same refresh-queue logic Plan 1A used server-side, ported to fetch against MarkLab's `/api/.../provider-token/refresh` from the browser. |
+| Task 3 (CodeMirror ↔ Y.Text binding) | `Learning resources/Relay/src/y-codemirror.next/LiveEditPlugin.ts` | The main CodeMirror plugin — Y.Text observer wiring, transaction origin handling, undo manager integration. Drop the Obsidian-specific banner code (lift it separately in Plan 5). |
+| Task 3 (Y.Text-to-CodeMirror DOM bridge) | `Learning resources/Relay/src/y-codemirror.next/LiveNodePlugin.ts` | DOM-level plugin for live-rendered nodes. Optional in v1 source-only MVP; useful when you add decorations. |
+| Task 3 (offset ↔ relative position) | `Learning resources/Relay/src/y-codemirror.next/PositionTransformer.ts` and `Learning resources/Relay/src/y-codemirror.next/YRange.ts` | Conversion between absolute CodeMirror offsets and Yjs relative positions. Copy verbatim — this is exactly what the spec's cursor-and-highlight section requires. |
+| Task 4 (remote cursor rendering) | `Learning resources/Relay/src/y-codemirror.next/RemoteSelections.ts` | THE remote-cursor/selection decoration extension for CodeMirror. Copy the full file; adapt the color/name source to read from MarkLab's awareness shape. |
+| Task 4 (presence avatars + indicators) | `Learning resources/Relay/src/AwarenessViewPlugin.ts` + `Learning resources/Relay/src/User.ts` | Awareness-state subscribing pattern and user-color generator. Replace Obsidian status-bar code with a React presence-avatar component. |
+| Task 5 (read-only Markdown view) | `Learning resources/collabmd/` | Layout/CSS for a read-only Markdown page. Lift styles and shell; do not adopt collabmd's sync code. |
+| Task 6 (E2E test harness) | `Learning resources/y-sweet/tests/` | Test patterns for Y-Sweet client connections. |
+| Task 7 (workspace settings shell, from Plan 2 Task 7B) | `Learning resources/collabmd/` | Page chrome / tabs layout. Skip if not building Members/Documents tabs in this plan. |
+
 ---
 
 ## Scope

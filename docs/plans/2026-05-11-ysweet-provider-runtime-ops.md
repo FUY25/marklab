@@ -8,6 +8,27 @@
 
 **Tech Stack:** TypeScript, Express, Y-Sweet SDK, upstream Y-Sweet server/runtime selected in Task 1, Yjs, Vitest, Fly.io, Neon Postgres for control-plane metadata, Fly volume or object-store-backed provider persistence.
 
+## Reference Implementations (MIT — OK to copy)
+
+These files in `Learning resources/y-sweet/` are MIT-licensed working configurations. You may copy compose files, env var names, and example client code directly into MarkLab-owned files to save work.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** Y-Sweet's `deploy/` directory contains working production configurations. Lift them and adapt — do not re-derive your own docker-compose / Caddy / env-var conventions when y-sweet's already work. The reference table below is the "already-done" inventory.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read from it freely; paste relevant snippets into MarkLab-owned config and scripts.
+3. **Preserve attribution.** When you copy non-trivial config or code, paste the upstream LICENSE/copyright header as a comment.
+4. **Adapt to MarkLab's Fly/Docker layout** — do not run y-sweet's docker-compose unmodified in production.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 1 (runtime mode decision) | `Learning resources/y-sweet/README.md`, `Learning resources/y-sweet/docs/` | The supported runtime modes (binary, Docker, embedded). Read these first; the mode decision flows from understanding these options. |
+| Task 1 (binary vs server) | `Learning resources/y-sweet/crates/y-sweet/` (Rust server) and `Learning resources/y-sweet/js-pkg/server/` (Node helpers) | Identify the exact artifact MarkLab supervises. The Rust binary is the production-grade target. |
+| Task 2 (provider process supervision) | `Learning resources/y-sweet/deploy/docker-compose.yml` | The y-sweet service block — env vars, volume mounts, networking. Lift the env var names and storage path conventions; adapt the service shape into MarkLab's `fly.toml`. |
+| Task 2 (reverse proxy / websocket termination) | `Learning resources/y-sweet/deploy/Caddyfile` | The websocket-upgrade rules and `/doc/*` routing. Copy the relevant directives into MarkLab's chosen proxy config. |
+| Task 3 (persistence config) | `Learning resources/y-sweet/docs/` and `Learning resources/y-sweet/crates/y-sweet/src/` | Storage backend options (filesystem / S3 / object store). Copy env var names where possible to reduce ops cognitive load. |
+| Task 4 (health endpoint contract) | `Learning resources/y-sweet/crates/y-sweet/` (search for `health` / `ready`) | The upstream health endpoint format if exposed — call through it from MarkLab's `/healthz` rather than reimplementing. |
+| Task 5 (end-to-end smoke) | `Learning resources/y-sweet/examples/nextjs/` and `Learning resources/y-sweet/examples/vanilla/` | Working Yjs client connection examples. Lift the connection-setup code for the smoke script. |
+
 ---
 
 ## Scope

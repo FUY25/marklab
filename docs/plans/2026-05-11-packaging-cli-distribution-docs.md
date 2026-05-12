@@ -8,6 +8,21 @@
 
 **Tech Stack:** Existing `apps/cli`, Node packaging, macOS app packaging path selected in `2026-05-11-marklab-native-integration.md`, docs under `docs/product` and `docs/production`, Vitest/Node tests.
 
+## Reference Implementations (MIT — OK to copy)
+
+This plan is mostly MarkLab-original packaging and CLI work. The one reference of value is MarkEdit's MIT-licensed macOS release pipeline (notarization, signing, DMG building) if the native plan chose the **Port** strategy.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** macOS notarization and signing has a lot of fiddly steps. If MarkEdit's release scripts already encode them, copy and adapt — do not re-derive the notarization workflow from Apple docs.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into MarkLab-owned files.
+3. **Preserve attribution.** Copy the upstream LICENSE/copyright header into each adopted file.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 4 (native packaging) | `Learning resources/MarkEdit/` release/CI scripts | macOS notarization workflow, code-signing setup, DMG packaging scripts. Lift verbatim, adapt bundle id / signing identity. |
+| Task 2/Task 3 (CLI surface, agent docs) | (no learning-resource reference) | Original MarkLab work. |
+
 ---
 
 ## Scope

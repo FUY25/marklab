@@ -8,6 +8,30 @@
 
 **Tech Stack:** Existing local conflict store/routes, browser UI, native UI, Yjs, Vitest, Playwright, CLI smoke scripts.
 
+## Reference Implementations (MIT — OK to copy)
+
+Relay's `src/differ/` directory is a working MIT-licensed side-by-side diff UI with hunk-level action buttons. The merge-banner pattern from `y-codemirror.next/LiveEditPlugin.ts` is the exact "click to resolve" UI this plan ships. Copy these files into MarkLab-owned packages and adapt.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** Relay's `differ/` directory is a complete working diff UI with hunk-level actions. Re-implementing a side-by-side diff renderer from scratch is wasted effort. Lift the diff data model, the renderer, and the action buttons; adapt the DOM layer to React or SwiftUI.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into MarkLab-owned files.
+3. **Preserve attribution.** Copy the upstream LICENSE/copyright header into each adopted file.
+4. Strip Obsidian-specific calls (DOM helpers, `EmbedBanner`) and adapt to React (browser) or SwiftUI/AppKit (native).
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 1 (conflict state contract) | `Learning resources/Relay/src/Document.ts:231-274` (`checkStale`) | The conflict state the function produces (text/disk/base) maps 1:1 to MarkLab's conflict payload. Lift the structure. |
+| Task 2 (resolution action: accept local) | `Learning resources/Relay/src/y-diffMatchPatch.ts` | Same diff-match-patch loop Plan 1A uses; here it applies disk content into Y.Text as a single origin-tagged transaction. |
+| Task 2 (resolution action: keep shared) | `Learning resources/Relay/src/Document.ts:375-388` (`save`/`requestSave`) | The 2-second debounced disk write; on `use-shared` resolution, project Y.Text to disk via this path. |
+| Task 3 (browser conflict UI — banner) | `Learning resources/Relay/src/y-codemirror.next/LiveEditPlugin.ts:82-114` | The "Merge conflict — click to resolve" embed banner that opens the diff view. Lift the pattern; replace the Obsidian `EmbedBanner` with a React component. |
+| Task 3 (side-by-side diff layout) | `Learning resources/Relay/src/differ/differencesView.ts` | The two-column diff renderer. Replace Obsidian DOM helpers with React/JSX. |
+| Task 3 (hunk action lines) | `Learning resources/Relay/src/differ/actionLine.ts` + `actionLineButton.ts` + `actionLineDivider.ts` | "Use local hunk" / "use shared hunk" action buttons. Even if v1 ships file-level resolution only, lifting these now sets up hunk-level for a later upgrade. |
+| Task 3 (file-level diff state) | `Learning resources/Relay/src/differ/fileDifferences.ts` and `difference.ts` | Internal hunk data model. |
+| Task 3 (string diff helpers) | `Learning resources/Relay/src/differ/stringUtils.ts` | Utility functions. Lift verbatim. |
+| Task 4 (native conflict UI) | Same `differ/` files | Render the same hunk model in SwiftUI/AppKit. Share the diff *computation* via a TypeScript package or reimplement in Swift. |
+| Task 5 (CLI conflict JSON) | (no learning-resource reference) | Original. Surface the conflict state from Task 1 as JSON for agents. |
+
 ---
 
 ## Scope

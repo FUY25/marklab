@@ -8,6 +8,28 @@
 
 **Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, existing `apps/api` local daemon, existing `apps/cli`.
 
+## Reference Implementations (MIT — OK to copy)
+
+Two MIT-licensed sources dominate this plan: **MarkEdit** for the macOS app shell / editor / file I/O, and **Relay's `y-codemirror.next/`** for the collaboration bindings. The **Port** strategy in Task 1 explicitly allows copying MarkEdit source into `apps/marklab-macos/`.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** This plan has the most code to lift of any plan: MarkEdit gives you a working macOS Markdown editor, Relay gives you the collaboration bindings. Re-authoring either from scratch is the wrong cost trade. Port MarkEdit's macOS shell into `apps/marklab-macos/`, lift Relay's `y-codemirror.next/` into a shared `packages/collab-editor/`, and spend your engineering time on the MarkLab-specific integration glue.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into `apps/marklab-macos/` with attribution headers.
+3. **Preserve attribution.** Each adopted MarkEdit file keeps the upstream MIT LICENSE / copyright header. Add a one-line note: `// Adapted from MarkEdit <upstream-commit-sha>, MIT licensed.`
+4. Adapt to MarkLab branding (app name, bundle id, icons, default settings) and to MarkLab's collaboration model (Y.Text + provider tokens) — MarkEdit is single-user, so collaboration code comes from Relay's `y-codemirror.next/`.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 1 (Port strategy) | `Learning resources/MarkEdit/` (entire repo) | If choosing **Port**: copy the macOS app target structure (`Xcode project`, `Info.plist`, Swift/SwiftUI sources, CodeMirror bundle build setup, `entitlements`) into `apps/marklab-macos/`. If choosing **Reference**: read the same files but rewrite from scratch. |
+| Task 2 (local file open/save) | `Learning resources/MarkEdit/` (NSDocument / file open/save behavior) | The exact AppKit `NSDocument` subclass wiring and `presentedItemDidChange` / `reloadFromContents` hooks for file watching. Lift directly. |
+| Task 2 (CodeMirror native bundle) | `Learning resources/MarkEdit/` build scripts that bundle CodeMirror for WKWebView | The esbuild/rollup setup that produces the in-app CodeMirror bundle. |
+| Task 4 (native CodeMirror ↔ Y.Text) | `Learning resources/Relay/src/y-codemirror.next/LiveEditPlugin.ts` (same file Plan 3 lifts) | Same plugin reused inside MarkLab.app's WKWebView. Extract MarkLab's reimplementation to `packages/collab-editor/` so the browser and native apps share one source. |
+| Task 4 (offset/range mapping) | `Learning resources/Relay/src/y-codemirror.next/PositionTransformer.ts` and `YRange.ts` | Same as Plan 3. Share via the same package. |
+| Task 5 (native remote cursor) | `Learning resources/Relay/src/y-codemirror.next/RemoteSelections.ts` | Same as Plan 3. Native and browser render the same cursor decorations from the same awareness state. |
+| Task 5 (presence color/name) | `Learning resources/Relay/src/User.ts` | Color generator. Lift once into shared package. |
+| Task 6 (CLI/app boundary) | (no learning-resource reference; MarkLab-original IPC) | — |
+
 ---
 
 ## Scope

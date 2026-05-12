@@ -8,6 +8,16 @@
 
 **Tech Stack:** PostgreSQL/Neon, Express, Stripe Checkout/Customer Portal or manual alpha subscription records, webhooks, Vitest, control-plane UI.
 
+## Reference Implementations (MIT — OK to copy)
+
+This plan has no relevant prior art in `Learning resources/`. Stripe integration, plan tables, and seat enforcement are entirely MarkLab-original work. The "default to copying" rule still applies — just to Stripe's official samples instead of `Learning resources/`.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** Stripe ships official sample apps for Checkout, webhook signature verification, and Customer Portal. Lift the integration patterns from those samples rather than re-authoring from API docs. Webhook signature verification in particular is a common source of subtle bugs — use Stripe's reference implementation verbatim.
+2. **`Learning resources/` is read-only as a directory** at all times — never edit, move, delete, or `git add` anything under it (no Stripe code lives there in v1, but the rule still holds).
+3. **Preserve attribution** on copied Stripe sample code — paste the upstream copyright header as a comment block.
+
 ---
 
 ## Scope

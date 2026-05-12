@@ -8,6 +8,22 @@
 
 **Tech Stack:** Fly.io, Neon Postgres, MarkLab Docker images, provider persistence selected in Plan 1B, optional billing provider from Plan 7, CLI/native package from Plan 6.
 
+## Reference Implementations (MIT — OK to copy)
+
+This plan is mostly MarkLab-specific deploy/ops work. The one valuable reference is Y-Sweet's MIT-licensed deployment examples for production provider topology.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** Y-Sweet's production deploy examples encode hard-won knowledge about websocket termination, persistence, and process layout. Lift directives directly into MarkLab's Fly/Caddy config rather than re-discovering the gotchas.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into MarkLab-owned config/scripts.
+3. **Preserve attribution.** Copy the upstream LICENSE/copyright header as a comment in adopted config files.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 2 (build and release path) | `Learning resources/y-sweet/deploy/` (`docker-compose.yml`, `Caddyfile`, `README.md`) | Production deploy topology — env vars, websocket termination, volume mounts. Plan 1B already lifted the alpha shape; revisit here for production-grade settings and copy any additional directives into MarkLab's `fly.toml` / Caddy config / Dockerfile. |
+| Task 5 (provider persistence gate) | `Learning resources/y-sweet/docs/` | Storage backend options and durability expectations under restart/migrate. |
+| All other tasks | (no learning-resource reference) | Original MarkLab deploy/ops work. |
+
 ---
 
 ## Scope

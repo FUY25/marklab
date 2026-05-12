@@ -8,6 +8,28 @@
 
 **Tech Stack:** TypeScript, Vitest, Express 5, PostgreSQL schema SQL, Yjs, Y-Sweet SDK `@y-sweet/sdk@0.9.1`, existing MarkLab `LocalFileService`, existing MarkLab access-control route patterns.
 
+## Reference Implementations (MIT — OK to copy)
+
+These files in `Learning resources/` are MIT-licensed. You may copy code directly into MarkLab-owned files to save work — every reference below has a working implementation you do not need to re-derive from scratch.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** If a working MIT-licensed implementation exists in `Learning resources/` for the behavior you need, copy it and adapt — do not re-derive the algorithm from spec. Re-deriving working code is the wrong cost trade-off. The reference table below is your "already-done" inventory; if a row exists for a task, the implementation work is mostly attribution + adaptation, not authoring from scratch.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read files from it freely; paste relevant code into MarkLab-owned files under `apps/`, `packages/`, etc.
+3. **Preserve attribution.** When you copy non-trivial code, paste the upstream LICENSE/copyright header as a comment block at the top of the MarkLab-owned file. `Learning resources/Relay/src/client/types.ts` is a worked example of how Relay itself does this when adopting MIT code from Y-Sweet.
+4. **Adapt to MarkLab conventions** — rename types, fix imports, drop Obsidian-specific calls (`Vault`, `TFile`, `getPatcher`, plugin lifecycle hooks). The bug-hunter agent checks correctness against the spec, not textual match against the reference.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 1 (reconciliation helper) | `Learning resources/Relay/src/y-diffMatchPatch.ts` | All 68 lines: `diff_main` → `diff_cleanupSemantic` → `ydoc.transact(insert/delete loop, origin)`. Drop Relay's `flags` log calls. |
+| Task 1 (CRLF normalization) | `Learning resources/Relay/src/Document.ts:196` | The `fileContents.replace(/\r\n/g, "\n")` normalization at the disk boundary. |
+| Task 3 (`pendingOps` queue) | `Learning resources/Relay/src/Document.ts:46-269` | The `pendingOps: ((data: string) => string)[]` field, the `process(fn)` method, and the `checkStale()` replay loop. Adapt to MarkLab's `LocalFileService` shape. |
+| Task 3 (disk buffer pattern) | `Learning resources/Relay/src/DiskBuffer.ts` | The in-memory `DiskBuffer` class is directly reusable. `DiskBufferStore` (IDB-backed) is browser-only — skip it for server code. |
+| Task 4 (opaque resource id pattern) | `Learning resources/Relay/src/S3RN.ts` | Inspiration for opaque, prefix-tagged resource ids. Do not lift verbatim — Relay's S3RN encoding is project-specific. |
+| Task 5 (token refresh loop) | `Learning resources/Relay/src/TokenStore.ts:55-248` + `Relay/src/LiveTokenStore.ts:21-103` | The `TokenStore<Token>` class with refresh queue, expiry margin, JWT `exp` decode. Replace Relay's Obsidian-specific `LiveTokenStore` plumbing with a fetch call to MarkLab's `/api/.../provider-token/refresh`. |
+| Task 5 (Y-Sweet ClientToken shape) | `Learning resources/y-sweet/js-pkg/sdk/src/main.ts` and `Learning resources/Relay/src/client/types.ts` | The `ClientToken` interface and `authorization: "full" \| "read-only"` field. `Relay/src/client/types.ts` already shows the MIT attribution comment pattern — use it as your template. |
+| Task 6 (auth boundary) | `Learning resources/Relay/src/HasProvider.ts:77-84` | The `Y.PermanentUserData` clientID-to-identity binding setup. Two lines, copy verbatim with import adjustment. Pair with a MarkLab-side rule that server audit never reads `PermanentUserData`. |
+
 ---
 
 ## Scope Check

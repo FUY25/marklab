@@ -8,6 +8,25 @@
 
 **Tech Stack:** Express, PostgreSQL/Neon, existing `apps/api` route/service pattern, zod, Vitest, browser/native session clients.
 
+## Reference Implementations (MIT — OK to copy)
+
+This plan is mostly original MarkLab work (workspace/seat/billing schema is MarkLab-specific), but a few Relay files contain MIT-licensed patterns you can copy and adapt rather than re-derive.
+
+**Rules of reuse:**
+
+1. **Default to copying, not re-deriving.** Even though this plan is mostly MarkLab-original, several Relay files (OIDC claim handling, role/permission checks, token refresh) save real time when copied as starting points. Don't re-author what's already debugged — adapt the existing code instead.
+2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into MarkLab-owned files.
+3. **Preserve attribution.** When copying non-trivial code, paste the upstream LICENSE/copyright header as a comment.
+4. **Adapt to MarkLab conventions** — Relay's Pocketbase backend, Obsidian plugin patterns, and S3RN encoding are project-specific. Lift the structural shape, not the surface coupling.
+
+| This plan's task | Lift from | What to copy |
+|---|---|---|
+| Task 3 (auth MVP) | `Learning resources/Relay/src/LoginManager.ts` | The OIDC-style claim-handling shape (`Handle OIDC user (standard OpenID Connect claims)` section). Replace Relay's Pocketbase-specific backend calls with MarkLab's chosen auth backend. |
+| Task 4 (workspace role enforcement) | `Learning resources/Relay/src/PolicyManager.ts` | The role/permission check pattern. Adapt to MarkLab's `Owner` / `Member` / `Reader` set. |
+| Task 5 (provider token refresh route) | `Learning resources/Relay/src/LiveTokenStore.ts:35-103` | The `refresh(documentId, onSuccess, onError)` server-side flow. Plan 1A already adapted this; here you extend it to re-check grant/seat/quota before issuing a fresh token. |
+| Task 6 (audit boundary) | `Learning resources/Relay/src/HasProvider.ts:77-84` (client-side example) | The pattern for binding clientID to identity. MarkLab inverts this: client binds for UI, server audits from validated session state. Copy the binding code, add the MarkLab-side audit-never-reads-PermanentUserData rule. |
+| Task 7B (workspace settings UI shell) | `Learning resources/collabmd/` | Markdown collaboration page chrome (layout, CSS, tab structure). Lift CSS/layout snippets; do not adopt collabmd's sync/server code. |
+
 ---
 
 ## Scope
