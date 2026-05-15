@@ -55,7 +55,7 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 
 - `apps/collab-web` now owns the browser editor shell. Edit links open `/collab?docId=...&branchId=...&token=...&mode=edit`; view links use the same route with `mode=view`.
 - Browser edit mode already has unavailable-state handling for revoked view links, edit-session creation denials, provider-token revocation, and role downgrade during refresh. Conflict UI must not reinterpret those denial states as merge conflicts.
-- Browser E2E currently proves queued local edits flush after a memory-provider reconnect. This plan still needs the real reconnect/conflict matrix against API-root Y-Sweet provider routes, provider restart, disk projection, and conflict payloads.
+- Browser E2E now includes a real API-root Y-Sweet websocket smoke for two browser edit tabs, plus a faster memory-provider reconnect test for queued local edits. This plan still needs the full reconnect/conflict matrix against provider restart, disk projection, native/browser combinations, and conflict payloads.
 - The browser editor has no conflict banner or conflict-resolution UI yet; Task 3 should add that UI inside the existing `apps/collab-web` editor shell rather than creating a new browser app.
 
 ## File Structure

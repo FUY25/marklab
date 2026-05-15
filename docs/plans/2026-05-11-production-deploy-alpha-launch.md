@@ -51,6 +51,7 @@ This plan is the launch gate. It does not add product features. It verifies the 
 
 - The alpha browser surface is co-located with the API process. `infra/docker/api.Dockerfile` builds `apps/collab-web`, copies `apps/collab-web/dist`, and sets `MARKLAB_COLLAB_WEB_DIST_DIR=/app/apps/collab-web/dist`.
 - Static collab-web assets are served under `/collab-web/`. Browser collaborator routes are `/collab?docId=...&branchId=...&token=...&mode=edit|view`, and workspace settings are `/workspaces/:workspaceId/settings`.
+- Plan 3's automated browser suite includes both memory-provider collaboration tests and a real API-root Y-Sweet websocket browser smoke; production still needs the same path verified against deployed infrastructure.
 - Production smoke must verify `/collab` serves the collab-web entry, `/collab-web/assets/...` assets load, existing `apps/web` routes such as `/relay/...` still load, view mode opens without provider websocket traffic, and edit mode refresh denial surfaces unavailable.
 
 ## File Structure

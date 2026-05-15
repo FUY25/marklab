@@ -14,6 +14,7 @@ import {
 import type { Awareness } from 'y-protocols/awareness';
 import type * as Y from 'yjs';
 import {
+  normalizeAwarenessUser,
   resolveCursorAwareness,
   type MarkLabAwarenessState,
   type MarkLabAwarenessUser,
@@ -32,6 +33,11 @@ export interface ResolvedRemoteCursorSelection extends RemoteCursorSummary {
   head: number;
 }
 
+function awarenessRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
 export function safeAwarenessColor(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
   if (/^#[0-9a-f]{3}(?:[0-9a-f]{3})?(?:[0-9a-f]{2})?$/iu.test(value)) return value;
@@ -41,14 +47,20 @@ export function safeAwarenessColor(value: string | undefined, fallback: string):
 
 export function summarizeRemoteCursors(states: ReadonlyMap<number, MarkLabAwarenessState>, localClientId: number): RemoteCursorSummary[] {
   return [...states.entries()]
-    .filter(([clientId, state]) => clientId !== localClientId && Boolean(state.user))
-    .map(([clientId, state]) => ({
-      clientId,
-      name: state.user?.name ?? 'Guest',
-      color: safeAwarenessColor(state.user?.color, '#2563eb'),
-      colorLight: safeAwarenessColor(state.user?.colorLight, '#dbeafe'),
-      kind: state.user?.kind ?? 'human',
-    }));
+    .flatMap(([clientId, state]) => {
+      if (clientId === localClientId) return [];
+      const record = awarenessRecord(state);
+      if (!record) return [];
+      const user = normalizeAwarenessUser(record.user);
+      if (!user) return [];
+      return [{
+        clientId,
+        name: user.name,
+        color: safeAwarenessColor(user.color, '#2563eb'),
+        colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
+        kind: user.kind,
+      }];
+    });
 }
 
 export function resolveRemoteCursorSelections(

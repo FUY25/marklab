@@ -61,6 +61,35 @@ describe('remote cursor rendering', () => {
     }]);
   });
 
+  it('normalizes malformed remote user names before rendering summaries', () => {
+    const longName = 'Remote'.repeat(100);
+    const states = new Map<number, unknown>([
+      [1, { user: { ...remoteUser, name: 'Local' } }],
+      [2, { user: { id: 7, name: { bad: true }, color: 'url(javascript:bad)', colorLight: null, kind: 'robot' } }],
+      [3, { user: { ...remoteUser, name: longName } }],
+      [4, { user: 'not-a-user' }],
+      [5, null],
+      [6, 'bad-state'],
+      [7, 7],
+    ]);
+
+    const summaries = summarizeRemoteCursors(states as unknown as ReadonlyMap<number, never>, 1);
+
+    expect(summaries).toEqual([{
+      clientId: 2,
+      name: 'Guest',
+      color: '#2563eb',
+      colorLight: '#dbeafe',
+      kind: 'human',
+    }, {
+      clientId: 3,
+      name: longName.slice(0, 80),
+      color: '#dc2626',
+      colorLight: '#fee2e2',
+      kind: 'human',
+    }]);
+  });
+
   it('resolves remote cursor ranges from Yjs relative positions after preceding inserts', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
@@ -114,5 +143,24 @@ describe('remote cursor rendering', () => {
 
     expect(view.dom.querySelector('.cm-marklab-remote-caret')).not.toBeNull();
     expect(view.dom.querySelector('.cm-marklab-remote-selection')).not.toBeNull();
+  });
+
+  it('ignores malformed remote cursor payloads without breaking decorations', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const view = createView(ytext.toString());
+
+    const decorations = buildRemoteCursorDecorations(
+      view,
+      ytext,
+      new Map([[42, {
+        user: remoteUser,
+        cursor: { anchor: null, head: 'bad' },
+      } as unknown as never]]),
+      doc.clientID,
+    );
+
+    expect(decorations.size).toBe(0);
   });
 });

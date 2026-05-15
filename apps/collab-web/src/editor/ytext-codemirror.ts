@@ -112,7 +112,3 @@ export function createYTextCodeMirrorBinding(options: YTextCodeMirrorBindingOpti
     },
   };
 }
-
-export function yTextChangeToFullReplace(text: string): ChangeSpec {
-  return { from: 0, insert: text };
-}

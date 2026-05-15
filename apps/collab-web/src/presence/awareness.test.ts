@@ -40,4 +40,38 @@ describe('MarkLab awareness cursor state', () => {
       user,
     });
   });
+
+  it('drops malformed remote cursor awareness instead of throwing', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello');
+
+    expect(() => resolveCursorAwareness(ytext, {
+      user,
+      cursor: { anchor: 'bad', head: {} },
+    } as unknown as Parameters<typeof resolveCursorAwareness>[1])).not.toThrow();
+    expect(resolveCursorAwareness(ytext, {
+      user,
+      cursor: { anchor: 'bad', head: {} },
+    } as unknown as Parameters<typeof resolveCursorAwareness>[1])).toBeNull();
+  });
+
+  it('rejects hostile relative-position target names without growing the Y.Doc share map', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello');
+    const share = (doc as unknown as { share: Map<string, unknown> }).share;
+    const beforeKeys = [...share.keys()];
+
+    const resolved = resolveCursorAwareness(ytext, {
+      user,
+      cursor: {
+        anchor: { type: null, tname: 'attacker_x', item: null, assoc: 0 },
+        head: { type: null, tname: 'attacker_y', item: null, assoc: 0 },
+      },
+    });
+
+    expect(resolved).toBeNull();
+    expect([...share.keys()]).toEqual(beforeKeys);
+  });
 });

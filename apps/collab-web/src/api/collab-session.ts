@@ -125,7 +125,13 @@ function withQueryToken(path: string, token: string | undefined): string {
 
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
-  return text ? JSON.parse(text) : null;
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!response.ok) return null;
+    throw error;
+  }
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

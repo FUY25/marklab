@@ -132,6 +132,7 @@ test('edit tab A syncs Markdown text to edit tab B', async ({ browser }) => {
   await pageA.keyboard.type('# Shared from A');
 
   await expect(pageB.locator('.cm-content')).toContainText('Shared from A');
+  await expect(pageA.locator('.preview-pane').getByRole('heading', { name: 'Shared from A' })).toBeVisible();
   await context.close();
 });
 

@@ -121,3 +121,55 @@ This file records correctness/security bugs found by plan-level review passes.
 23. Memory-provider status reporting collapsed transient statuses to stale `connected`.
     - Impact: after an E2E status event such as `error` or `connecting`, the memory provider could still report `connected`, causing refresh-retry recovery logic to force the visible pill back to `Connected` while the simulated transport was still reconnecting.
     - Resolution: the memory provider now tracks the current status independently from its connected boolean and reports transient statuses accurately; unit coverage pins `error` and `connecting` status reads.
+
+24. Non-JSON 4xx provider-token refresh responses were treated as retryable parse errors.
+    - Impact: a proxy/auth layer returning an HTML `401`, `403`, `404`, or `429` page caused JSON parsing to throw before `CollabSessionError` creation, so the editor stayed writable and retried instead of becoming unavailable after a terminal denial.
+    - Resolution: non-OK responses now fall back to `http_<status>` when the body is empty or non-JSON, preserving 4xx terminal classification; API-client tests cover non-JSON `403` refresh denial.
+
+25. Malformed remote awareness state could crash cursor rendering.
+    - Impact: edit-capable peers control their awareness payloads. Invalid cursor relative-position values or non-string user names could throw during Yjs position resolution or React rendering and disable the editor surface for other collaborators.
+    - Resolution: awareness user/cursor state is now normalized and malformed relative positions are caught and dropped; unit tests cover malformed cursor payloads and non-string user names.
+
+26. Edit mode preview rendered raw Markdown instead of rendered Markdown.
+    - Impact: the right pane was labeled `Live preview` but used a raw `<pre>`, so headings/lists/quotes/code were not rendered and empty documents displayed invented `# Untitled` content.
+    - Resolution: edit preview now reuses the Markdown snapshot renderer used by view mode and renders nothing for an empty document; browser E2E asserts a typed Markdown heading appears as a rendered heading in the preview pane.
+
+27. Plan 3 browser E2E only exercised the memory provider, not the real API-root Y-Sweet websocket path.
+    - Impact: a broken browser `@y-sweet/client` connection, API websocket proxy, or real token URL could pass all browser tests because the memory harness used BroadcastChannel instead of `/d/<providerDocId>/ws/<providerDocId>`.
+    - Resolution: added a real-provider browser smoke that starts the API-supervised Y-Sweet process, proxies actual control-plane session responses into the Vite app, opens two browser tabs, verifies edit convergence, and asserts a websocket to the API-root provider route is opened.
+
+28. `yTextChangeToFullReplace` was dead exported code and would insert instead of replace if reused.
+    - Impact: the unused helper returned a CodeMirror change without `to`, making it a footgun for future editor-binding work.
+    - Resolution: removed the dead export.
+
+29. The real-provider browser smoke did not prove the websocket went through the API origin.
+    - Impact: a browser could connect directly to the raw Y-Sweet child process and still satisfy a path-only assertion, overclaiming API-root websocket proxy coverage.
+    - Resolution: the smoke now asserts the observed provider websocket origin matches the API base URL, carries a provider token, and does not use the raw provider origin.
+
+30. Remote awareness identity strings were normalized for type but not size.
+    - Impact: an edit-capable peer could publish a multi-megabyte display name and force collaborators to allocate/render it in caret labels and presence indicators on each awareness update.
+    - Resolution: remote awareness user ids and names are capped to 80 characters, with unit coverage for oversized names.
+
+31. Real-provider browser harness leaked resources if setup failed after starting Y-Sweet.
+    - Impact: provider readiness or API listen failures could leave a Y-Sweet child process and temp store directory behind because cleanup lived only in the test body after harness creation.
+    - Resolution: harness setup now wraps app/server creation, provider readiness, and API listen in a cleanup-aware try/catch that stops the provider and removes the temp store before rethrowing.
+
+32. Real-provider browser smoke reserved both provider and API ports with closed probes.
+    - Impact: CI could reuse or steal either port before the real server bound, causing nondeterministic provider startup or API listen failures unrelated to product behavior.
+    - Resolution: the API server now binds port `0` directly and uses its actual bound port for the Y-Sweet public URL prefix; only the child-process provider port still needs a probe because Y-Sweet 0.9.1 requires a concrete positive port.
+
+33. Real-provider harness still had setup cleanup outside the first failure boundary.
+    - Impact: auth generation/config/start failures and `browser.newContext()` failures could leak the temp provider store or detached Y-Sweet process before the test body cleanup ran.
+    - Resolution: harness creation now wraps from temp-dir allocation through provider readiness, and the test body uses nullable harness/context handles in `finally` so partial setup is closed.
+
+34. Raw-provider negative assertion only checked the exact `/d/.../ws/...` path.
+    - Impact: a raw-provider websocket on another accepted Y-Sweet websocket path could be ignored while the test still claimed no raw provider origin was used.
+    - Resolution: the smoke still positively asserts an API-host `/d/.../ws/...` socket with token, and now rejects every observed websocket whose host matches the raw provider host.
+
+35. Top-level malformed awareness state could still crash presence summaries.
+    - Impact: remote Yjs awareness values can be `null`, strings, numbers, or other non-record values; the presence-summary path read `state.user` before validating the top-level shape and could throw on each awareness update.
+    - Resolution: `summarizeRemoteCursors` now validates each top-level awareness value as a record before reading `user`, and unit coverage includes null/string/number awareness states.
+
+36. Hostile relative-position `tname` values could mutate local Y.Doc state during validation.
+    - Impact: `Y.createAbsolutePositionFromRelativePosition` calls `doc.get(tname)` for top-level relative positions. A malicious awareness cursor targeting rotating fake `tname` values could grow every collaborator's local `doc.share` map before MarkLab dropped the cursor as off-document.
+    - Resolution: cursor resolution now pre-validates relative-position shape and requires the `tname` to match the existing `Y.Text("contents")` top-level name before calling Yjs; a regression verifies hostile names do not change `doc.share`.

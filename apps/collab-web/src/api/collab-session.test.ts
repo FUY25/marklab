@@ -234,6 +234,36 @@ describe('collab session API client', () => {
     expect(isTerminalProviderRefreshError(new TypeError('network drop'))).toBe(false);
   });
 
+  it('classifies non-JSON 4xx refresh responses as terminal HTTP denials', async () => {
+    const fetcher = vi.fn(async () => new Response('<html>forbidden</html>', {
+      status: 403,
+      headers: { 'Content-Type': 'text/html' },
+    }));
+    const client = createCollabSessionClient({ apiUrl: 'https://api.example.test', fetcher });
+    const activeSession = createActiveEditSession(
+      { docId: 'doc_1', branchId: 'branch_1' },
+      {
+        mode: 'edit',
+        session: {
+          sessionId: 'session_1',
+          clientKind: 'browser',
+          displayName: 'Alice',
+          refreshToken: 'refresh_session_secret',
+        },
+        providerToken: createProviderToken(),
+      },
+    );
+
+    await expect(client.refreshProviderToken(activeSession)).rejects.toMatchObject({
+      name: 'CollabSessionError',
+      status: 403,
+      code: 'http_403',
+    });
+    await client.refreshProviderToken(activeSession).catch((error: unknown) => {
+      expect(isTerminalProviderRefreshError(error)).toBe(true);
+    });
+  });
+
   it('rejects edit-shaped sessions that do not include full provider authorization', async () => {
     const readOnlyToken = createProviderToken({
       authorization: 'read-only',

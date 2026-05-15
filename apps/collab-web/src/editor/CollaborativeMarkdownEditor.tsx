@@ -33,6 +33,7 @@ import {
   type RemoteCursorSummary,
 } from '../presence/remote-cursors';
 import { createMarkLabYjsProvider, type MarkLabYjsProvider } from '../provider/yjs-provider';
+import { renderMarkdownSnapshot } from './markdown-render';
 
 export interface CollaborativeMarkdownEditorProps {
   docId: string;
@@ -333,7 +334,7 @@ export function CollaborativeMarkdownEditor({
               ))}
             </div>
           ) : null}
-          <pre>{markdownPreview || '# Untitled\n'}</pre>
+          <div className="markdown-rendered-view">{renderMarkdownSnapshot(markdownPreview)}</div>
         </aside>
       </section>
     </main>
