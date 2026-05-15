@@ -65,3 +65,27 @@ This file records correctness/security bugs found by plan-level review passes.
 9. The offline/reconnect browser E2E only injected status labels.
    - Impact: the test could pass while local offline edits never queued or flushed after reconnect.
    - Resolution: the memory provider now toggles transport state on the E2E provider status event, queues local Yjs updates while offline, broadcasts full Yjs state on reconnect, and the Playwright test verifies another tab receives the offline draft only after reconnect.
+
+10. Provider-token refresh could target the wrong edit session after an out-of-order session response.
+    - Impact: a stale session created by React StrictMode, route churn, or a slow first request could overwrite the shared active session; the live editor would then refresh the wrong session token and could become unavailable incorrectly.
+    - Resolution: the collab session client no longer owns mutable active edit-session state. The editor captures its own `ActiveEditSession` from the session response and passes that explicit session to every refresh. Added a regression test proving refresh uses the caller-provided session even after a later session exists.
+
+11. Transient provider-token refresh failures permanently disabled editing.
+    - Impact: a temporary network drop, 5xx, HTML error page, or JSON parse failure during refresh was treated like revocation and disconnected the editor.
+    - Resolution: refresh handling now treats explicit control-plane 4xx denials as terminal and retries other failures after the shared refresh-check interval while showing reconnecting state. Added classification and retry-delay regression tests.
+
+12. Tokens already inside the refresh margin waited for the check interval before refreshing.
+    - Impact: a browser waking from sleep or receiving a near-expiry token could continue reconnecting with stale credentials instead of refreshing immediately.
+    - Resolution: the first due refresh can run immediately; if a successful refresh still returns a token inside the margin, the next cycle falls back to the shared check interval to avoid a tight loop. Successful refreshes also validate and replace the cached Y-Sweet client token on the active provider.
+
+13. Browser E2E still uses the memory provider rather than the real Y-Sweet websocket path.
+    - Impact: the fast browser suite does not directly test `/d/:providerDocId/ws/:providerDocId`, websocket proxying, Y-Sweet auth, or native Y-Sweet reconnect semantics.
+    - Resolution: consciously deferred as an integration-matrix gap rather than hiding it. Plan 1B's API-root provider smoke covers the real Y-Sweet proxy/storage path today; Plan 3 verification now also runs that smoke, and downstream reconnect/deploy plans explicitly require the browser-real-provider route matrix.
+
+14. Refreshed provider client tokens bypassed Y-Sweet's document-id validation.
+    - Impact: a malformed refresh response with a mismatched `clientToken.docId` could be installed directly into the provider and reconnect this editor to the wrong provider document.
+    - Resolution: refreshed provider tokens are validated against the active provider doc id, active session id, and full authorization before install; the provider wrapper also rejects mismatched or non-full replacement client tokens.
+
+15. In-flight refresh completion could mutate a destroyed provider after unmount.
+    - Impact: a refresh promise resolving after React cleanup could update refs on a closed-over destroyed provider and schedule a new timer that cleanup could no longer clear.
+    - Resolution: refresh success and failure continuations now re-check `disposed` and `unavailable` before mutating provider state or scheduling follow-up refresh/retry timers.

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CollabSessionError,
+  createActiveEditSession,
   createCollabSessionClient,
+  isTerminalProviderRefreshError,
   providerTokenRefreshDelayMs,
+  providerTokenRefreshRetryDelayMs,
   type IssuedProviderToken,
 } from './collab-session';
 import {
@@ -70,7 +74,6 @@ describe('collab session API client', () => {
     );
     expect(session.mode).toBe('view');
     expect('providerToken' in session).toBe(false);
-    expect(client.getActiveEditSession()).toBeNull();
   });
 
   it('stores edit refresh tokens separately from Y-Sweet client tokens and refreshes with only the session token', async () => {
@@ -108,16 +111,11 @@ describe('collab session API client', () => {
       displayName: 'Alice',
       token: 'ml_access_edit',
     });
-    const refreshed = await client.refreshProviderToken();
+    if (session.mode !== 'edit') throw new Error('expected_edit_session');
+    const activeSession = createActiveEditSession({ docId: 'doc_1', branchId: 'branch_1' }, session);
+    const refreshed = await client.refreshProviderToken(activeSession);
 
     expect(session.mode).toBe('edit');
-    expect(client.getActiveEditSession()).toMatchObject({
-      docId: 'doc_1',
-      branchId: 'branch_1',
-      sessionId: 'session_1',
-      refreshToken: 'refresh_session_secret',
-      providerToken: refreshedToken,
-    });
     expect(refreshed.clientToken.token).toBe('ysweet_token_refreshed');
     expect(fetcher).toHaveBeenLastCalledWith(
       'https://api.example.test/api/docs/doc_1/branches/branch_1/collab/session/session_1/provider-token/refresh',
@@ -139,13 +137,101 @@ describe('collab session API client', () => {
     expect(delayMs).toBe((PROVIDER_TOKEN_TTL_SECONDS - PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS) * 1000);
   });
 
-  it('uses the shared check interval instead of tight-looping when the token is inside the refresh margin', () => {
+  it('refreshes immediately when a token is inside the margin, then falls back to the shared interval', () => {
+    const dueToken = createProviderToken({ expiresAt: '2026-05-15T12:00:30.000Z' });
     const delayMs = providerTokenRefreshDelayMs(
-      createProviderToken({ expiresAt: '2026-05-15T12:00:30.000Z' }),
+      dueToken,
       Date.parse('2026-05-15T12:00:00.000Z'),
     );
 
-    expect(delayMs).toBe(PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS * 1000);
+    expect(delayMs).toBe(0);
+    expect(providerTokenRefreshDelayMs(
+      dueToken,
+      Date.parse('2026-05-15T12:00:00.000Z'),
+      undefined,
+      { allowImmediate: false },
+    )).toBe(PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS * 1000);
+    expect(providerTokenRefreshRetryDelayMs()).toBe(PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS * 1000);
+  });
+
+  it('refreshes the caller-provided edit session instead of a later session', async () => {
+    const sessionOneToken = createProviderToken({ sessionId: 'session_1' });
+    const sessionTwoToken = createProviderToken({
+      sessionId: 'session_2',
+      clientToken: {
+        docId: 'ml_doc_1',
+        url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
+        baseUrl: 'https://api.example.test/d/ml_doc_1',
+        token: 'ysweet_token_2',
+        authorization: 'full',
+      },
+    });
+    const refreshedToken = createProviderToken({
+      sessionId: 'session_1',
+      clientToken: {
+        docId: 'ml_doc_1',
+        url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
+        baseUrl: 'https://api.example.test/d/ml_doc_1',
+        token: 'ysweet_token_1_refreshed',
+        authorization: 'full',
+      },
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({
+        mode: 'edit',
+        session: {
+          sessionId: 'session_1',
+          clientKind: 'browser',
+          displayName: 'Alice',
+          refreshToken: 'refresh_session_1',
+        },
+        providerToken: sessionOneToken,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        mode: 'edit',
+        session: {
+          sessionId: 'session_2',
+          clientKind: 'browser',
+          displayName: 'Alice',
+          refreshToken: 'refresh_session_2',
+        },
+        providerToken: sessionTwoToken,
+      }))
+      .mockResolvedValueOnce(jsonResponse({ providerToken: refreshedToken }));
+    const client = createCollabSessionClient({ apiUrl: 'https://api.example.test', fetcher });
+
+    const firstSession = await client.createSession({
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      mode: 'edit',
+      displayName: 'Alice',
+    });
+    const secondSession = await client.createSession({
+      docId: 'doc_2',
+      branchId: 'branch_2',
+      mode: 'edit',
+      displayName: 'Alice',
+    });
+    if (firstSession.mode !== 'edit' || secondSession.mode !== 'edit') throw new Error('expected_edit_sessions');
+
+    const firstActiveSession = createActiveEditSession({ docId: 'doc_1', branchId: 'branch_1' }, firstSession);
+    const refreshed = await client.refreshProviderToken(firstActiveSession);
+
+    expect(refreshed.clientToken.token).toBe('ysweet_token_1_refreshed');
+    expect(fetcher).toHaveBeenLastCalledWith(
+      'https://api.example.test/api/docs/doc_1/branches/branch_1/collab/session/session_1/provider-token/refresh',
+      expect.objectContaining({
+        body: JSON.stringify({ refreshToken: 'refresh_session_1' }),
+      }),
+    );
+  });
+
+  it('classifies explicit refresh denials as terminal and transient failures as retryable', () => {
+    expect(isTerminalProviderRefreshError(new CollabSessionError(403, 'grant_revoked'))).toBe(true);
+    expect(isTerminalProviderRefreshError(new CollabSessionError(404, 'collab_session_not_found'))).toBe(true);
+    expect(isTerminalProviderRefreshError(new CollabSessionError(503, 'temporarily_unavailable'))).toBe(false);
+    expect(isTerminalProviderRefreshError(new TypeError('network drop'))).toBe(false);
   });
 
   it('rejects edit-shaped sessions that do not include full provider authorization', async () => {
@@ -177,6 +263,5 @@ describe('collab session API client', () => {
       mode: 'edit',
       displayName: 'Alice',
     })).rejects.toThrow('invalid_edit_provider_authorization');
-    expect(client.getActiveEditSession()).toBeNull();
   });
 });

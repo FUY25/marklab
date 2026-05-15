@@ -10,6 +10,7 @@ import type { ProviderClientToken } from '../api/collab-session';
 
 export interface MarkLabYjsProvider {
   on(eventName: typeof EVENT_CONNECTION_STATUS, handler: (event: unknown) => void): void;
+  replaceClientToken(clientToken: ProviderClientToken): void;
   disconnect(): void;
   destroy(): void;
 }
@@ -164,6 +165,9 @@ function createMemoryProvider(
     on(eventName, handler) {
       if (eventName === EVENT_CONNECTION_STATUS) handlers.add(handler);
     },
+    replaceClientToken() {
+      // The memory provider does not authenticate transport messages.
+    },
     disconnect() {
       transitionOffline();
     },
@@ -188,10 +192,24 @@ export function createMarkLabYjsProvider(
     return createMemoryProvider(ydoc, providerDocId, options);
   }
 
-  return createYjsProvider(
+  const validateClientToken = (clientToken: ProviderClientToken) => {
+    if (clientToken.docId !== providerDocId) throw new Error('provider_client_token_doc_mismatch');
+    if (clientToken.authorization !== 'full') throw new Error('provider_client_token_authorization_denied');
+  };
+  const provider = createYjsProvider(
     ydoc,
     providerDocId,
     clientTokenFactory as never,
     options as never,
-  ) as MarkLabYjsProvider;
+  ) as unknown as MarkLabYjsProvider & { clientToken?: ProviderClientToken | null };
+
+  return {
+    on: provider.on.bind(provider),
+    replaceClientToken(clientToken) {
+      validateClientToken(clientToken);
+      provider.clientToken = clientToken;
+    },
+    disconnect: provider.disconnect.bind(provider),
+    destroy: provider.destroy.bind(provider),
+  };
 }

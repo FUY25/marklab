@@ -8,8 +8,12 @@ import { Awareness } from 'y-protocols/awareness';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
 import {
+  createActiveEditSession,
   createCollabSessionClient,
+  isTerminalProviderRefreshError,
   providerTokenRefreshDelayMs,
+  providerTokenRefreshRetryDelayMs,
+  type ActiveEditSession,
   type IssuedProviderToken,
 } from '../api/collab-session';
 import {
@@ -101,6 +105,7 @@ export function CollaborativeMarkdownEditor({
     const ytext = ydoc.getText('contents');
     const editableCompartment = new Compartment();
     const providerTokenRef: { current: IssuedProviderToken | null } = { current: null };
+    const activeSessionRef: { current: ActiveEditSession | null } = { current: null };
 
     const markUnavailable = (reason: string) => {
       if (disposed) return;
@@ -112,16 +117,58 @@ export function CollaborativeMarkdownEditor({
       setUnavailableReason(reason);
     };
 
-    const scheduleRefresh = (providerToken: IssuedProviderToken) => {
+    const attemptRefresh = (allowImmediateAfterSuccess: boolean) => {
+      const activeSession = activeSessionRef.current;
+      if (!activeSession || unavailable || disposed) return;
+      void client.refreshProviderToken(activeSession).then((nextToken) => {
+        if (disposed || unavailable) return;
+        if (
+          nextToken.providerDocId !== activeSession.providerToken.providerDocId ||
+          nextToken.sessionId !== activeSession.sessionId ||
+          nextToken.authorization !== 'full' ||
+          nextToken.clientToken.authorization !== 'full'
+        ) {
+          markUnavailable('invalid_provider_token_refresh');
+          return;
+        }
+        activeSessionRef.current = { ...activeSession, providerToken: nextToken };
+        providerTokenRef.current = nextToken;
+        try {
+          provider?.replaceClientToken(nextToken.clientToken);
+        } catch (replaceError) {
+          markUnavailable(replaceError instanceof Error ? replaceError.message : 'invalid_provider_token_refresh');
+          return;
+        }
+        scheduleRefresh(nextToken, allowImmediateAfterSuccess);
+      }).catch((error: unknown) => {
+        if (disposed || unavailable) return;
+        if (isTerminalProviderRefreshError(error)) {
+          markUnavailable(error instanceof Error ? error.message : 'provider_token_refresh_denied');
+          return;
+        }
+        if (!unavailable && !disposed) setConnectionState('reconnecting');
+        scheduleRetry();
+      });
+    };
+
+    const scheduleRetry = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
-        void client.refreshProviderToken().then((nextToken) => {
-          providerTokenRef.current = nextToken;
-          scheduleRefresh(nextToken);
-        }).catch((error: unknown) => {
-          markUnavailable(error instanceof Error ? error.message : 'provider_token_refresh_denied');
-        });
-      }, providerTokenRefreshDelayMs(providerToken));
+        attemptRefresh(true);
+      }, providerTokenRefreshRetryDelayMs());
+    };
+
+    const scheduleRefresh = (providerToken: IssuedProviderToken, allowImmediate = true) => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      const refreshDelayMs = providerTokenRefreshDelayMs(
+        providerToken,
+        Date.now(),
+        undefined,
+        { allowImmediate },
+      );
+      refreshTimer = setTimeout(() => {
+        attemptRefresh(refreshDelayMs > 0);
+      }, refreshDelayMs);
     };
 
     void client.createSession({
@@ -132,6 +179,7 @@ export function CollaborativeMarkdownEditor({
       token,
     }).then((session) => {
       if (disposed || session.mode !== 'edit' || !editorHostRef.current) return;
+      activeSessionRef.current = createActiveEditSession({ docId, branchId }, session);
       providerTokenRef.current = session.providerToken;
       bindSessionIdentity(ydoc, session.providerToken);
       awareness = new Awareness(ydoc);

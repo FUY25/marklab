@@ -89,6 +89,10 @@ export interface CollabSessionClientOptions {
   fetcher?: typeof fetch;
 }
 
+export interface ProviderTokenRefreshDelayOptions {
+  allowImmediate?: boolean;
+}
+
 export class CollabSessionError extends Error {
   readonly status: number;
   readonly code: string;
@@ -234,19 +238,43 @@ export function providerTokenRefreshDelayMs(
   providerToken: Pick<IssuedProviderToken, 'expiresAt'>,
   nowMs = Date.now(),
   policy: ProviderTokenPolicy = DEFAULT_PROVIDER_TOKEN_POLICY,
+  options: ProviderTokenRefreshDelayOptions = {},
 ): number {
   const expiresAtMs = Date.parse(providerToken.expiresAt);
   if (!Number.isFinite(expiresAtMs)) throw new Error('invalid_provider_token_expiry');
   const refreshAtMs = expiresAtMs - policy.refreshMarginSeconds * millisecondsPerSecond;
   const refreshDelayMs = refreshAtMs - nowMs;
   if (refreshDelayMs > 0) return refreshDelayMs;
+  if (options.allowImmediate !== false) return 0;
   return policy.refreshCheckIntervalSeconds * millisecondsPerSecond;
+}
+
+export function providerTokenRefreshRetryDelayMs(
+  policy: ProviderTokenPolicy = DEFAULT_PROVIDER_TOKEN_POLICY,
+): number {
+  return policy.refreshCheckIntervalSeconds * millisecondsPerSecond;
+}
+
+export function isTerminalProviderRefreshError(error: unknown): boolean {
+  return error instanceof CollabSessionError && error.status >= 400 && error.status < 500;
+}
+
+export function createActiveEditSession(
+  request: Pick<CollabSessionRequest, 'docId' | 'branchId'>,
+  session: EditCollabSession,
+): ActiveEditSession {
+  return {
+    docId: request.docId,
+    branchId: request.branchId,
+    sessionId: session.session.sessionId,
+    refreshToken: session.session.refreshToken,
+    providerToken: session.providerToken,
+  };
 }
 
 export function createCollabSessionClient(options: CollabSessionClientOptions = {}) {
   const apiUrl = options.apiUrl ?? MARKLAB_API_URL;
   const fetcher = options.fetcher ?? fetch;
-  let activeEditSession: ActiveEditSession | null = null;
 
   async function createSession(request: CollabSessionRequest): Promise<CollabSession> {
     const path = withQueryToken(collabSessionPath(request), request.token);
@@ -260,20 +288,10 @@ export function createCollabSessionClient(options: CollabSessionClientOptions = 
         displayName: request.displayName,
       }),
     });
-    const session = parseCollabSession(await readJsonResponse(response));
-    if (session.mode === 'edit') {
-      activeEditSession = {
-        docId: request.docId,
-        branchId: request.branchId,
-        sessionId: session.session.sessionId,
-        refreshToken: session.session.refreshToken,
-        providerToken: session.providerToken,
-      };
-    }
-    return session;
+    return parseCollabSession(await readJsonResponse(response));
   }
 
-  async function refreshProviderToken(session: ActiveEditSession | null = activeEditSession): Promise<IssuedProviderToken> {
+  async function refreshProviderToken(session: ActiveEditSession): Promise<IssuedProviderToken> {
     if (!session) throw new Error('edit_session_not_started');
     const response = await fetcher(withApiUrl(apiUrl, providerTokenRefreshPath(session)), {
       method: 'POST',
@@ -282,14 +300,11 @@ export function createCollabSessionClient(options: CollabSessionClientOptions = 
       body: JSON.stringify({ refreshToken: session.refreshToken }),
     });
     const body = requireRecord(await readJsonResponse(response), 'provider_token_refresh');
-    const providerToken = parseProviderToken(body.providerToken);
-    activeEditSession = { ...session, providerToken };
-    return providerToken;
+    return parseProviderToken(body.providerToken);
   }
 
   return {
     createSession,
     refreshProviderToken,
-    getActiveEditSession: () => activeEditSession,
   };
 }
