@@ -26,6 +26,7 @@ function entry(input) {
     webUrl: input.webUrl ?? 'http://127.0.0.1:5175',
     localUrl: input.localUrl ?? 'http://127.0.0.1:5175/local#token=test',
     token: input.token ?? 'test-token',
+    ownerKind: input.ownerKind,
   });
 }
 
@@ -44,6 +45,11 @@ describe('daemon supervisor registry', () => {
     await expect(readDaemonRegistry(registryPath)).resolves.toMatchObject({
       daemons: [expect.objectContaining({ pid: 100 })],
     });
+  });
+
+  it('records whether the daemon is owned by the CLI or native app', () => {
+    expect(entry({ pid: 100 })).toMatchObject({ ownerKind: 'cli' });
+    expect(entry({ pid: 101, ownerKind: 'app' })).toMatchObject({ ownerKind: 'app' });
   });
 
   it('cleans stale registry entries when their process is gone', async () => {

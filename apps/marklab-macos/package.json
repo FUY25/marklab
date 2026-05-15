@@ -1,0 +1,26 @@
+{
+  "name": "@marklab/marklab-macos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "swift build",
+    "test": "swift test",
+    "smoke:native-browser": "tsx smoke/native-browser-smoke.ts"
+  },
+  "dependencies": {
+    "@marklab/api": "workspace:*",
+    "@marklab/collab-editor": "workspace:*",
+    "@y-sweet/client": "0.9.1",
+    "@y-sweet/sdk": "0.9.1",
+    "ws": "^8.18.0",
+    "y-protocols": "^1.0.6",
+    "y-sweet": "0.9.1",
+    "yjs": "^13.6.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

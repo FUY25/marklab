@@ -79,6 +79,22 @@ export function createLocalTokenGuard(options: HttpAppOptions) {
   };
 }
 
+async function readLocalShareState(service: LocalFileService, options: HttpAppOptions) {
+  if (options.localRelayHost) return await options.localRelayHost.shareState();
+  if (options.localRelayMirror) return await options.localRelayMirror.shareState();
+
+  return {
+    localPath: service.getSummary().absolutePath,
+    relayRoomId: null,
+    hostOnline: false,
+    hostSessionId: null,
+    sharedRevision: null,
+    lastSharedHash: null,
+    links: [],
+    sessions: [],
+  };
+}
+
 export function createLocalFileRoutes(localFileService: LocalFileService | undefined, options: HttpAppOptions = {}) {
   const router = Router();
   if (localFileService) router.use('/local', createLocalTokenGuard(options));
@@ -87,6 +103,23 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     const service = requireLocalFileService(localFileService, res);
     if (!service) return;
     res.json(service.getSummary());
+  });
+
+  router.get('/local/app-context', async (_req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
+
+    try {
+      const document = service.getSummary();
+      res.json({
+        document,
+        versions: service.listVersions(),
+        conflict: document.conflict,
+        shareState: await readLocalShareState(service, options),
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post('/local/flush', async (_req: Request, res: Response, next: NextFunction) => {
@@ -169,26 +202,20 @@ export function createLocalFileRoutes(localFileService: LocalFileService | undef
     if (!service) return;
 
     try {
-      if (options.localRelayHost) {
-        res.json(await options.localRelayHost.shareState());
-        return;
-      }
+      res.json(await readLocalShareState(service, options));
+    } catch (error) {
+      next(error);
+    }
+  });
 
-      if (options.localRelayMirror) {
-        res.json(await options.localRelayMirror.shareState());
-        return;
-      }
+  router.post('/local/sharing', async (_req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
 
-      res.json({
-        localPath: service.getSummary().absolutePath,
-        relayRoomId: null,
-        hostOnline: false,
-        hostSessionId: null,
-        sharedRevision: null,
-        lastSharedHash: null,
-        links: [],
-        sessions: [],
-      });
+    try {
+      if (!options.localRelayHost) throw new Error('relay_service_not_configured');
+      await options.localRelayHost.ensureHosted();
+      res.json(await readLocalShareState(service, options));
     } catch (error) {
       next(error);
     }

@@ -1,4 +1,4 @@
-import { MARKLAB_API_URL } from './collab-session';
+import { MARKLAB_API_URL } from '@marklab/collab-editor';
 
 export type WorkspaceRole = 'Owner' | 'Member' | 'Reader';
 export type WorkspaceInviteRole = 'Member' | 'Reader';

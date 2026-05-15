@@ -528,6 +528,60 @@ describe('collab session routes', () => {
     expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user', `session:${response.body.session.sessionId}`, 'grant_1']));
   });
 
+  it('does not let public edit links claim native app client kind', async () => {
+    const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .send({ mode: 'edit', clientKind: 'app', displayName: 'Browser Guest' })
+      .expect(201);
+
+    expect(response.body.session.clientKind).toBe('browser');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user', `session:${response.body.session.sessionId}`, 'grant_1']));
+  });
+
+  it('preserves native app client kind only for first-party bearer app requests', async () => {
+    const auth = createAuth({ grantId: null, actorId: 'user_1' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionActorGrantId: null, activeSessionActorId: 'user_1', activeSessionIsGuest: false });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .set({
+        Authorization: 'Bearer ml_user_native',
+        'X-MarkLab-Native-App': '1',
+      })
+      .send({ mode: 'edit', clientKind: 'app', displayName: 'MarkLab.app' })
+      .expect(201);
+
+    expect(response.body.session.clientKind).toBe('app');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['app', 'user', 'user_1', null]));
+  });
+
+  it('does not treat a junk bearer plus cookie as native app proof', async () => {
+    const auth = createAuth({ grantId: null, actorId: 'user_1' });
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionActorGrantId: null, activeSessionActorId: 'user_1', activeSessionIsGuest: false });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    const response = await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .set({
+        Authorization: 'Bearer garbage',
+        Cookie: 'marklab_session=reader-token',
+        'X-MarkLab-Native-App': '1',
+      })
+      .send({ mode: 'edit', clientKind: 'app', displayName: 'Browser With Cookie' })
+      .expect(201);
+
+    expect(response.body.session.clientKind).toBe('browser');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['browser', 'user', 'user_1', null]));
+  });
+
   it('mints edit provider tokens for server-verified logged-in users', async () => {
     const auth = createAuth({ grantId: null, actorId: 'user_1' });
     const providerTokenService = createProviderTokenService();

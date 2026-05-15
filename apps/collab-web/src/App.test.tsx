@@ -3,7 +3,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
-import { App } from './App';
+import { App, collabClientKindFromParam } from './App';
 
 vi.mock('@y-sweet/client', async () => {
   const actual = await vi.importActual<typeof import('@y-sweet/client')>('@y-sweet/client');
@@ -31,6 +31,36 @@ function viewSessionResponse(): Response {
   });
 }
 
+function downgradedNativeEditSessionResponse(): Response {
+  return new Response(JSON.stringify({
+    mode: 'edit',
+    session: {
+      sessionId: 'session_downgraded',
+      clientKind: 'browser',
+      displayName: 'MarkLab.app',
+      refreshToken: 'refresh_session_secret',
+    },
+    providerToken: {
+      providerDocId: 'ml_doc_1',
+      sessionId: 'session_downgraded',
+      authorization: 'full',
+      validForSeconds: 600,
+      issuedAt: '2026-05-15T12:00:00.000Z',
+      expiresAt: '2026-05-15T12:10:00.000Z',
+      clientToken: {
+        docId: 'ml_doc_1',
+        url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
+        baseUrl: 'https://api.example.test/d/ml_doc_1',
+        token: 'ysweet_token',
+        authorization: 'full',
+      },
+    },
+  }), {
+    status: 201,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 describe('App routing', () => {
   beforeEach(() => {
     window.history.pushState({}, '', '/?mode=view&docId=doc_1&branchId=branch_1&token=view_token');
@@ -38,6 +68,7 @@ describe('App routing', () => {
   });
 
   afterEach(() => {
+    delete window.__marklabNativeApp;
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -54,5 +85,23 @@ describe('App routing', () => {
         body: JSON.stringify({ mode: 'view', clientKind: 'browser', displayName: 'Guest' }),
       }),
     );
+  });
+
+  it('uses app clientKind only when the native wrapper marks the embedded route', () => {
+    expect(collabClientKindFromParam('app', true)).toBe('app');
+    expect(collabClientKindFromParam('app', false)).toBe('browser');
+    expect(collabClientKindFromParam('browser')).toBe('browser');
+    expect(collabClientKindFromParam(null)).toBe('browser');
+  });
+
+  it('marks native embedded edit unavailable when the server downgrades clientKind', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app');
+    vi.stubGlobal('fetch', vi.fn(async () => downgradedNativeEditSessionResponse()));
+
+    render(<App />);
+
+    expect(await screen.findByText('invalid_edit_session_client_kind')).toBeTruthy();
+    expect(ySweetClient.createYjsProvider).not.toHaveBeenCalled();
   });
 });

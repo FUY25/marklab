@@ -1,4 +1,4 @@
-import type { ActiveEditSession, RefreshableEditSession } from './collab-session';
+import type { ActiveEditSession, RefreshableEditSession } from '@marklab/collab-editor';
 
 const persistedSessionVersion = 1;
 

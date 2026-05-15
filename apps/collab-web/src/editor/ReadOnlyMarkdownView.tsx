@@ -4,7 +4,7 @@ import {
   type CollabSession,
   type CollabSessionRequest,
   type ViewCollabSession,
-} from '../api/collab-session';
+} from '@marklab/collab-editor';
 import { renderMarkdownSnapshot } from './markdown-render';
 
 export interface ReadOnlyMarkdownSessionClient {

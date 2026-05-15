@@ -5,9 +5,11 @@ import {
 
 const millisecondsPerSecond = 1000;
 
-export const MARKLAB_API_URL = import.meta.env.VITE_MARKLAB_API_URL?.replace(/\/+$/u, '') ?? '';
+const envApiUrl = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MARKLAB_API_URL;
 
-export type CollabClientKind = 'browser';
+export const MARKLAB_API_URL = envApiUrl?.replace(/\/+$/u, '') ?? '';
+
+export type CollabClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
 export type CollabMode = 'view' | 'edit';
 export type ProviderAuthorization = 'full' | 'read-only';
 
@@ -88,6 +90,7 @@ export type RefreshableEditSession = Pick<ActiveEditSession, 'docId' | 'branchId
 
 export interface CollabSessionClientOptions {
   apiUrl?: string;
+  clientKind?: CollabClientKind;
   fetcher?: typeof fetch;
 }
 
@@ -282,6 +285,7 @@ export function createActiveEditSession(
 
 export function createCollabSessionClient(options: CollabSessionClientOptions = {}) {
   const apiUrl = options.apiUrl ?? MARKLAB_API_URL;
+  const clientKind = options.clientKind ?? 'browser';
   const fetcher = options.fetcher ?? fetch;
 
   async function createSession(request: CollabSessionRequest): Promise<CollabSession> {
@@ -292,7 +296,7 @@ export function createCollabSessionClient(options: CollabSessionClientOptions = 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         mode: request.mode,
-        clientKind: 'browser' satisfies CollabClientKind,
+        clientKind,
         displayName: request.displayName,
       }),
     });

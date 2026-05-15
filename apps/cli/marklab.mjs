@@ -137,7 +137,7 @@ export function parseCliArgs(argv) {
 
   if (command === 'share') {
     const file = positionalArgs(rest)[0] ?? null;
-    return { command, file, json };
+    return { command, file, json, daemonOnly: rest.includes('--daemon-only') };
   }
 
   if (command === 'share-state') {
@@ -382,7 +382,7 @@ export function ensurePackagedRuntimeWorkspaceLinks(activeRepoRoot = repoRoot, r
   const scopeRoot = resolve(runtimeRoot, 'node_modules/@marklab');
   mkdirSync(scopeRoot, { recursive: true });
 
-  for (const name of ['shared', 'markdown']) {
+  for (const name of ['shared', 'markdown', 'collab-editor']) {
     const linkPath = resolve(scopeRoot, name);
     const target = `../../packages/${name}`;
     try {
@@ -630,8 +630,17 @@ async function ensureBackgroundDaemon(file) {
   return startBackgroundDaemon(markdownPath);
 }
 
-async function shareJsonCommand(file) {
+async function shareJsonCommand(file, options = {}) {
   const { daemon, reused } = await ensureBackgroundDaemon(file);
+  if (options.daemonOnly) {
+    writeAgentJson(agentSuccess({
+      path: daemon.realpath,
+      reusedDaemon: reused,
+      browserUrl: daemon.localUrl ?? null,
+      apiUrl: daemon.apiUrl,
+    }));
+    return;
+  }
   const created = await createLocalRelayLink(daemon.apiUrl, daemon.token, 'edit');
   writeAgentJson(agentSuccess({
     path: daemon.realpath,
@@ -1165,7 +1174,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (input.command === 'share' && input.file) {
-    if (input.json) await shareJsonCommand(input.file);
+    if (input.json) await shareJsonCommand(input.file, { daemonOnly: input.daemonOnly });
     else await shareForeground(input.file);
     return;
   }

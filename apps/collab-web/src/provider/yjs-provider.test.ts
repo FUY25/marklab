@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import type { ProviderClientToken } from '../api/collab-session';
+import type { ProviderClientToken } from '@marklab/collab-editor';
 
 let capturedAuthEndpoint: (() => Promise<ProviderClientToken>) | null = null;
 let capturedWebSocketPolyfill: typeof WebSocket | null = null;

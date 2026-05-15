@@ -37,6 +37,7 @@ export function createDaemonEntry(input) {
     webUrl: input.webUrl,
     localUrl: input.localUrl,
     token: input.token,
+    ownerKind: input.ownerKind === 'app' ? 'app' : 'cli',
     startedAt: input.startedAt ?? now,
     updatedAt: input.updatedAt ?? now,
   };

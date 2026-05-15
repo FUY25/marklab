@@ -126,6 +126,7 @@ describe('agent relay commands', () => {
       command: 'share',
       file: 'README.md',
       json: true,
+      daemonOnly: false,
     });
     expect(parseCliArgs(['share-state', 'README.md', '--json'])).toEqual({
       command: 'share-state',

@@ -64,12 +64,21 @@ function serverActorFromAccess(access: Awaited<ReturnType<HttpRequestAuth['requi
 }
 
 function serverClientKind(
-  actor: { actorType: 'agent' | 'user' },
+  actor: { actorType: 'agent' | 'user'; actorId?: string; grantId?: string },
   requestedClientKind: ProviderTokenClientKind,
+  nativeAppProof: boolean,
 ): ProviderTokenClientKind {
   if (actor.actorType === 'agent') return 'agent';
-  if (requestedClientKind === 'app' || requestedClientKind === 'daemon') return requestedClientKind;
+  if (requestedClientKind === 'app') {
+    return nativeAppProof && !accessIsGuest(actor) ? 'app' : 'browser';
+  }
+  if (requestedClientKind === 'daemon') return requestedClientKind;
   return 'browser';
+}
+
+function requestHasNativeAppProof(req: Request): boolean {
+  const authorization = req.get('authorization') ?? '';
+  return req.get('x-marklab-native-app') === '1' && /^Bearer\s+ml_user_/iu.test(authorization);
 }
 
 function devAnonymousAccessEnabled(options: HttpAppOptions): boolean {
@@ -441,7 +450,7 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
         const access = serverActorFromAccess(await auth.requireDocumentAccess(req, docId, branchId, 'read'));
         assertProviderTokenAccessIsExplicit(access, devAnonymousAccess);
         const document = await readCurrentMarkdownSnapshot(pool, options, docId, branchId);
-        const clientKind = serverClientKind(access, body.clientKind);
+        const clientKind = serverClientKind(access, body.clientKind, requestHasNativeAppProof(req));
         const sessionActor = providerAuditActorFromAccess(access, sessionId);
         await recordCollabSession(pool, {
           sessionId,
@@ -490,7 +499,7 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
       assertProviderTokenAccessIsExplicit(access, devAnonymousAccess);
       const providerDoc = await ensureProviderDocId(pool, { docId, branchId });
       const refreshToken = createCollabSessionRefreshToken();
-      const clientKind = serverClientKind(access, body.clientKind);
+      const clientKind = serverClientKind(access, body.clientKind, requestHasNativeAppProof(req));
       const sessionActor = providerAuditActorFromAccess(access, sessionId);
       const isGuestSession = accessIsGuest(access);
       await recordCollabSession(pool, {

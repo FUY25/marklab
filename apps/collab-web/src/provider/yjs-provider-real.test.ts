@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import type { ProviderClientToken } from '../api/collab-session';
+import type { ProviderClientToken } from '@marklab/collab-editor';
 import { createMarkLabYjsProvider, type MarkLabYjsProviderOptions } from './yjs-provider';
 
 function clientToken(input: Partial<ProviderClientToken> = {}): ProviderClientToken {

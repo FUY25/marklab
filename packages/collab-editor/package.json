@@ -1,0 +1,29 @@
+{
+  "name": "@marklab/collab-editor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.1",
+    "@marklab/shared": "workspace:*",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.0"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@types/node": "^22.0.0",
+    "jsdom": "^27.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

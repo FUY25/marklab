@@ -7,7 +7,7 @@ import {
   persistedEditSessionStorageKey,
   persistEditSession,
 } from './edit-session-storage';
-import type { ActiveEditSession } from './collab-session';
+import type { ActiveEditSession } from '@marklab/collab-editor';
 
 const storageInput = { docId: 'doc_1', branchId: 'branch_1', token: 'share_token' };
 

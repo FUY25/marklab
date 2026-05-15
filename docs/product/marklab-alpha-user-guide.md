@@ -16,6 +16,16 @@ MarkLab lets you share and collaboratively edit a local Markdown file.
 
 The local `.md` file on the host machine is the source of truth. The hosted relay coordinates live collaboration, but it is not a document storage system. If the host daemon is offline, remote editing stops until the host opens MarkLab again.
 
+## MarkLab.app Development Alpha
+
+The native app source now lives in `apps/marklab-macos/` for development builds. It opens and saves local Markdown files in a native source-editing window. Native app share actions use the hosted control plane: they import the local Markdown into a selected workspace, create document access grants, and produce browser `/collab` edit/view links. Edit sessions identify themselves as `clientKind: "app"`, and provider-token refresh uses the control-plane session refresh token rather than share-link or provider-token internals.
+
+The native app is not part of the public npm install flow yet. For this alpha, normal users should still use the CLI commands below. Engineers can verify the native/browser collaboration path with:
+
+```sh
+npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser
+```
+
 ## Requirements
 
 Normal users need:

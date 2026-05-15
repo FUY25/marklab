@@ -9,44 +9,42 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
 import {
   createActiveEditSession,
+  createAwarenessUser,
   createCollabSessionClient,
+  createCursorAwareness,
+  createIndexedDbPersistenceKey,
+  createRemoteCursorExtension,
+  createYTextCodeMirrorBinding,
   isTerminalProviderRefreshError,
   providerTokenRefreshDelayMs,
   providerTokenRefreshRetryDelayMs,
+  summarizeRemoteCursors,
+  ySyncAnnotation,
   type ActiveEditSession,
   type IssuedProviderToken,
+  type MarkLabAwarenessState,
   type RefreshableEditSession,
-} from '../api/collab-session';
+  type RemoteCursorSummary,
+  type YTextCodeMirrorBinding,
+} from '@marklab/collab-editor';
 import {
   clearPersistedEditSession,
   loadPersistedEditSession,
   persistEditSession,
   type PersistedEditSession,
 } from '../api/edit-session-storage';
-import {
-  createIndexedDbPersistenceKey,
-  createYTextCodeMirrorBinding,
-  ySyncAnnotation,
-  type YTextCodeMirrorBinding,
-} from './ytext-codemirror';
-import {
-  createAwarenessUser,
-  createCursorAwareness,
-  type MarkLabAwarenessState,
-} from '../presence/awareness';
-import {
-  createRemoteCursorExtension,
-  summarizeRemoteCursors,
-  type RemoteCursorSummary,
-} from '../presence/remote-cursors';
 import { createMarkLabYjsProvider, type MarkLabYjsProvider } from '../provider/yjs-provider';
 import { renderMarkdownSnapshot } from './markdown-render';
+import { applyNativeDiskMarkdownToText, postNativeMarkdownSnapshot } from './native-bridge';
+
+type CollabClientKind = 'browser' | 'app';
 
 export interface CollaborativeMarkdownEditorProps {
   docId: string;
   branchId: string;
   token?: string | undefined;
   displayName?: string | undefined;
+  clientKind?: CollabClientKind | undefined;
 }
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'unavailable';
@@ -142,13 +140,14 @@ export function CollaborativeMarkdownEditor({
   branchId,
   token,
   displayName = 'Guest',
+  clientKind = 'browser',
 }: CollaborativeMarkdownEditorProps) {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [markdownPreview, setMarkdownPreview] = useState('');
   const [remoteCursors, setRemoteCursors] = useState<RemoteCursorSummary[]>([]);
-  const client = useMemo(() => createCollabSessionClient(), []);
+  const client = useMemo(() => createCollabSessionClient({ clientKind }), [clientKind]);
 
   useEffect(() => {
     if (!editorHostRef.current) return;
@@ -289,13 +288,16 @@ export function CollaborativeMarkdownEditor({
         token,
       });
       if (session.mode !== 'edit') throw new Error('invalid_edit_session_response');
+      if (clientKind === 'app' && session.session.clientKind !== 'app') {
+        throw new Error('invalid_edit_session_client_kind');
+      }
       const activeSession = createActiveEditSession({ docId, branchId }, session);
       persistEditSession(storageKeyInput, activeSession);
       return editorSessionFromActiveSession(activeSession);
     };
 
     const restoreOrCreateEditSession = async (): Promise<EditorSession> => {
-      const persisted = loadPersistedEditSession(storageKeyInput);
+      const persisted = clientKind === 'app' ? null : loadPersistedEditSession(storageKeyInput);
       if (persisted) {
         const restoredSession = editorSessionFromPersistedSession(persisted);
         try {
@@ -373,17 +375,30 @@ export function CollaborativeMarkdownEditor({
             }),
             createRemoteCursorExtension({ awareness, ytext, localClientId: ydoc.clientID }),
             EditorView.updateListener.of((update) => {
-              if (update.docChanged) setMarkdownPreview(update.state.doc.toString());
+              if (update.docChanged) {
+                const markdown = update.state.doc.toString();
+                setMarkdownPreview(markdown);
+                postNativeMarkdownSnapshot(markdown);
+              }
               if (update.selectionSet || update.focusChanged) publishLocalCursor();
             }),
           ],
         }),
       });
       binding = createYTextCodeMirrorBinding({ view, ytext, preferInitial: 'ytext' });
+      window.__marklabNativeApplyDiskMarkdown = (markdown: string, baseline: string) => (
+        unavailable ? { ok: false, reason: 'unavailable' } : applyNativeDiskMarkdownToText(
+          ytext,
+          (callback, origin) => ydoc.transact(callback, origin),
+          markdown,
+          baseline,
+        )
+      );
       if (import.meta.env.DEV) {
         (window as unknown as { __marklabEditorView?: EditorView }).__marklabEditorView = view;
       }
-      setMarkdownPreview(view.state.doc.toString());
+      const initialMarkdown = view.state.doc.toString();
+      setMarkdownPreview(initialMarkdown);
       if (activeSession.providerToken) {
         installProviderToken(activeSession, activeSession.providerToken, true);
       } else {
@@ -397,6 +412,9 @@ export function CollaborativeMarkdownEditor({
     return () => {
       disposed = true;
       if (refreshTimer) clearTimeout(refreshTimer);
+      if (window.__marklabNativeApplyDiskMarkdown) {
+        delete window.__marklabNativeApplyDiskMarkdown;
+      }
       binding?.destroy();
       view?.destroy();
       if (import.meta.env.DEV) {

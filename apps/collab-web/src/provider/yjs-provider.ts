@@ -6,7 +6,7 @@ import {
 } from '@y-sweet/client';
 import { applyAwarenessUpdate, encodeAwarenessUpdate, type Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import type { ProviderClientToken } from '../api/collab-session';
+import type { ProviderClientToken } from '@marklab/collab-editor';
 
 export interface MarkLabYjsProvider {
   on(eventName: typeof EVENT_CONNECTION_STATUS, handler: (event: unknown) => void): void;

@@ -178,6 +178,123 @@ describe('local file routes', () => {
     expect(shareState).toHaveBeenCalledOnce();
   });
 
+  it('returns one native app context with summary, versions, conflict, and share state', async () => {
+    const service = createFakeLocalFileService();
+    const shareState = vi.fn(async () => ({
+      mode: 'relay-host' as const,
+      localPath: '/tmp/README.md',
+      relayRoomId: 'relay-room-1',
+      hostOnline: true,
+      hostSessionId: 'host-1',
+      sharedRevision: 7,
+      lastSharedHash: 'sha256:shared',
+      links: [{
+        grantId: 'grant_edit',
+        relayRoomId: 'relay-room-1',
+        role: 'edit' as const,
+        label: null,
+        canCopyExistingUrl: false,
+        revokedAt: null,
+        expiresAt: null,
+        createdAt: '2026-05-15T12:00:00.000Z',
+        activeSessionCount: 1,
+        lastCopiedAt: null,
+      }],
+      sessions: [{
+        sessionId: 'session_browser',
+        grantId: 'grant_edit',
+        clientKind: 'browser' as const,
+        displayName: 'Browser',
+        role: 'edit' as const,
+        lastSeenAt: '2026-05-15T12:01:00.000Z',
+      }],
+    }));
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      localFileService: service,
+      localDaemonToken: 'local-secret',
+      localMode: true,
+      localRelayHost: {
+        relayRoomId: 'relay-room-1',
+        resumeHosted: vi.fn(async () => true),
+        ensureHosted: vi.fn(async () => ({ relayRoomId: 'relay-room-1', hostSessionId: 'host-1' })),
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(),
+        createLink: vi.fn(async () => {
+          throw new Error('unexpected_create_link');
+        }),
+        revokeLink: vi.fn(async () => undefined),
+        shareState,
+      },
+    });
+
+    const response = await request(app)
+      .get('/api/local/app-context')
+      .set('Authorization', 'Bearer local-secret')
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      document: {
+        absolutePath: '/tmp/README.md',
+        roomName: 'local:file:test',
+        conflict: null,
+      },
+      versions: [],
+      conflict: null,
+      shareState: {
+        relayRoomId: 'relay-room-1',
+        hostOnline: true,
+        sharedRevision: 7,
+        links: [expect.objectContaining({ grantId: 'grant_edit', role: 'edit' })],
+      },
+    });
+    expect(shareState).toHaveBeenCalledOnce();
+  });
+
+  it('starts local sharing for native app actions through the relay host controller', async () => {
+    const service = createFakeLocalFileService();
+    const ensureHosted = vi.fn(async () => ({ relayRoomId: 'relay-room-1', hostSessionId: 'host-1' }));
+    const shareState = vi.fn(async () => ({
+      mode: 'relay-host' as const,
+      localPath: '/tmp/README.md',
+      relayRoomId: 'relay-room-1',
+      hostOnline: true,
+      hostSessionId: 'host-1',
+      sharedRevision: 1,
+      lastSharedHash: 'sha256:shared',
+      links: [],
+      sessions: [],
+    }));
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      localFileService: service,
+      localDaemonToken: 'local-secret',
+      localMode: true,
+      localRelayHost: {
+        relayRoomId: null,
+        resumeHosted: vi.fn(async () => false),
+        ensureHosted,
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(),
+        createLink: vi.fn(async () => {
+          throw new Error('unexpected_create_link');
+        }),
+        revokeLink: vi.fn(async () => undefined),
+        shareState,
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/local/sharing')
+      .set('Authorization', 'Bearer local-secret')
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      relayRoomId: 'relay-room-1',
+      hostOnline: true,
+    });
+    expect(ensureHosted).toHaveBeenCalledOnce();
+    expect(shareState).toHaveBeenCalledOnce();
+  });
+
   it('does not mount cloud document or hosted AI write routes in local mode', async () => {
     const service = createFakeLocalFileService();
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {

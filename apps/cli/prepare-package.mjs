@@ -11,6 +11,7 @@ const packageJsonBackupPath = resolve(cliRoot, '.package-json.prepack-backup');
 const runtimeEntries = [
   ['apps/api', 'apps/api'],
   ['apps/web', 'apps/web'],
+  ['packages/collab-editor', 'packages/collab-editor'],
   ['packages/markdown', 'packages/markdown'],
   ['packages/shared', 'packages/shared'],
   ['pnpm-workspace.yaml', 'pnpm-workspace.yaml'],
@@ -24,6 +25,7 @@ async function prepareRuntime() {
     ...packageJson,
     dependencies: {
       ...packageJson.dependencies,
+      '@marklab/collab-editor': 'file:runtime/packages/collab-editor',
       '@marklab/markdown': 'file:runtime/packages/markdown',
       '@marklab/shared': 'file:runtime/packages/shared',
     },

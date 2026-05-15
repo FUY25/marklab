@@ -13,6 +13,7 @@ playwright-report/
 .playwright-cli/
 .vite/
 .vite-temp/
+.build/
 
 # Local environment
 .env

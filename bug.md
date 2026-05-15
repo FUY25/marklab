@@ -218,6 +218,28 @@ This file records correctness/security bugs found by plan-level review passes.
     - Impact: quota/private-mode failures could make an already readable persisted session invisible on reload, causing a fresh session and orphaned IndexedDB edits.
     - Resolution: storage reads no longer run the write probe; only writes require writable storage. Unit coverage verifies an existing session still loads when the storage probe would throw.
 
+## Plan 4 Native Integration Review Findings
+
+1. Native share controls used the old local relay path instead of the login-backed control plane.
+   - Impact: native-created links could bypass workspace ownership, workspace document lists, member/guest limits, and access-grant semantics required by the control-plane spec.
+   - Resolution: added `NativeControlPlaneShareClient` and `NativeHostedShareController`. MarkLab.app now uses hosted control-plane env credentials (`MARKLAB_CONTROL_PLANE_API_URL`, `MARKLAB_PUBLIC_WEB_URL`, `MARKLAB_USER_TOKEN`, `MARKLAB_WORKSPACE_ID`) to import the local Markdown file into a workspace and create document access grants. Local relay endpoints remain CLI/local-daemon compatibility only.
+
+2. The staged native app shell was not yet a real collaboration editor.
+   - Impact: the app could show status/buttons but could not open a file into an editor surface, bind editor text to the provider, project changes to disk, ingest watcher changes, refresh provider tokens at runtime, or stop editing after terminal refresh denial.
+   - Resolution: added a native Markdown editing window with open/save actions, embedded hosted `/collab` CodeMirror view for edit links, and `NativeCollaborationRuntime` tests for provider-token refresh lifecycle, provider-to-disk projection, disk-to-provider ingestion, and both-sides-changed conflict detection.
+
+3. The native/browser smoke used an in-process TypeScript `Y.Doc` as the native side.
+   - Impact: the smoke could pass while MarkLab.app and its native runtime had no working collaboration behavior.
+   - Resolution: the native/browser smoke now first runs the Swift native runtime gate (`NativeCollaborationRuntimeTests`) before the Y-Sweet app-kind/browser convergence check, so smoke cannot pass when the native runtime contracts fail.
+
+4. Native daemon registry writes did not enforce private file permissions and did not coordinate with the CLI registry lock.
+   - Impact: the local daemon bearer token could be written into `local-daemons.json` with permissions controlled only by process umask, and concurrent app/CLI writes could drop entries.
+   - Resolution: native registry writes now use a `.lock` file compatible with the CLI lock path, write through a temporary file, and force `0600` permissions. Tests cover private mode and lock refusal.
+
+5. Native route-segment encoding used `urlPathAllowed`.
+   - Impact: document ids, branch ids, or grant ids containing `/` could be emitted as multiple path segments and target the wrong route.
+   - Resolution: fixed by adding strict RFC 3986 segment encoding and tests for slash-containing ids.
+
 48. Protocol-relative Markdown links were treated as internal links.
     - Impact: `[x](//attacker.example/path)` could navigate to a third-party URL without `noreferrer`, leaking the collab URL and query token on click.
     - Resolution: protocol-relative links are treated as external and receive `rel="noreferrer noopener"` plus `_blank`. Renderer tests cover this case.
@@ -245,3 +267,163 @@ This file records correctness/security bugs found by plan-level review passes.
 54. Changed seed retries could leave stale provider contents.
     - Impact: deterministic seed client ids made identical retries idempotent, but if the branch Markdown changed after a seed-marker failure, the retry update reused the same Yjs clock range and could be ignored, leaving the provider with stale first-attempt contents.
     - Resolution: seed issuance now reads current provider state when supported and sends a replacement update if existing `contents` differs from the retry seed. Token-service coverage verifies changed retries replace stale contents.
+
+55. MarkLab.app still did not join collaboration after hosted sharing.
+    - Impact: the app could import a file and create a browser edit link, but the native window remained a local `TextEditor`; browser edits would not update the app or project back to disk.
+    - Resolution: `Start Sharing` now creates an edit access grant and loads the hosted `/collab` CodeMirror/Yjs editor in a `WKWebView`. The collab-web editor posts Markdown snapshots through the `marklabNative` bridge, and MarkLab.app projects them to the local file with conflict guards.
+
+56. Provider projection could overwrite external local-file edits.
+    - Impact: a provider update arriving after an AI/editor disk write could save provider Markdown over the local file without checking the projection baseline.
+    - Resolution: `NativeCollaborationRuntime.applyProviderMarkdown` rereads disk, compares disk/provider values against the last projected baseline, and returns conflict without writing when both sides changed. Swift coverage asserts the disk edit survives.
+
+57. Native reconnect reset the projection baseline to current disk.
+    - Impact: after the app restarted, offline disk changes and remote provider changes could be treated as non-conflicting because the in-memory baseline was replaced with current disk.
+    - Resolution: added `NativeProjectionBaselineStore` and reconnect coverage proving the baseline survives runtime recreation and surfaces conflict when disk and provider both changed.
+
+58. Native route paths double-encoded escaped document, branch, and grant ids.
+    - Impact: slash-containing ids could be sent as `%252F` instead of `%2F`, targeting the wrong control-plane/local route.
+    - Resolution: `appendPath` now writes `percentEncodedPath`; Swift tests assert the actual percent-encoded request path for document, branch, and grant ids.
+
+59. Native owner/member edit sessions lacked bearer authentication.
+    - Impact: direct logged-in app edit sessions and refreshes would hit the control plane unauthenticated, leaving only guest-token flows functional.
+    - Resolution: `NativeCollabSessionClient` accepts an optional bearer token and sends it on create/refresh; tests cover Authorization headers and still assert refresh uses only the session refresh token in the body.
+
+60. Terminal native refresh denial left the active session populated.
+    - Impact: callers could keep retrying or editing against stale session state after revocation/expiry/role downgrade denial.
+    - Resolution: terminal 4xx refresh denial now clears the active session and session store, and a regression verifies a second refresh attempt fails locally.
+
+61. Disk ingestion used a full provider-text assignment instead of an explicit provider mutation hook.
+    - Impact: the runtime abstraction hid the required disk-to-provider mutation boundary and made it easy to bypass origin tagging.
+    - Resolution: added `NativeProviderTextAdapter.applyDiskMarkdown(_:replacing:origin:)`; disk ingestion now calls that hook with `marklab.native.disk`, and tests assert the baseline/origin values.
+
+62. Native/browser smoke described a generic disk writer as native projection.
+    - Impact: smoke output could imply MarkLab.app projection was gated when only an in-process helper was writing the file.
+    - Resolution: the smoke now builds the `MarkLabApp` product, runs the Swift runtime gate, and uses a hosted-native-webview projection helper with the same conflict guard shape as the WKWebView bridge. Smoke output includes `nativeAppBuildGate` and `nativeWebViewProjectionGate`.
+
+63. Share management UI omitted revoke/copy actions and visible share state.
+    - Impact: the native app did not expose all required Plan 4 share-management controls even though some daemon helpers existed.
+    - Resolution: MarkLab.app now shows the latest browser link, supports copying it, stores the latest grant id, and revokes it through the hosted control-plane access-grant API.
+
+64. WKWebView bridge messages could write the local file from arbitrary content.
+    - Impact: a navigated page, injected frame, or wrong-origin document could call `window.webkit.messageHandlers.marklabNative.postMessage` and overwrite the currently opened Markdown file.
+    - Resolution: added hosted-webview origin/path helpers, made the coordinator block navigation outside the expected `/collab` origin, require main-frame messages, and validate message origin/path before accepting Markdown snapshots.
+
+65. Embedded native collaboration sessions were still recorded as browser clients.
+    - Impact: MarkLab.app loaded a normal browser edit link, so the control plane saw `clientKind: "browser"` instead of `clientKind: "app"` for native UI sessions.
+    - Resolution: embedded native URLs append `clientKind=app`, `apps/collab-web` parses that parameter, and the shared session client is constructed with the app client kind for that route.
+
+66. Shared local-file edits were not ingested from disk by the production app.
+    - Impact: AI/editor writes to the shared `.md` while MarkLab.app was open would never reach the provider.
+    - Resolution: MarkLab.app now polls the opened shared file, detects one-sided disk changes, and sends them into the embedded CodeMirror/Yjs editor through `window.__marklabNativeApplyDiskMarkdown`; concurrent disk/shared divergence opens a conflict.
+
+67. CLI/app boundary was not connected from the production app.
+    - Impact: the CLI could start its own daemon, but MarkLab.app did not create a discoverable daemon boundary while the app owned a file.
+    - Resolution: after hosted sharing succeeds, MarkLab.app launches `marklab share <file> --json` in the background to create or reuse the local daemon registry entry without opening a browser or stealing focus. `MARKLAB_CLI_COMMAND` can override the command and `MARKLAB_APP_SKIP_LOCAL_DAEMON=1` disables this bridge.
+
+68. Native conflict handling was only a status string.
+    - Impact: divergent disk/provider changes left users with no visibility into the local vs shared versions and no resolution action.
+    - Resolution: the native app now stores local/shared/baseline conflict state and renders a two-pane conflict surface with `Accept Local` and `Keep Shared` actions.
+
+69. Native projection wrote every editor transaction immediately.
+    - Impact: each Yjs/CodeMirror transaction caused a disk write instead of the required debounced projection boundary, increasing race surface.
+    - Resolution: MarkLab.app now debounces shared snapshot projection for approximately two seconds, while `Save` flushes any pending shared projection immediately.
+
+70. Native/browser smoke overstated WebView coverage.
+    - Impact: the smoke's disk writer was a TypeScript helper and did not exercise WKWebView bridge security or debounce behavior.
+    - Resolution: added Swift coverage for hosted-WebView origin/path policy and kept the smoke honest by separately reporting `nativeAppBuildGate`, `nativeRuntimeGate`, and `nativeWebViewProjectionGate`.
+
+71. Disk edits were acknowledged before the WebView applied them to Y.Text.
+    - Impact: if the embedded editor was still loading, navigated, unavailable, or missing the JS bridge, MarkLab.app could advance `lastProjectedMarkdown` and drop a local disk edit without ever applying it to the provider.
+    - Resolution: pending disk ingestion now carries the expected baseline and waits for the WebView bridge result before updating Swift baseline state. The coordinator retries bridge calls while the editor loads and only acknowledges success after JS returns `ok: true`.
+
+72. Local disk ingestion could overwrite a concurrent remote provider edit.
+    - Impact: Swift checked against a stale local text snapshot, then JS replaced the whole provider Y.Text later; a browser edit arriving between those steps could be silently lost.
+    - Resolution: `window.__marklabNativeApplyDiskMarkdown(markdown, baseline)` now checks the live Y.Text against the expected baseline at mutation time and returns `provider_changed` instead of writing when both sides changed. Unit coverage verifies the provider edit is preserved.
+
+73. The WebView bridge accepted any same-origin `/collab` document.
+    - Impact: a same-origin navigation to a different document/grant could post snapshots into the currently opened local file.
+    - Resolution: bridge navigation and message validation now bind to the exact expected `docId`, `branchId`, `token`, `mode`, and `clientKind` query values, not just origin and path. Swift tests reject wrong-document and wrong-token URLs.
+
+74. Native local daemon APIs were added but not connected to the app UI.
+    - Impact: versions, restore, daemon context, and conflict status remained test-only and the production app did not show whether the CLI/app boundary was ready.
+    - Resolution: after hosted sharing, MarkLab.app starts or reuses `marklab share <file> --json`, reads the local daemon registry, loads `/api/local/app-context`, shows daemon status/version count, and exposes a restore-latest-version action. Native daemon client tests cover versions and restore endpoints.
+
+75. MarkLab.app joined its own document through a public edit grant.
+    - Impact: native editing consumed a collaborator access grant, trusted a route token for the app's first-party session, and could confuse billing/access semantics by making the owner app look like a guest link user.
+    - Resolution: `NativeControlPlaneShareClient` now emits a grantless first-party app editor URL with `clientKind=app`; public edit/view grants are created only by the explicit create-link actions. The WKWebView injects the native bearer token only for same-origin `/api/` fetches, and Swift tests assert the app URL contains no access token.
+
+76. Revoked or expired embedded sessions could still ingest disk edits.
+    - Impact: after the hosted editor became unavailable, `window.__marklabNativeApplyDiskMarkdown` could remain installed and let MarkLab.app advance the disk baseline even though the provider edit was not accepted.
+    - Resolution: the collab editor deletes the native disk-ingestion bridge during cleanup and returns `unavailable` while the editor is unavailable. Swift keeps the pending disk ingestion unacknowledged on non-success responses, so it does not advance the projection baseline after revocation/expiry.
+
+77. Native disk ingestion replaced the whole provider text.
+    - Impact: a small disk edit could delete and reinsert the full Y.Text content, inflating update size and increasing the chance that collaborators see avoidable cursor/selection churn.
+    - Resolution: `applyNativeDiskMarkdownToText` computes a common-prefix/common-suffix middle span and applies only the changed range inside a `marklab.native.disk` transaction. Unit coverage asserts middle-span delete/insert behavior.
+
+78. Exact WKWebView URL checks still accepted malformed same-document URLs.
+    - Impact: duplicate query keys or unknown same-origin parameters could bypass the intended exact expected-URL contract and make bridge authorization depend on URL parsing ambiguity.
+    - Resolution: `nativeHostedWebViewURLIsAllowed` now rejects unknown and duplicate query keys and requires the actual query dictionary to match the expected app editor URL exactly. Swift coverage rejects extra tokens, extra params, and duplicate `clientKind` values.
+
+79. The native/browser smoke still does not launch a GUI WKWebView.
+    - Impact: treating the smoke as full GUI coverage would hide the remaining gap between provider convergence and AppKit/WKWebView automation.
+    - Resolution: the smoke output and design doc now describe this as a native app build/runtime plus hosted projection-helper gate. The actual bridge security and disk-ingestion contracts are covered by Swift WKWebView security tests and collab-web native bridge unit tests; full GUI automation remains a packaging/native-rich follow-up rather than a hidden smoke claim.
+
+80. Native conflict resolution actions re-entered the normal conflict guard.
+    - Impact: `Keep Shared` could recreate the same disk/provider conflict instead of overwriting the local file, and `Accept Local` could send the old baseline to the bridge so the provider rejected the explicit resolution.
+    - Resolution: `Keep Shared` now uses an explicit conflict-resolution projection path that writes the shared side to disk and updates the baseline. `Accept Local` queues the local side against the current shared side as the expected provider baseline, so the bridge replaces Y.Text only if the provider still matches the conflict shown to the user.
+
+81. Empty provider Markdown was treated as an unseeded provider document during native reconnect.
+    - Impact: if a remote collaborator deleted all content while the app was offline, reconnect could seed the provider from disk and silently discard the valid empty remote state.
+    - Resolution: `NativeCollaborationRuntime.openSharedDocument()` seeds an empty provider only when no persisted baseline exists. With a stored baseline, empty provider text is reconciled like any other remote change and projects to disk when disk still equals the baseline.
+
+82. Public browser links could spoof native app session metadata with `clientKind=app`.
+    - Impact: access-link users could make control-plane session/audit rows look like MarkLab.app sessions by editing the URL query parameter.
+    - Resolution: the collab-web route only sends `clientKind=app` when the native wrapper sets `window.__marklabNativeApp`, and the API downgrades `app` to `browser` unless the request is a non-guest bearer request carrying `X-MarkLab-Native-App: 1`. Route tests cover both spoofed public links and first-party native bearer requests.
+
+83. Production MarkLab.app kept projection baselines only in memory.
+    - Impact: after restart, the production hosted-WKWebView path could lose the baseline required to classify offline disk/provider divergence.
+    - Resolution: added `NativeProjectionBaselineRecord` and `FileNativeProjectionBaselineStore`, storing `lastProjectedMarkdown`, `lastProjectedHash`, `lastProviderStateFingerprint`, and `updatedAt` with `0600` permissions. MarkLab.app now loads and updates that store after successful save/projection/ingestion, and Swift tests cover the full tuple plus reconnect behavior.
+
+84. Revoking a collaborator link discarded pending provider-to-disk projection.
+    - Impact: if a shared Markdown snapshot arrived from the hosted editor and the user revoked a link before the debounce fired, the provider/editor state could contain text that never reached the local file or baseline.
+    - Resolution: revoking a public access grant no longer cancels the projection task or clears pending shared/disk ingestion state. Link revocation now only clears the latest public link/grant UI state; pending projection still flushes through the normal guarded path.
+
+85. Native Swift edit-session requests missed the server-required native-app proof header.
+    - Impact: direct native edit-session creation would be downgraded to `clientKind: "browser"` by the API and then rejected by the Swift client.
+    - Resolution: `NativeCollabSessionClient` sends `X-MarkLab-Native-App: 1` whenever it sends a bearer token, and Swift tests assert both Authorization and native-app proof headers on create and refresh requests.
+
+86. Accepting a local conflict could hide the conflict and wedge ingestion when the bridge was unavailable.
+    - Impact: `Accept Local` cleared the conflict before the hosted editor accepted the local Markdown; if the JS bridge was unavailable, the UI could show only a waiting status and never retry the same revision.
+    - Resolution: conflict-resolution ingestion now carries the displayed conflict as failure context, keeps the conflict visible until success, clears it only after `ok: true`, and restores it on bridge failure so the user can retry.
+
+87. Native/browser smoke did not prove the native client kind.
+    - Impact: after server-side spoof protection, the smoke could silently run browser/browser convergence while still claiming app/browser convergence.
+    - Resolution: the app-kind smoke session now sends an `ml_user_...` bearer plus `X-MarkLab-Native-App: 1`, and `requestEditSession()` asserts the server returns the requested client kind before returning the provider client token.
+
+88. API native-app proof accepted any bearer-looking Authorization header.
+    - Impact: a cookie-authenticated browser request with `Authorization: Bearer garbage`, `X-MarkLab-Native-App: 1`, and `clientKind=app` could be recorded as a native app session.
+    - Resolution: `requestHasNativeAppProof()` now requires a MarkLab user-session bearer prefix (`ml_user_`) plus the native marker. API tests cover public-link spoofing, first-party native bearer preservation, and junk-bearer-plus-cookie downgrade.
+
+89. Native baseline persistence failures advanced the in-memory baseline.
+    - Impact: if the app support baseline write failed after a projection or ingestion, the running app could classify future disk/provider divergence against a baseline that would be lost after restart.
+    - Resolution: baseline updates are now throwing operations. The durable `NativeProjectionBaselineStore` write completes before `lastProjectedMarkdown` advances in memory, and runtime coverage verifies a save failure leaves the old baseline active for conflict detection.
+
+90. Stored provider fingerprints used the disk Markdown hash implicitly.
+    - Impact: the baseline tuple contained a `lastProviderStateFingerprint` field, but production callers did not pass an explicit provider-side fingerprint.
+    - Resolution: `NativeProjectionBaselineRecord` now requires a provider fingerprint argument. The hosted-WKWebView MVP stores an explicit `provider-ytext:sha256:...` fingerprint of the provider Y.Text Markdown snapshot; runtime tests assert this stored value after projection/ingestion.
+
+91. Shared-file disk ingestion relied only on polling.
+    - Impact: external local editor or AI writes were not watcher-driven and could wait for the next timer tick.
+    - Resolution: MarkLab.app now installs a macOS `DispatchSourceFileSystemObject` watcher for the opened file and calls the same guarded ingestion path on write/extend/attribute/rename/delete events. The existing timer remains as a backup trigger.
+
+92. Native app daemon bootstrap created a hidden local relay edit grant.
+    - Impact: `Start Sharing` spawned `marklab share <file> --json`, whose JSON path created a local relay edit link not shown or revocable in the hosted native share UI.
+    - Resolution: added `marklab share --json --daemon-only`, which starts or reuses the daemon and returns daemon metadata without creating an access grant. MarkLab.app now uses that mode for the CLI/local daemon boundary.
+
+93. Packaged runtime links omitted the new shared collaboration package.
+    - Impact: installed CLI/native runtime could fail to resolve `@marklab/collab-editor` even though repo-mode pnpm worked.
+    - Resolution: packaged runtime preparation now copies `packages/collab-editor`, the packed CLI dependency map points at `file:runtime/packages/collab-editor`, and packaged workspace-link creation covers `@marklab/collab-editor`.
+
+94. Hosted native editor did not verify server-preserved app client kind.
+    - Impact: if native bearer injection failed and the server downgraded `clientKind=app` to `browser`, the embedded editor could continue as a browser session inside MarkLab.app.
+    - Resolution: `CollaborativeMarkdownEditor` now treats app-client downgrade as `invalid_edit_session_client_kind` and does not connect to the provider. App routing tests cover a downgraded native edit response.

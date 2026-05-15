@@ -43,10 +43,11 @@ describe('packed @marklab/cli install smoke', () => {
     const runtimeRoot = await mkdtemp(join(tmpdir(), 'marklab-cli-runtime-'));
     await mkdir(join(runtimeRoot, 'packages', 'shared'), { recursive: true });
     await mkdir(join(runtimeRoot, 'packages', 'markdown'), { recursive: true });
+    await mkdir(join(runtimeRoot, 'packages', 'collab-editor'), { recursive: true });
 
     expect(ensurePackagedRuntimeWorkspaceLinks(runtimeRoot, runtimeRoot)).toBe(true);
 
-    for (const name of ['shared', 'markdown']) {
+    for (const name of ['shared', 'markdown', 'collab-editor']) {
       const linkPath = join(runtimeRoot, 'node_modules', '@marklab', name);
       expect(existsSync(linkPath)).toBe(true);
       expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);

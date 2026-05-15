@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs, pickJoinDirectory, safeRelayJoinFilename } from './marklab.mjs';
+import { createDaemonEntry, writeDaemonRegistry } from './daemon-supervisor.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -65,6 +66,46 @@ async function startRelayAccessServer(access) {
   });
   return {
     apiUrl: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+  };
+}
+
+async function startNativeOwnedDaemonServer(expectedToken) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+    if (req.url === '/api/local/access-grants' && req.method === 'POST') {
+      if (req.headers.authorization !== `Bearer ${expectedToken}`) {
+        res.statusCode = 403;
+        res.end(JSON.stringify({ error: 'forbidden' }));
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.statusCode = 201;
+      res.end(JSON.stringify({
+        role: 'edit',
+        grantId: 'grant_native',
+        relayRoomId: 'room_native',
+        url: 'http://127.0.0.1:5175/relay/room_native?token=native&mode=edit',
+        expiresAt: null,
+        createdAt: '2026-05-15T12:00:00.000Z',
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') reject(new Error('missing_test_port'));
+      else resolve(address.port);
+    });
+  });
+  return {
+    apiUrl: `http://127.0.0.1:${port}`,
+    requests,
     close: () => new Promise((resolveClose) => server.close(resolveClose)),
   };
 }
@@ -180,6 +221,13 @@ describe('marklab CLI', () => {
       command: 'share',
       file: 'README.md',
       json: false,
+      daemonOnly: false,
+    });
+    expect(parseCliArgs(['share', 'README.md', '--json', '--daemon-only'])).toEqual({
+      command: 'share',
+      file: 'README.md',
+      json: true,
+      daemonOnly: true,
     });
     expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir'])).toEqual({
       command: 'join',
@@ -381,6 +429,103 @@ describe('marklab CLI', () => {
     expect(result.stdout).toContain(`Sharing ${canonicalMarkdownPath}`);
     expect(result.stdout).toContain('mode=edit');
   }, 130000);
+
+  it('reuses a native-app-owned daemon for share --json instead of starting a second watcher', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-owned-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const registryPath = join(appSupportDirectory, 'local-daemons.json');
+    const markdownPath = join(directory, 'README.md');
+    await writeFile(markdownPath, '# Native owner\n', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+    const token = 'native-token';
+    const daemon = await startNativeOwnedDaemonServer(token);
+
+    try {
+      await writeDaemonRegistry({
+        schemaVersion: 1,
+        daemons: [createDaemonEntry({
+          realpath: canonicalMarkdownPath,
+          pid: process.pid,
+          apiPort: Number(new URL(daemon.apiUrl).port),
+          webPort: 5175,
+          apiUrl: daemon.apiUrl,
+          webUrl: 'http://127.0.0.1:5175',
+          localUrl: 'marklab://open/README.md',
+          token,
+          ownerKind: 'app',
+        })],
+      }, registryPath);
+
+      const result = await runCli(['share', markdownPath, '--json'], {
+        MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+        MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
+        MARKLAB_NO_OPEN: 'true',
+      }, 30000);
+      expectCliOk(result);
+      const body = JSON.parse(result.stdout);
+      expect(body).toMatchObject({
+        ok: true,
+        path: canonicalMarkdownPath,
+        reusedDaemon: true,
+        grantId: 'grant_native',
+        relayRoomId: 'room_native',
+        url: 'http://127.0.0.1:5175/relay/room_native?token=native&mode=edit',
+      });
+      expect(daemon.requests).toEqual([
+        { method: 'POST', url: '/api/local/access-grants', authorization: 'Bearer native-token' },
+      ]);
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it('starts or reuses a daemon without creating a hidden relay link for native app bootstrap', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-daemon-only-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const registryPath = join(appSupportDirectory, 'local-daemons.json');
+    const markdownPath = join(directory, 'README.md');
+    await writeFile(markdownPath, '# Native owner\n', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+    const token = 'native-token';
+    const daemon = await startNativeOwnedDaemonServer(token);
+
+    try {
+      await writeDaemonRegistry({
+        schemaVersion: 1,
+        daemons: [createDaemonEntry({
+          realpath: canonicalMarkdownPath,
+          pid: process.pid,
+          apiPort: Number(new URL(daemon.apiUrl).port),
+          webPort: 5175,
+          apiUrl: daemon.apiUrl,
+          webUrl: 'http://127.0.0.1:5175',
+          localUrl: 'marklab://open/README.md',
+          token,
+          ownerKind: 'app',
+        })],
+      }, registryPath);
+
+      const result = await runCli(['share', markdownPath, '--json', '--daemon-only'], {
+        MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+        MARKLAB_LOCAL_DAEMON_REGISTRY_PATH: registryPath,
+        MARKLAB_NO_OPEN: 'true',
+      }, 30000);
+      expectCliOk(result);
+      const body = JSON.parse(result.stdout);
+      expect(body).toMatchObject({
+        ok: true,
+        path: canonicalMarkdownPath,
+        reusedDaemon: true,
+        browserUrl: 'marklab://open/README.md',
+        apiUrl: daemon.apiUrl,
+      });
+      expect(body).not.toHaveProperty('grantId');
+      expect(body).not.toHaveProperty('url');
+      expect(daemon.requests).toEqual([]);
+    } finally {
+      await daemon.close();
+    }
+  });
 
   it('opens and stops a real background daemon for one local Markdown file', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-bg-'));
