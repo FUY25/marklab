@@ -89,3 +89,35 @@ This file records correctness/security bugs found by plan-level review passes.
 15. In-flight refresh completion could mutate a destroyed provider after unmount.
     - Impact: a refresh promise resolving after React cleanup could update refs on a closed-over destroyed provider and schedule a new timer that cleanup could no longer clear.
     - Resolution: refresh success and failure continuations now re-check `disposed` and `unavailable` before mutating provider state or scheduling follow-up refresh/retry timers.
+
+16. Terminal refresh denial only called the real Y-Sweet provider's `disconnect()`.
+    - Impact: `@y-sweet/client@0.9.1` reconnects from its close handler after `disconnect()`, so a revoked/forbidden edit session could continue syncing with the old still-valid provider token until token expiry.
+    - Resolution: terminal unavailable now calls a provider `terminate()` path. The real-provider wrapper clears cached client tokens, disables websocket close/error reconnect handlers, removes connection-status listeners, wakes reconnect sleepers, sets status offline, and destroys the provider so it cannot reconnect after refresh denial.
+
+17. Successful refresh after a transient failure could leave the UI stuck on `Reconnecting`.
+    - Impact: if the provider websocket stayed connected while refresh temporarily failed, the retry success path updated credentials but no provider status event fired to restore the visible connection label.
+    - Resolution: after a successful refresh, the editor checks the provider status and restores `Connected` when the provider is already connected.
+
+18. Memory-provider terminal shutdown could still report `connected`.
+    - Impact: the E2E memory provider set its closed flag before the offline transition, so `status()` could keep returning `connected` after `terminate()`, hiding refresh-recovery state bugs in browser tests.
+    - Resolution: terminal shutdown now transitions offline before closing, destroyed memory providers clear their connected state, and a provider unit test pins the offline status after `terminate()`.
+
+19. Normal real-provider cleanup could still trigger Y-Sweet reconnect work.
+    - Impact: React unmount called `destroy()` without clearing websocket close handlers first, so `@y-sweet/client@0.9.1` could run its close/reconnect path during route changes or cleanup and throw `provider_terminated` from the guarded reconnect path.
+    - Resolution: normal `destroy()` now clears cached tokens, websocket handlers, reconnect sleepers, connection timers, and status before and after delegating to the underlying provider destroy path; a provider unit test pins the cleanup order.
+
+20. Revoked-edit E2E did not prove local edits were denied after refresh denial.
+    - Impact: a regression that showed `Unavailable` while leaving CodeMirror writable would pass the browser test despite the plan requiring local edits to be denied after revocation.
+    - Resolution: the revoked edit browser test now attempts to type after the unavailable state and asserts the editor content does not change.
+
+21. In-flight Y-Sweet initial connection could still throw after immediate provider shutdown.
+    - Impact: `@y-sweet/client@0.9.1` starts an async connect loop in its constructor and constructs the websocket after awaiting the token path. If MarkLab destroyed or terminated the wrapper before that continuation resumed, the guarded websocket constructor could throw `provider_terminated` as an unhandled rejection.
+    - Resolution: the wrapper now patches future `connect()` calls to no-op after termination and wraps `attemptToConnect()` so in-flight attempts race against shutdown and exit cleanly without constructing a new socket; a real-dependency provider lifecycle test pins immediate-destroy behavior.
+
+22. CodeMirror unavailable state did not fully deny non-DOM edit paths.
+    - Impact: `EditorView.editable.of(false)` blocks the contenteditable DOM surface but not key-command or programmatic dispatch paths, so local editor/Yjs state could still mutate after a revoked provider-token refresh.
+    - Resolution: unavailable state now also enables `EditorState.readOnly` and a transaction filter that rejects local document changes unless they are annotated as Yjs sync transactions; the browser revocation test now verifies both keyboard input and direct editor dispatch are blocked.
+
+23. Memory-provider status reporting collapsed transient statuses to stale `connected`.
+    - Impact: after an E2E status event such as `error` or `connecting`, the memory provider could still report `connected`, causing refresh-retry recovery logic to force the visible pill back to `Connected` while the simulated transport was still reconnecting.
+    - Resolution: the memory provider now tracks the current status independently from its connected boolean and reports transient statuses accurately; unit coverage pins `error` and `connecting` status reads.

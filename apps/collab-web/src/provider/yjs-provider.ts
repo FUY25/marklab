@@ -12,7 +12,9 @@ export interface MarkLabYjsProvider {
   on(eventName: typeof EVENT_CONNECTION_STATUS, handler: (event: unknown) => void): void;
   replaceClientToken(clientToken: ProviderClientToken): void;
   disconnect(): void;
+  terminate(): void;
   destroy(): void;
+  status?(): unknown;
 }
 
 export interface MarkLabYjsProviderOptions {
@@ -44,24 +46,29 @@ function createMemoryProvider(
   const handlers = new Set<(event: unknown) => void>();
   const pendingMessages: ProviderMessage[] = [];
   let connected = false;
+  let currentStatus = STATUS_OFFLINE;
+  let closed = false;
 
   const emitStatus = (status: string) => {
+    currentStatus = status;
     for (const handler of handlers) handler({ status });
   };
 
   const postOrQueue = (message: ProviderMessage) => {
+    if (closed) return;
     if (connected) {
       channel.postMessage(message);
       return;
     }
     pendingMessages.push(message);
   };
-
   const requestSync = () => {
+    if (closed) return;
     channel.postMessage({ type: 'sync-request', sender: providerId } satisfies ProviderMessage);
   };
 
   const broadcastSyncState = (target = '*') => {
+    if (closed) return;
     channel.postMessage({
       type: 'sync-state',
       sender: providerId,
@@ -79,6 +86,7 @@ function createMemoryProvider(
   };
 
   const transitionOnline = () => {
+    if (closed) return;
     connected = true;
     emitStatus(STATUS_CONNECTED);
     flushPendingMessages();
@@ -88,6 +96,7 @@ function createMemoryProvider(
   };
 
   const transitionOffline = () => {
+    if (closed) return;
     connected = false;
     emitStatus(STATUS_OFFLINE);
   };
@@ -151,6 +160,7 @@ function createMemoryProvider(
       transitionOffline();
       return;
     }
+    connected = false;
     emitStatus(detail.status);
   };
   window.addEventListener('marklab:e2e-provider-status', statusEventHandler);
@@ -171,13 +181,27 @@ function createMemoryProvider(
     disconnect() {
       transitionOffline();
     },
+    terminate() {
+      transitionOffline();
+      closed = true;
+      window.removeEventListener('marklab:e2e-provider-status', statusEventHandler);
+      channel.removeEventListener('message', messageHandler);
+      channel.close();
+      handlers.clear();
+    },
     destroy() {
+      connected = false;
+      currentStatus = STATUS_OFFLINE;
+      closed = true;
       ydoc.off('update', ydocUpdateHandler);
       options.awareness.off('update', awarenessUpdateHandler);
       window.removeEventListener('marklab:e2e-provider-status', statusEventHandler);
       channel.removeEventListener('message', messageHandler);
       channel.close();
       handlers.clear();
+    },
+    status() {
+      return currentStatus;
     },
   };
 }
@@ -196,20 +220,146 @@ export function createMarkLabYjsProvider(
     if (clientToken.docId !== providerDocId) throw new Error('provider_client_token_doc_mismatch');
     if (clientToken.authorization !== 'full') throw new Error('provider_client_token_authorization_denied');
   };
+  let terminated = false;
+  const providerOptions = options as MarkLabYjsProviderOptions & { WebSocketPolyfill?: typeof WebSocket };
+  const BaseWebSocket = providerOptions.WebSocketPolyfill ?? WebSocket;
+  const GuardedWebSocket = class extends BaseWebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      if (terminated) throw new Error('provider_terminated');
+      super(url, protocols);
+    }
+  } as typeof WebSocket;
+  const guardedClientTokenFactory = async () => {
+    if (terminated) throw new Error('provider_terminated');
+    const clientToken = await clientTokenFactory();
+    if (terminated) throw new Error('provider_terminated');
+    validateClientToken(clientToken);
+    return clientToken;
+  };
   const provider = createYjsProvider(
     ydoc,
     providerDocId,
-    clientTokenFactory as never,
-    options as never,
-  ) as unknown as MarkLabYjsProvider & { clientToken?: ProviderClientToken | null };
+    guardedClientTokenFactory as never,
+    { ...providerOptions, WebSocketPolyfill: GuardedWebSocket } as never,
+  ) as unknown as MarkLabYjsProvider & {
+    clientToken?: ProviderClientToken | null;
+    off?: (eventName: typeof EVENT_CONNECTION_STATUS, handler: (event: unknown) => void) => void;
+  };
+  const rawProvider = provider as unknown as {
+    attemptToConnect?: (clientToken: ProviderClientToken) => boolean | Promise<boolean>;
+    connect?: () => void | Promise<void>;
+    websocket?: {
+      close(): void;
+      onopen: unknown;
+      onmessage: unknown;
+      onclose: unknown;
+      onerror: unknown;
+    } | null;
+    reconnectSleeper?: { wake(): void } | null;
+    status?: string;
+    setStatus?: (status: string) => void;
+    isConnecting?: boolean;
+    clearHeartbeat?: () => void;
+    clearConnectionTimeout?: () => void;
+  };
+  const listenerMap = new Map<(event: unknown) => void, (event: unknown) => void>();
+  const connectionAbortResolvers = new Set<(value: boolean) => void>();
+  const abortInFlightConnections = () => {
+    for (const resolve of connectionAbortResolvers) resolve(true);
+    connectionAbortResolvers.clear();
+  };
+  const originalAttemptToConnect = rawProvider.attemptToConnect?.bind(provider);
+  if (originalAttemptToConnect) {
+    rawProvider.attemptToConnect = (clientToken) => {
+      if (terminated) return true;
+      let attempt: boolean | Promise<boolean>;
+      try {
+        attempt = originalAttemptToConnect(clientToken);
+      } catch (error) {
+        if (terminated) return true;
+        throw error;
+      }
+      let abortResolve: ((value: boolean) => void) | null = null;
+      const abortPromise = new Promise<boolean>((resolve) => {
+        abortResolve = (value: boolean) => {
+          connectionAbortResolvers.delete(abortResolve!);
+          resolve(value);
+        };
+        connectionAbortResolvers.add(abortResolve);
+      });
+      return Promise.race([
+        Promise.resolve(attempt).catch((error: unknown) => {
+          if (terminated) return true;
+          throw error;
+        }),
+        abortPromise,
+      ]).finally(() => {
+        if (abortResolve) connectionAbortResolvers.delete(abortResolve);
+      });
+    };
+  }
+  const originalConnect = rawProvider.connect?.bind(provider);
+  if (originalConnect) {
+    rawProvider.connect = () => {
+      if (terminated) return;
+      return originalConnect();
+    };
+  }
+
+  const stopReconnects = () => {
+    provider.clientToken = null;
+    abortInFlightConnections();
+    rawProvider.clearHeartbeat?.();
+    rawProvider.clearConnectionTimeout?.();
+    if (rawProvider.websocket) {
+      rawProvider.websocket.onopen = null;
+      rawProvider.websocket.onmessage = null;
+      rawProvider.websocket.onclose = null;
+      rawProvider.websocket.onerror = null;
+      rawProvider.websocket.close();
+      rawProvider.websocket = null;
+    }
+    rawProvider.reconnectSleeper?.wake();
+    rawProvider.isConnecting = false;
+    rawProvider.setStatus?.(STATUS_OFFLINE);
+  };
 
   return {
-    on: provider.on.bind(provider),
+    on(eventName, handler) {
+      const wrappedHandler = (event: unknown) => {
+        if (terminated) return;
+        handler(event);
+      };
+      listenerMap.set(handler, wrappedHandler);
+      provider.on(eventName, wrappedHandler);
+    },
     replaceClientToken(clientToken) {
       validateClientToken(clientToken);
       provider.clientToken = clientToken;
     },
     disconnect: provider.disconnect.bind(provider),
-    destroy: provider.destroy.bind(provider),
+    terminate() {
+      terminated = true;
+      for (const wrappedHandler of listenerMap.values()) {
+        provider.off?.(EVENT_CONNECTION_STATUS, wrappedHandler);
+      }
+      listenerMap.clear();
+      stopReconnects();
+      provider.destroy();
+      stopReconnects();
+    },
+    destroy() {
+      terminated = true;
+      for (const wrappedHandler of listenerMap.values()) {
+        provider.off?.(EVENT_CONNECTION_STATUS, wrappedHandler);
+      }
+      listenerMap.clear();
+      stopReconnects();
+      provider.destroy();
+      stopReconnects();
+    },
+    status() {
+      return provider.status;
+    },
   };
 }

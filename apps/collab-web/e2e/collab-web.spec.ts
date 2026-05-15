@@ -9,6 +9,7 @@ const fastRefreshExpiresInMs = (PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS + 1) * 100
 interface RouteOptions {
   tokenExpiresInMs?: number;
   refreshError?: string;
+  refreshFailures?: Array<{ error: string; status: number }>;
   editCreateError?: string;
   viewError?: string;
 }
@@ -57,6 +58,11 @@ async function installControlPlaneRoutes(context: BrowserContext, options: Route
     const url = request.url();
 
     if (url.includes('/provider-token/refresh')) {
+      const refreshFailure = options.refreshFailures?.shift();
+      if (refreshFailure) {
+        await route.fulfill(jsonResponse({ error: refreshFailure.error }, refreshFailure.status));
+        return;
+      }
       if (options.refreshError) {
         await route.fulfill(jsonResponse({ error: options.refreshError }, 403));
         return;
@@ -240,6 +246,23 @@ test('revoked edit session surfaces unavailable state', async ({ browser }) => {
 
   await expect(page.getByRole('status')).toContainText('provider_token_revoked');
   await expect(page.locator('.connection-pill')).toHaveText('Unavailable');
+  await page.locator('.cm-content').click();
+  await page.keyboard.type('still editable after revoke');
+  await expect(page.locator('.cm-content')).not.toContainText('still editable after revoke', { timeout: 300 });
+  const apiDispatchChangedDocument = await page.evaluate(() => {
+    const view = (window as unknown as {
+      __marklabEditorView?: {
+        state: { doc: { toString(): string } };
+        dispatch(spec: { changes: { from: number; insert: string } }): void;
+      };
+    }).__marklabEditorView;
+    if (!view) throw new Error('editor_view_test_hook_missing');
+    const before = view.state.doc.toString();
+    view.dispatch({ changes: { from: 0, insert: 'api mutation after revoke' } });
+    return view.state.doc.toString() !== before;
+  });
+  expect(apiDispatchChangedDocument).toBe(false);
+  await expect(page.locator('.cm-content')).not.toContainText('api mutation after revoke', { timeout: 300 });
   await context.close();
 });
 
@@ -255,5 +278,22 @@ test('role downgrade during refresh surfaces unavailable state', async ({ browse
 
   await expect(page.getByRole('status')).toContainText('forbidden');
   await expect(page.locator('.connection-pill')).toHaveText('Unavailable');
+  await context.close();
+});
+
+test('transient refresh failure recovers the visible connection state after retry', async ({ browser }) => {
+  test.setTimeout(45_000);
+  const context = await browser.newContext();
+  await installControlPlaneRoutes(context, {
+    tokenExpiresInMs: fastRefreshExpiresInMs,
+    refreshFailures: [{ error: 'temporarily_unavailable', status: 503 }],
+  });
+  const page = await context.newPage();
+
+  await page.goto(editUrl());
+
+  await expect(page.locator('.connection-pill')).toHaveText('Reconnecting');
+  await expect(page.locator('.connection-pill')).toHaveText('Connected', { timeout: 35_000 });
+  await expect(page.getByRole('status')).toHaveCount(0);
   await context.close();
 });

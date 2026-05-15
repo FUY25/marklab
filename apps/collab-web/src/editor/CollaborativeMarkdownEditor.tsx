@@ -19,6 +19,7 @@ import {
 import {
   createIndexedDbPersistenceKey,
   createYTextCodeMirrorBinding,
+  ySyncAnnotation,
   type YTextCodeMirrorBinding,
 } from './ytext-codemirror';
 import {
@@ -66,6 +67,15 @@ function providerStateToConnectionState(value: unknown): ConnectionState {
   return 'reconnecting';
 }
 
+function isConnectedProviderStatus(status: unknown): boolean {
+  return status === STATUS_CONNECTED || (
+    typeof status === 'object' &&
+    status !== null &&
+    'status' in status &&
+    (status as { status?: unknown }).status === STATUS_CONNECTED
+  );
+}
+
 function bindSessionIdentity(ydoc: Y.Doc, providerToken: IssuedProviderToken): void {
   if (!providerToken.sessionIdentity) return;
   const permanentUserData = new Y.PermanentUserData(ydoc);
@@ -104,14 +114,20 @@ export function CollaborativeMarkdownEditor({
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('contents');
     const editableCompartment = new Compartment();
+    const readOnlyCompartment = new Compartment();
     const providerTokenRef: { current: IssuedProviderToken | null } = { current: null };
     const activeSessionRef: { current: ActiveEditSession | null } = { current: null };
 
     const markUnavailable = (reason: string) => {
       if (disposed) return;
       unavailable = true;
-      provider?.disconnect();
-      view?.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(false)) });
+      provider?.terminate();
+      view?.dispatch({
+        effects: [
+          editableCompartment.reconfigure(EditorView.editable.of(false)),
+          readOnlyCompartment.reconfigure(EditorState.readOnly.of(true)),
+        ],
+      });
       if (refreshTimer) clearTimeout(refreshTimer);
       setConnectionState('unavailable');
       setUnavailableReason(reason);
@@ -139,6 +155,7 @@ export function CollaborativeMarkdownEditor({
           markUnavailable(replaceError instanceof Error ? replaceError.message : 'invalid_provider_token_refresh');
           return;
         }
+        if (isConnectedProviderStatus(provider?.status?.())) setConnectionState('connected');
         scheduleRefresh(nextToken, allowImmediateAfterSuccess);
       }).catch((error: unknown) => {
         if (disposed || unavailable) return;
@@ -225,6 +242,11 @@ export function CollaborativeMarkdownEditor({
             keymap.of([...defaultKeymap, ...historyKeymap]),
             EditorView.lineWrapping,
             editableCompartment.of(EditorView.editable.of(true)),
+            readOnlyCompartment.of(EditorState.readOnly.of(false)),
+            EditorState.transactionFilter.of((transaction) => {
+              if (unavailable && transaction.docChanged && !transaction.annotation(ySyncAnnotation)) return [];
+              return transaction;
+            }),
             createRemoteCursorExtension({ awareness, ytext, localClientId: ydoc.clientID }),
             EditorView.updateListener.of((update) => {
               if (update.docChanged) setMarkdownPreview(update.state.doc.toString());
@@ -234,6 +256,9 @@ export function CollaborativeMarkdownEditor({
         }),
       });
       binding = createYTextCodeMirrorBinding({ view, ytext, preferInitial: 'ytext' });
+      if (import.meta.env.DEV) {
+        (window as unknown as { __marklabEditorView?: EditorView }).__marklabEditorView = view;
+      }
       setMarkdownPreview(view.state.doc.toString());
       provider = createMarkLabYjsProvider(
         ydoc,
@@ -265,6 +290,9 @@ export function CollaborativeMarkdownEditor({
       if (refreshTimer) clearTimeout(refreshTimer);
       binding?.destroy();
       view?.destroy();
+      if (import.meta.env.DEV) {
+        delete (window as unknown as { __marklabEditorView?: EditorView }).__marklabEditorView;
+      }
       provider?.destroy();
       persistence?.destroy();
       awareness?.destroy();
