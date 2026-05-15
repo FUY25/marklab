@@ -164,6 +164,7 @@ async function main() {
     allowedOrigins: env.allowedOrigins,
     enforceAllowedOrigins: env.mode === 'production',
     ...(process.env.MARKLAB_WEB_DIST_DIR ? { staticWeb: { distDir: process.env.MARKLAB_WEB_DIST_DIR } } : {}),
+    ...(process.env.MARKLAB_COLLAB_WEB_DIST_DIR ? { staticCollabWeb: { distDir: process.env.MARKLAB_COLLAB_WEB_DIST_DIR } } : {}),
     health: {
       databaseRequired: env.mode === 'production',
       relayRequired: Boolean(relayService),

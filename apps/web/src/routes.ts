@@ -56,6 +56,14 @@ export function buildDocumentPath(docId: string, branchId: string): string {
   return `/docs/${encodeURIComponent(docId)}/branches/${encodeURIComponent(branchId)}`;
 }
 
+export function buildCollabDocumentPath(docId: string, branchId: string): string {
+  const params = new URLSearchParams({
+    docId,
+    branchId,
+  });
+  return `/collab?${params.toString()}`;
+}
+
 export function buildLocalDocumentPath(): string {
   return '/local';
 }

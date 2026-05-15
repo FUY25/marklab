@@ -5,7 +5,7 @@ import {
   type ShareLinkRole,
   type ShareLinkSummary,
 } from '../lib/api-client';
-import { buildDocumentPath } from '../routes';
+import { buildCollabDocumentPath } from '../routes';
 
 interface ShareAccessPanelProps {
   docId: string;
@@ -33,7 +33,7 @@ function formatCreatedAt(value: string): string {
 }
 
 function buildShareUrl(docId: string, branchId: string, token: string, role: ShareLinkRole): string {
-  const url = new URL(buildDocumentPath(docId, branchId), window.location.origin);
+  const url = new URL(buildCollabDocumentPath(docId, branchId), window.location.origin);
   url.searchParams.set('token', token);
   url.searchParams.set('mode', role);
   return url.toString();

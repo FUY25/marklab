@@ -1,8 +1,10 @@
-const defaultProviderTokenTtlSeconds = 600;
-const defaultProviderTokenRefreshMarginSeconds = 120;
-const defaultProviderTokenRefreshCheckIntervalSeconds = 30;
-const defaultUserSessionTtlSeconds = 60 * 60 * 24 * 30;
-const defaultOidcLoginStateTtlSeconds = 10 * 60;
+import {
+  OIDC_LOGIN_STATE_TTL_SECONDS as defaultOidcLoginStateTtlSeconds,
+  PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS as defaultProviderTokenRefreshCheckIntervalSeconds,
+  PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS as defaultProviderTokenRefreshMarginSeconds,
+  PROVIDER_TOKEN_TTL_SECONDS as defaultProviderTokenTtlSeconds,
+  USER_SESSION_TTL_SECONDS as defaultUserSessionTtlSeconds,
+} from '@marklab/shared/src/provider-token-policy';
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
   const rawValue = process.env[name]?.trim();

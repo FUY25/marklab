@@ -51,6 +51,7 @@ export interface HttpAppOptions {
   localRelayMirror?: LocalRelayMirrorController;
   enableLegacyDocAiRoutes?: boolean;
   staticWeb?: StaticWebOptions;
+  staticCollabWeb?: StaticWebOptions;
   authEnvironment?: Partial<HttpAuthEnvironment>;
   oidcExchange?: OidcExchange;
 }
@@ -659,6 +660,18 @@ function mountStaticWeb(app: express.Express, staticWeb: StaticWebOptions | unde
   });
 }
 
+function mountStaticCollabWeb(app: express.Express, staticCollabWeb: StaticWebOptions | undefined): void {
+  if (!staticCollabWeb?.distDir || !existsSync(staticCollabWeb.distDir)) return;
+
+  const indexHtml = join(staticCollabWeb.distDir, 'index.html');
+  if (!existsSync(indexHtml)) return;
+
+  app.use('/collab-web', express.static(staticCollabWeb.distDir, { index: false }));
+  app.get(/^\/(?:collab(?:\/.*)?|workspaces\/[^/]+\/settings\/?)$/u, (_req, res) => {
+    res.sendFile(indexHtml);
+  });
+}
+
 export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
   const app = express();
   const authEnvironment = readAuthEnvironment(options.authEnvironment);
@@ -706,6 +719,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
     app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
   }
 
+  mountStaticCollabWeb(app, options.staticCollabWeb);
   mountStaticWeb(app, options.staticWeb);
   app.use(errorHandler);
 

@@ -1,6 +1,6 @@
 # Review Bug Log
 
-This file records correctness/security bugs found by Plan 2 review passes before moving on to Plan 3.
+This file records correctness/security bugs found by plan-level review passes.
 
 ## Plan 2 Control Plane Review Findings
 
@@ -27,3 +27,41 @@ This file records correctness/security bugs found by Plan 2 review passes before
 6. Final provider-token issuance transition did not atomically re-check session role/expiry.
    - Impact: a session could be downgraded or expire after the initial refresh lookup but before the pending issuance was marked issued.
    - Resolution: `providerTokenIssuanceCanIssue`, final mark-issued transition, and denial-reason lookup now require active edit-role unexpired sessions. Added race-denial tests.
+
+## Plan 3 Collab Web Review Findings
+
+1. Remote Yjs updates were added to the local CodeMirror undo stack.
+   - Impact: Bob could undo Alice's remote insert, and the binding would write that undo back into `Y.Text` as a new local deletion.
+   - Resolution: annotated remote Y.Text-to-CodeMirror dispatches with `Transaction.addToHistory.of(false)` and added an undo regression test.
+
+2. Generated share/access URLs still opened the legacy `apps/web` document route.
+   - Impact: real browser collaborator links did not route to the new formal `apps/collab-web` surface.
+   - Resolution: added a shared `buildCollabDocumentPath()` route helper and changed access/share link builders to generate `/collab?docId=...&branchId=...&token=...&mode=...` URLs.
+
+3. View mode rendered raw Markdown source instead of a rendered read-only document.
+   - Impact: public view links satisfied the no-provider condition but not the rendered browser view contract.
+   - Resolution: added a safe React Markdown snapshot renderer for headings, paragraphs, lists, quotes, and fenced code blocks; view mode now renders selectable/copyable document elements without mounting CodeMirror or a provider.
+
+4. Browser E2E failure-path coverage was incomplete.
+   - Impact: revoked view links, session-creation denials, and role-downgrade refresh denials could regress without browser coverage.
+   - Resolution: expanded Playwright coverage for revoked view sessions, edit creation denials including seat/quota/expiry-style errors, revoked edit refresh, and role-downgrade refresh.
+
+5. Provider-token refresh scheduling could tight-loop when tokens were already inside the refresh margin.
+   - Impact: a short TTL, oversized refresh margin, or clock skew could make every successful refresh schedule the next refresh at `0ms`, hammering the control plane.
+   - Resolution: `providerTokenRefreshDelayMs` now uses the shared refresh check interval as the lower bound when the computed refresh time is already due, and a regression test covers short-token successful refresh scheduling.
+
+6. Workspace member role edits stayed visible after the server rejected the mutation.
+   - Impact: a non-owner could see a failed local role change as if it succeeded after a `403`.
+   - Resolution: member role selection is tracked as a draft and cleared on failure, reverting the visible value to the last server-accepted role. Added a failed-update regression test.
+
+7. Edit-shaped browser sessions accepted read-only provider tokens.
+   - Impact: a malformed or future read-only edit response could mount an editable CodeMirror/Yjs session and persist unsynced local edits.
+   - Resolution: provider-token authorization is now parsed strictly, and edit sessions reject anything other than `full` authorization for both the issued provider token and nested Y-Sweet client token.
+
+8. Remote `Y.Text` updates were applied to CodeMirror as whole-document replacements.
+   - Impact: a remote one-character insert before the local cursor remapped the local selection to the start of the document, so the next local keystroke landed in the wrong position under concurrent edits.
+   - Resolution: remote sync now applies incremental `Y.TextEvent.delta` changes adapted from Relay's `LiveEditPlugin`, still excluded from undo history. Added a regression test that types after a remote pre-cursor insert.
+
+9. The offline/reconnect browser E2E only injected status labels.
+   - Impact: the test could pass while local offline edits never queued or flushed after reconnect.
+   - Resolution: the memory provider now toggles transport state on the E2E provider status event, queues local Yjs updates while offline, broadcasts full Yjs state on reconnect, and the Playwright test verifies another tab receives the offline draft only after reconnect.

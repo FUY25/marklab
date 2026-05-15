@@ -1,7 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Eye, Pencil } from 'lucide-react';
 import { MarklabWebApi } from '../lib/api-client';
-import { buildDocumentPath } from '../routes';
+import { buildCollabDocumentPath } from '../routes';
 import { DocumentDrawer } from './DocumentDrawer';
 
 type AccessGrantRole = 'view' | 'edit';
@@ -93,7 +93,7 @@ function formatCreatedAt(value: string | null): string {
 }
 
 function buildAccessUrl(docId: string, branchId: string, token: string, role: AccessGrantRole): string {
-  const url = new URL(buildDocumentPath(docId, branchId), window.location.origin);
+  const url = new URL(buildCollabDocumentPath(docId, branchId), window.location.origin);
   url.searchParams.set('token', token);
   url.searchParams.set('mode', role);
   return url.toString();

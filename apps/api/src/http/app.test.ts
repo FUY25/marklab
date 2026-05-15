@@ -60,10 +60,10 @@ function createSchemaPool(input: {
   };
 }
 
-async function createWebDist() {
+async function createWebDist(label = 'MarkLab', asset = 'asset') {
   const distDir = await mkdtemp(join(tmpdir(), 'marklab-web-dist-'));
-  await writeFile(join(distDir, 'index.html'), '<!doctype html><div id="root">MarkLab</div>', 'utf8');
-  await writeFile(join(distDir, 'asset.txt'), 'asset', 'utf8');
+  await writeFile(join(distDir, 'index.html'), `<!doctype html><div id="root">${label}</div>`, 'utf8');
+  await writeFile(join(distDir, 'asset.txt'), asset, 'utf8');
   return distDir;
 }
 
@@ -98,6 +98,27 @@ describe('http app hosted web serving', () => {
 
     await request(app).get('/healthz').expect(200);
     await request(app).get('/api/not-a-real-route').expect(404);
+  });
+
+  it('serves collab-web routes without taking over existing hosted web routes', async () => {
+    const webDist = await createWebDist('Hosted Web', 'web asset');
+    const collabDist = await createWebDist('Collab Web', 'collab asset');
+    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
+      staticWeb: { distDir: webDist },
+      staticCollabWeb: { distDir: collabDist },
+    });
+
+    await expect(request(app).get('/asset.txt').expect(200)).resolves.toMatchObject({ text: 'web asset' });
+    await expect(request(app).get('/collab-web/asset.txt').expect(200)).resolves.toMatchObject({ text: 'collab asset' });
+    await expect(request(app).get('/collab?mode=edit&docId=doc_1&branchId=main').expect(200)).resolves.toMatchObject({
+      text: expect.stringContaining('Collab Web'),
+    });
+    await expect(request(app).get('/workspaces/ws_1/settings').expect(200)).resolves.toMatchObject({
+      text: expect.stringContaining('Collab Web'),
+    });
+    await expect(request(app).get('/relay/room_1?token=secret').expect(200)).resolves.toMatchObject({
+      text: expect.stringContaining('Hosted Web'),
+    });
   });
 
   it('does not mount legacy relay API routes in the hosted control-plane app', async () => {
