@@ -369,6 +369,16 @@ describe('access routes', () => {
       });
   });
 
+  it('does not treat admin tokens in query strings as bootstrap admin access', async () => {
+    requireAuth('admin-secret');
+    const { pool } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/docs/doc_001/branches/br_main/access?token=admin-secret')
+      .expect(403, { error: 'forbidden' });
+  });
+
   it('reports document access for logged-in workspace members without a document token', async () => {
     requireAuth('admin-secret');
     const { pool } = createAccessRoutePool();

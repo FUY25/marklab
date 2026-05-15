@@ -294,7 +294,9 @@ export async function findActiveProviderTokenSession(pool: DbExecutor, input: {
         and s.doc_id = pti.doc_id
         and s.branch_id = pti.branch_id
         and s.mode = 'edit'
+        and s.role = 'edit'
         and s.status = 'active'
+        and s.expires_at > now()
         and s.refresh_token_hash = $4
       where pti.doc_id = $1
         and pti.branch_id = $2
@@ -435,17 +437,21 @@ async function touchCollabSessionForTokenIssue(pool: DbExecutor, input: {
   docId: string;
   branchId: string;
   clientKind: ProviderTokenClientKind;
+  validForSeconds: number;
 }): Promise<void> {
   const touched = await pool.query(
     `update collab_sessions
-        set last_seen_at = now()
+        set last_seen_at = now(),
+            expires_at = now() + ($5 * interval '1 second')
       where id = $1
         and doc_id = $2
         and branch_id = $3
         and mode = 'edit'
+        and role = 'edit'
         and status = 'active'
+        and (expires_at is null or expires_at > now())
         and client_kind = $4`,
-    [input.sessionId, input.docId, input.branchId, input.clientKind],
+    [input.sessionId, input.docId, input.branchId, input.clientKind, input.validForSeconds],
   );
   if ((touched.rowCount ?? 0) === 0) throw new Error('collab_session_not_found');
 }
@@ -475,6 +481,7 @@ export async function recordProviderTokenIssuanceWithPolicy(pool: DbPool, input:
       docId: input.docId,
       branchId: input.branchId,
       clientKind: input.clientKind,
+      validForSeconds: input.validForSeconds,
     });
     if (shouldEnforceGuestQuota) {
       const guestQuota = await readConcurrentGuestEditQuota(client, {
@@ -585,7 +592,9 @@ export async function providerTokenIssuanceCanIssue(pool: DbExecutor, input: {
        and s.doc_id = pending.doc_id
        and s.branch_id = pending.branch_id
        and s.mode = 'edit'
+       and s.role = 'edit'
        and s.status = 'active'
+       and s.expires_at > now()
       where pending.id = $1
         and pending.status = 'pending'
         and pending.doc_id = $2
@@ -650,7 +659,9 @@ export async function providerTokenIssuanceDenyReason(pool: DbExecutor, input: {
                    and s.doc_id = pending.doc_id
                    and s.branch_id = pending.branch_id
                    and s.mode = 'edit'
+                   and s.role = 'edit'
                    and s.status = 'active'
+                   and s.expires_at > now()
               ) then 'collab_session_not_found'
               when exists (
                 select 1
@@ -715,7 +726,9 @@ export async function markProviderTokenIssuanceIssuedIfSessionActive(pool: DbExe
              and s.doc_id = pending.doc_id
              and s.branch_id = pending.branch_id
              and s.mode = 'edit'
+             and s.role = 'edit'
              and s.status = 'active'
+             and s.expires_at > now()
         )
         and not exists (
           select 1

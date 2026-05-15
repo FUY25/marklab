@@ -105,9 +105,17 @@ describe('control-plane schema contract', () => {
   });
 
   it('keeps provider token issuances tied to collab edit sessions and records refresh attempts', async () => {
-    const normalized = compact(await schemaSql());
+    const schema = await schemaSql();
+    const normalized = compact(schema);
+    const collabSessionsDefinition = schema.match(/create table if not exists collab_sessions \([\s\S]*?\n\);/u)?.[0] ?? '';
 
     expect(normalized).toContain('create table if not exists provider_token_refreshes');
+    expect(collabSessionsDefinition).toContain('expires_at timestamptz');
+    expect(normalized).toContain('alter table collab_sessions');
+    expect(normalized).toContain('add column if not exists expires_at timestamptz');
+    expect(normalized).toContain('update collab_sessions s set expires_at = latest.expires_at');
+    expect(normalized).toContain("from provider_token_issuances where authorization = 'full' and status = 'issued'");
+    expect(normalized).toContain("where s.id = latest.session_id and s.doc_id = latest.doc_id and s.branch_id = latest.branch_id and s.expires_at is null and s.mode = 'edit' and s.status = 'active'");
     expect(normalized).toContain('alter table provider_token_issuances add column if not exists actor_type text');
     expect(normalized).toContain('add column if not exists workspace_id uuid');
     expect(normalized).toContain('add column if not exists folder_id uuid');

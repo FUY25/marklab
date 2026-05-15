@@ -9,6 +9,7 @@ import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { generateAccessToken, generateShareToken, hashToken } from '../services/access-control';
 
 const originalRequireAuth = process.env.MARKLAB_REQUIRE_AUTH;
+const originalAdminHash = process.env.MARKLAB_ADMIN_TOKEN_HASH;
 const originalDevAnonymousCollab = process.env.MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB;
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -21,6 +22,7 @@ function restoreEnv(name: string, value: string | undefined): void {
 
 afterEach(() => {
   restoreEnv('MARKLAB_REQUIRE_AUTH', originalRequireAuth);
+  restoreEnv('MARKLAB_ADMIN_TOKEN_HASH', originalAdminHash);
   restoreEnv('MARKLAB_ENABLE_DEV_ANONYMOUS_COLLAB', originalDevAnonymousCollab);
 });
 
@@ -32,8 +34,12 @@ function createPool(input: {
   activeSessionActorType?: 'agent' | 'user';
   activeSessionClientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
   activeSessionStatus?: 'pending' | 'issued' | 'failed' | 'revoked';
+  activeSessionRole?: 'view' | 'edit' | null;
+  activeSessionExpired?: boolean;
   activeSessionRefreshTokenHash?: string | null;
   activeSessionIsGuest?: boolean;
+  downgradeBeforeMarkIssued?: boolean;
+  expireBeforeMarkIssued?: boolean;
   deleteBeforeMarkIssued?: boolean;
   activeGuestSessions?: number;
   guestQuota?: number;
@@ -210,6 +216,14 @@ function createPool(input: {
       };
     }
     if (/pending\.status = 'pending'/u.test(sql)) {
+      if (input.downgradeBeforeMarkIssued && /s\.role = 'edit'/u.test(sql)) {
+        statusUpdates.push(params ?? []);
+        return { rows: [], rowCount: 0 };
+      }
+      if (input.expireBeforeMarkIssued && /s\.expires_at > now\(\)/u.test(sql)) {
+        statusUpdates.push(params ?? []);
+        return { rows: [], rowCount: 0 };
+      }
       statusUpdates.push(params ?? []);
       return { rows: [], rowCount: input.revokeDuringRefresh || input.deleteBeforeMarkIssued ? 0 : 1 };
     }
@@ -227,6 +241,13 @@ function createPool(input: {
       if (input.missingCollabSession) return { rows: [], rowCount: 0 };
       const sessionId = params?.[2];
       const refreshTokenHash = params?.[3];
+      const activeSessionRole = Object.hasOwn(input, 'activeSessionRole') ? input.activeSessionRole ?? null : 'edit';
+      if (/s\.role = 'edit'/u.test(sql) && activeSessionRole !== 'edit') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (/s\.expires_at > now\(\)/u.test(sql) && input.activeSessionExpired) {
+        return { rows: [], rowCount: 0 };
+      }
       const expectedRefreshTokenHash = Object.hasOwn(input, 'activeSessionRefreshTokenHash')
         ? input.activeSessionRefreshTokenHash ?? null
         : testRefreshTokenHash(serverSessionRefreshToken);
@@ -249,6 +270,7 @@ function createPool(input: {
             actor_id: activeActorId,
             actor_grant_id: activeActorGrantId,
             is_guest: input.activeSessionIsGuest ?? Boolean(activeActorGrantId),
+            role: activeSessionRole,
             display_name: 'Guest',
             status: input.activeSessionStatus ?? 'issued',
           } as Row]
@@ -421,6 +443,22 @@ describe('collab session routes', () => {
       'pending',
     ]));
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'doc_1', 'branch_1', response.body.session.sessionId]);
+  });
+
+  it('does not treat admin tokens in query strings as provider-token write auth', async () => {
+    process.env.MARKLAB_REQUIRE_AUTH = 'true';
+    process.env.MARKLAB_ADMIN_TOKEN_HASH = hashToken('admin-secret');
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session?token=admin-secret')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Alice' })
+      .expect(403, { error: 'forbidden' });
+
+    expect(providerTokenService.issued).toEqual([]);
+    expect(pool.collabSessions).toEqual([]);
   });
 
   it('ignores client-supplied session ids and returns a server-generated edit session id', async () => {
@@ -1309,7 +1347,7 @@ describe('collab session routes', () => {
       'pending',
     ]));
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'doc_1', 'branch_1', 'session_server']);
-    expect(pool.collabSessionTouches[0]).toEqual(['session_server', 'doc_1', 'branch_1', 'guest']);
+    expect(pool.collabSessionTouches[0]).toEqual(['session_server', 'doc_1', 'branch_1', 'guest', PROVIDER_TOKEN_TTL_SECONDS]);
     expect(pool.refreshAttempts[0]).toEqual(['session_server']);
     expect(pool.refreshIssued[0]).toEqual(['refresh_1', response.body.providerToken.expiresAt, 'issuance_1']);
   });
@@ -1495,6 +1533,44 @@ describe('collab session routes', () => {
     expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
   });
 
+  it('does not return a refreshed provider token when the control-plane session role is downgraded before marking issued', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      downgradeBeforeMarkIssued: true,
+      providerPolicyDenyReason: 'collab_session_not_found',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(404);
+
+    expect(providerTokenService.issued).toHaveLength(1);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'collab_session_not_found']);
+    expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
+  });
+
+  it('does not return a refreshed provider token when the control-plane session expires before marking issued', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({
+      expireBeforeMarkIssued: true,
+      providerPolicyDenyReason: 'collab_session_not_found',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(404);
+
+    expect(providerTokenService.issued).toHaveLength(1);
+    expect(pool.refreshDenied[0]).toEqual(['refresh_1', 'collab_session_not_found']);
+    expect(pool.statusUpdates).toContainEqual(['issuance_1', 'failed', 'provider_token_issue_failed']);
+  });
+
   it('does not refresh a grant-backed session with only the leaked session id', async () => {
     const auth = createAuth();
     const providerTokenService = createProviderTokenService();
@@ -1522,6 +1598,36 @@ describe('collab session routes', () => {
     expect(providerTokenService.issued).toEqual([]);
     expect(pool.refreshAttempts).toEqual([]);
     expect(pool.refreshDenied).toEqual([]);
+  });
+
+  it('does not refresh a session after the control-plane role is downgraded', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionRole: 'view' });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(404);
+
+    expect(providerTokenService.issued).toEqual([]);
+    expect(pool.refreshAttempts).toEqual([]);
+  });
+
+  it('does not refresh a session after its control-plane session expires', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ activeSessionExpired: true });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken })
+      .expect(404);
+
+    expect(providerTokenService.issued).toEqual([]);
+    expect(pool.refreshAttempts).toEqual([]);
   });
 
   it('reports revoked edit grants explicitly when refresh is denied before provider token minting', async () => {

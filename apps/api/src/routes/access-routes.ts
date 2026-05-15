@@ -155,7 +155,6 @@ async function verifyRequestDocumentAccess(
     }
   }
 
-  if (isAdminToken(token, authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
   return verifyDocumentAccess(pool, token, docId, branchId, operation);
 }
 
@@ -279,7 +278,7 @@ export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {
 
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
-      if (isAdminToken(documentToken(req), authEnvironment.adminTokenHash)) {
+      if (isAdminToken(bearerToken(req), authEnvironment.adminTokenHash)) {
         res.json({ canRead: true, canWrite: true, actorType: 'user' });
         return;
       }

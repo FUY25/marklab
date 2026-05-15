@@ -379,7 +379,6 @@ function createRequestAuth(pool: DbPool, authEnvironment: HttpAuthEnvironment): 
           }
         }
       }
-      if (isAdminToken(token, authEnvironment.adminTokenHash)) return { actorType: 'user', actorId: 'admin', canManageAccess: true };
       return verifyDocumentAccess(pool, token, docId, branchId, operation);
     },
   };

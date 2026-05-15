@@ -234,6 +234,7 @@ create table if not exists collab_sessions (
   role text check (role in ('view', 'edit')),
   status text not null default 'active' check (status in ('active', 'failed', 'closed')),
   display_name text not null,
+  expires_at timestamptz,
   created_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
 );
@@ -241,7 +242,8 @@ create table if not exists collab_sessions (
 alter table collab_sessions
   add column if not exists refresh_token_hash text,
   add column if not exists is_guest boolean not null default false,
-  add column if not exists status text not null default 'active';
+  add column if not exists status text not null default 'active',
+  add column if not exists expires_at timestamptz;
 
 alter table collab_sessions
   drop constraint if exists collab_sessions_status_check;
@@ -323,6 +325,26 @@ alter table provider_token_issuances
 alter table provider_token_issuances
   add constraint provider_token_issuances_status_check
   check (status in ('pending', 'issued', 'failed', 'revoked'));
+
+update collab_sessions s
+   set expires_at = latest.expires_at
+  from (
+    select distinct on (doc_id, branch_id, session_id)
+           doc_id,
+           branch_id,
+           session_id,
+           issued_at + (valid_for_seconds * interval '1 second') as expires_at
+      from provider_token_issuances
+     where authorization = 'full'
+       and status = 'issued'
+     order by doc_id, branch_id, session_id, issued_at desc, id desc
+  ) latest
+ where s.id = latest.session_id
+   and s.doc_id = latest.doc_id
+   and s.branch_id = latest.branch_id
+   and s.expires_at is null
+   and s.mode = 'edit'
+   and s.status = 'active';
 
 do $$
 begin

@@ -198,7 +198,7 @@ async function main() {
         document_access_grants: ['workspace_id', 'folder_id', 'created_by_user_id', 'grant_kind'],
         document_access_sessions: ['doc_id', 'branch_id', 'actor_kind', 'actor_id'],
         document_branch_states: ['provider_doc_id', 'provider_doc_seeded_at'],
-        collab_sessions: ['refresh_token_hash', 'is_guest', 'status'],
+        collab_sessions: ['refresh_token_hash', 'is_guest', 'status', 'expires_at'],
         provider_token_issuances: ['workspace_id', 'folder_id', 'actor_type', 'actor_id', 'actor_grant_id', 'status', 'provider_error'],
         provider_token_refreshes: ['session_id', 'issued_at', 'expires_at', 'denied_at', 'deny_reason'],
       },

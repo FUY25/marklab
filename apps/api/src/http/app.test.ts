@@ -75,6 +75,7 @@ describe('http app hosted web serving', () => {
     expect(indexSource).toContain('...(localRelayService ? { relayService: localRelayService } : {})');
     expect(indexSource).toContain('...(relay ? { relayServer: relay } : {})');
     expect(indexSource).not.toContain('...(localRelayService && relay');
+    expect(indexSource).toContain("collab_sessions: ['refresh_token_hash', 'is_guest', 'status', 'expires_at']");
   });
 
   it('serves built web assets and falls hosted relay routes back to index.html', async () => {
