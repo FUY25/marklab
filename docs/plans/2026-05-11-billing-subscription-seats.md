@@ -35,7 +35,7 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Plan 2 already enforces named-member seats through `workspace_share_keys` joins and `seat_limits.member_seats`.
 - Plan 2 already enforces concurrent guest edit quota during initial edit-token issuance through `subscriptions` -> `seat_limits.concurrent_guest_edits`. Existing guest edit sessions can refresh without re-running quota after grant/session/role/expiry/revocation checks.
 - Documents with `workspace_id is null` still use the legacy fallback guest quota so old/local documents keep working. Billing should not make that fallback path the public hosted default.
-- The workspace settings browser shell is not created by Plan 2; Plan 2 delivered only server APIs. Plan 3 creates the `apps/collab-web` shell and Members/Documents tabs, and this plan adds Plan & Billing once that shell exists.
+- The workspace settings browser shell was created by Plan 3 at `/workspaces/:workspaceId/settings` in `apps/collab-web`. It has Members and Documents tabs wired to the Plan 2 server APIs plus a disabled Plan & Billing placeholder. This plan replaces that placeholder with the real billing view.
 
 ## File Structure
 
@@ -47,7 +47,7 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Modify `apps/api/src/routes/collab-session-routes.ts`
 - Modify `apps/api/src/http/app.ts`
 - Add tests beside services/routes.
-- Modify the workspace settings UI inside `apps/collab-web` (created in `2026-05-11-collab-web-app.md`; Plan 2 delivered the backing server APIs).
+- Modify the workspace settings UI inside `apps/collab-web/src/workspaces/WorkspaceSettings.tsx` (created in `2026-05-11-collab-web-app.md`; Plan 2 delivered the backing server APIs).
 - Modify docs and downstream deploy plan.
 
 ## Tasks
@@ -82,9 +82,9 @@ The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.
 
 ### Task 4: Control UI
 
-The workspace settings server APIs exist from `2026-05-11-control-plane-mvp.md` Task 7B. The browser shell is created in `2026-05-11-collab-web-app.md` with Members/Documents tabs. This task adds the **Plan & Billing** tab into that shell. Do not create a new app.
+The workspace settings server APIs exist from `2026-05-11-control-plane-mvp.md` Task 7B. The browser shell now exists in `apps/collab-web/src/workspaces/WorkspaceSettings.tsx` with Members/Documents tabs and a disabled Plan & Billing placeholder. This task replaces that placeholder with the real **Plan & Billing** tab. Do not create a new app.
 
-- [ ] Add a Plan & Billing tab to `/workspaces/:workspaceId/settings` in `apps/collab-web`.
+- [ ] Replace the disabled Plan & Billing placeholder in `/workspaces/:workspaceId/settings` in `apps/collab-web`.
 - [ ] Show current plan, member seats used, guest edit sessions used, and upgrade/manage button.
 - [ ] Show clear unavailable messages when plan limits block action.
 - [ ] Owner-only sensitive actions (upgrade/cancel/manage payment) are enforced server-side; the UI hides them for non-owners but does not rely on UI hiding for security.

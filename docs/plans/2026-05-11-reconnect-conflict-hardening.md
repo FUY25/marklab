@@ -51,6 +51,13 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 - Guest edit quota is enforced only on new guest edit sessions. Existing guest edit sessions can refresh after grant/session/role/expiry/revocation checks, so reconnect tests should not expect quota exhaustion to evict already-active guest sessions.
 - View links and read-only export/read routes do not receive provider credentials and must not create durable version rows. Conflict tests must not rely on view/read/export calls to checkpoint shared state.
 
+## Browser Facts From Plan 3
+
+- `apps/collab-web` now owns the browser editor shell. Edit links open `/collab?docId=...&branchId=...&token=...&mode=edit`; view links use the same route with `mode=view`.
+- Browser edit mode already has unavailable-state handling for revoked view links, edit-session creation denials, provider-token revocation, and role downgrade during refresh. Conflict UI must not reinterpret those denial states as merge conflicts.
+- Browser E2E currently proves queued local edits flush after a memory-provider reconnect. This plan still needs the real reconnect/conflict matrix against API-root Y-Sweet provider routes, provider restart, disk projection, and conflict payloads.
+- The browser editor has no conflict banner or conflict-resolution UI yet; Task 3 should add that UI inside the existing `apps/collab-web` editor shell rather than creating a new browser app.
+
 ## File Structure
 
 - Modify `apps/api/src/local/local-conflict-store.ts`
@@ -114,6 +121,7 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 
 - [ ] Add tests for:
   - host online, browser edit, disk projection;
+  - browser offline, local edits queue, reconnect flushes through the real provider route;
   - host offline, browser edit, host returns with disk unchanged;
   - host offline, browser edit, local disk edit, conflict opens;
   - grant revoked, token refresh denied;

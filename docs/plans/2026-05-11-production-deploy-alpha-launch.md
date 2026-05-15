@@ -47,11 +47,17 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - Launch smoke must create or select a workspace, create/import a workspace-owned document with `workspaceId`, create a view/edit grant, join as browser/native, refresh edit provider tokens, and verify revocation denial.
 - Guest quota and member-seat checks are already plan-table-backed for workspace-owned documents. Plan 7 may add Stripe/manual billing management, but production manual/free mode must still prove deterministic limits.
 
+## Browser Facts From Plan 3
+
+- The alpha browser surface is co-located with the API process. `infra/docker/api.Dockerfile` builds `apps/collab-web`, copies `apps/collab-web/dist`, and sets `MARKLAB_COLLAB_WEB_DIST_DIR=/app/apps/collab-web/dist`.
+- Static collab-web assets are served under `/collab-web/`. Browser collaborator routes are `/collab?docId=...&branchId=...&token=...&mode=edit|view`, and workspace settings are `/workspaces/:workspaceId/settings`.
+- Production smoke must verify `/collab` serves the collab-web entry, `/collab-web/assets/...` assets load, existing `apps/web` routes such as `/relay/...` still load, view mode opens without provider websocket traffic, and edit mode refresh denial surfaces unavailable.
+
 ## File Structure
 
 - Modify `fly.toml`
 - Modify `infra/docker/api.Dockerfile`
-- Modify or add `infra/docker/collab-web.Dockerfile` if the web app deploys separately.
+- Do not add `infra/docker/collab-web.Dockerfile` unless this plan explicitly changes the co-located Plan 3 deploy shape.
 - Modify `infra/fly/README.md`
 - Modify `docs/production/relay-ops.md`
 - Create or modify `docs/production/alpha-launch-runbook.md`
@@ -66,7 +72,7 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - [ ] Record final production service shape:
   - API/control plane;
   - provider;
-  - collab-web;
+  - collab-web served by the API image unless this plan changes the deploy shape;
   - native app/CLI distribution;
   - database;
   - provider persistence;
@@ -131,6 +137,7 @@ This plan is the launch gate. It does not add product features. It verifies the 
 
 - [ ] Run browser edit smoke.
 - [ ] Run view-link no-provider-websocket smoke.
+- [ ] Run collab-web static route smoke for `/collab`, `/collab-web/assets/...`, and an existing `apps/web` route such as `/relay/...`.
 - [ ] Run workspace-owned document smoke: login, create workspace, create/import document with `workspaceId`, list it through `/api/workspaces/:workspaceId/documents`, create edit/view grants.
 - [ ] Run native host plus browser guest smoke.
 - [ ] Run CLI share/join/status/wait smoke.

@@ -43,6 +43,12 @@ This plan does not build billing or production deploy. It makes local installati
 - Provider token refresh uses a control-plane session refresh token returned by the edit-session route. CLI docs should distinguish that refresh token from raw share tokens and Y-Sweet `ClientToken`s.
 - Revoked/expired links and provider-token revocation surface as explicit API errors; troubleshooting docs should name `grant_revoked`, `grant_expired`, `provider_token_revoked`, and `collab_session_not_found`.
 
+## Browser Facts From Plan 3
+
+- `apps/collab-web` is built into the API Docker image and served by the API process. The deploy-time dist path is `MARKLAB_COLLAB_WEB_DIST_DIR`; normal packaged clients should not need a separate collab-web origin.
+- Browser collaborator links should open the public web origin at `/collab?docId=...&branchId=...&token=...&mode=edit|view`. Existing `apps/web` share/access panels now generate that route shape, with assets under `/collab-web/`.
+- `/workspaces/:workspaceId/settings` exists in `apps/collab-web` with Members and Documents tabs plus a disabled Plan & Billing placeholder. Packaging/docs should route workspace administration to that browser shell until native settings UI exists.
+
 ## File Structure
 
 - Modify `apps/cli/marklab.mjs`
@@ -92,6 +98,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 
 - [ ] Add tests for hosted-default config and local override config.
 - [ ] Add tests proving `share` creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode.
+- [ ] Add tests proving `join` preserves `/collab?...` edit/view URLs and does not rewrite them back to legacy hosted relay routes.
 - [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli`.
 
 ### Task 3: AI Agent Workflow

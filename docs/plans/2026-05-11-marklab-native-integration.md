@@ -14,7 +14,7 @@ Two MIT-licensed sources dominate this plan: **MarkEdit** for the macOS app shel
 
 **Rules of reuse:**
 
-1. **Default to copying, not re-deriving.** This plan has the most code to lift of any plan: MarkEdit gives you a working macOS Markdown editor, Relay gives you the collaboration bindings. Re-authoring either from scratch is the wrong cost trade. Port MarkEdit's macOS shell into `apps/marklab-macos/`, lift Relay's `y-codemirror.next/` into a shared `packages/collab-editor/`, and spend your engineering time on the MarkLab-specific integration glue.
+1. **Default to copying, not re-deriving.** This plan has the most code to lift of any plan: MarkEdit gives you a working macOS Markdown editor, Relay gives you the collaboration bindings, and Plan 3 now has MarkLab-adapted browser collaboration code. Re-authoring these from scratch is the wrong cost trade. Port MarkEdit's macOS shell into `apps/marklab-macos/`, extract the Plan 3 CodeMirror/Yjs/presence code into a shared `packages/collab-editor/`, and spend your engineering time on the MarkLab-specific integration glue.
 2. **`Learning resources/` is read-only as a directory.** Never edit, move, delete, or `git add` anything under it. Read freely; paste into `apps/marklab-macos/` with attribution headers.
 3. **Preserve attribution.** Each adopted MarkEdit file keeps the upstream MIT LICENSE / copyright header. Add a one-line note: `// Adapted from MarkEdit <upstream-commit-sha>, MIT licensed.`
 4. Adapt to MarkLab branding (app name, bundle id, icons, default settings) and to MarkLab's collaboration model (Y.Text + provider tokens) — MarkEdit is single-user, so collaboration code comes from Relay's `y-codemirror.next/`.
@@ -24,10 +24,10 @@ Two MIT-licensed sources dominate this plan: **MarkEdit** for the macOS app shel
 | Task 1 (Port strategy) | `Learning resources/MarkEdit/` (entire repo) | If choosing **Port**: copy the macOS app target structure (`Xcode project`, `Info.plist`, Swift/SwiftUI sources, CodeMirror bundle build setup, `entitlements`) into `apps/marklab-macos/`. If choosing **Reference**: read the same files but rewrite from scratch. |
 | Task 2 (local file open/save) | `Learning resources/MarkEdit/` (NSDocument / file open/save behavior) | The exact AppKit `NSDocument` subclass wiring and `presentedItemDidChange` / `reloadFromContents` hooks for file watching. Lift directly. |
 | Task 2 (CodeMirror native bundle) | `Learning resources/MarkEdit/` build scripts that bundle CodeMirror for WKWebView | The esbuild/rollup setup that produces the in-app CodeMirror bundle. |
-| Task 4 (native CodeMirror ↔ Y.Text) | `Learning resources/Relay/src/y-codemirror.next/LiveEditPlugin.ts` (same file Plan 3 lifts) | Same plugin reused inside MarkLab.app's WKWebView. Extract MarkLab's reimplementation to `packages/collab-editor/` so the browser and native apps share one source. |
+| Task 4 (native CodeMirror ↔ Y.Text) | `apps/collab-web/src/editor/ytext-codemirror.ts` plus `Learning resources/Relay/src/y-codemirror.next/LiveEditPlugin.ts` | Plan 3 kept the MarkLab-adapted incremental Y.Text binding inside `apps/collab-web`. Extract that implementation into `packages/collab-editor/` before wiring native so browser and native share one source. |
 | Task 4 (offset/range mapping) | `Learning resources/Relay/src/y-codemirror.next/PositionTransformer.ts` and `YRange.ts` | Same as Plan 3. Share via the same package. |
-| Task 5 (native remote cursor) | `Learning resources/Relay/src/y-codemirror.next/RemoteSelections.ts` | Same as Plan 3. Native and browser render the same cursor decorations from the same awareness state. |
-| Task 5 (presence color/name) | `Learning resources/Relay/src/User.ts` | Color generator. Lift once into shared package. |
+| Task 5 (native remote cursor) | `apps/collab-web/src/presence/remote-cursors.ts` plus `Learning resources/Relay/src/y-codemirror.next/RemoteSelections.ts` | Plan 3 already adapted remote cursor and selection decorations for MarkLab awareness. Extract/share the MarkLab version rather than creating a native-only fork. |
+| Task 5 (presence color/name) | `apps/collab-web/src/presence/awareness.ts` plus `Learning resources/Relay/src/User.ts` | Plan 3 already has deterministic display colors and relative-position awareness. Lift it into the shared package before native integration. |
 | Task 6 (CLI/app boundary) | (no learning-resource reference; MarkLab-original IPC) | — |
 
 ---
@@ -49,6 +49,13 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 - Workspace APIs already exist for membership/share-key/settings data: `/api/workspaces`, `/api/workspaces/:workspaceId/members`, `/api/workspaces/:workspaceId/share-keys`, `/api/workspaces/join`, and `/api/workspaces/:workspaceId/documents`.
 - Edit sessions return a control-plane session refresh token alongside the Y-Sweet `ClientToken`. Native code must persist the session refresh token securely enough for alpha, refresh through the control-plane endpoint, and stop editing when refresh is denied for revocation, expiry, role downgrade, or provider-token revocation.
 - View links receive control-plane snapshots only and no provider token. Native code must not try to join the provider for view-only links.
+
+## Browser Facts From Plan 3
+
+- `apps/collab-web` is a Vite/React app served by the API image. Static assets are mounted under `/collab-web/`, while document links open `/collab?docId=...&branchId=...&token=...&mode=...` and workspace settings open `/workspaces/:workspaceId/settings`.
+- Browser edit mode uses the control-plane session route, stores the returned edit-session refresh token separately from the Y-Sweet `ClientToken`, refreshes through the provider-token refresh route, and switches to unavailable when refresh is denied.
+- Browser view mode renders the control-plane Markdown snapshot without CodeMirror, Y.Doc, provider connection, awareness, or IndexedDB Yjs persistence.
+- Plan 3 did **not** create `packages/collab-editor/`; it left the MarkLab-adapted CodeMirror/Y.Text binding, awareness helpers, and remote cursor extension in `apps/collab-web/src/`. Extract those files before native reuse so native/browser cursor and edit semantics stay identical.
 
 ## File Structure
 
