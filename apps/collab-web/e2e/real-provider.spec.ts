@@ -7,9 +7,9 @@ import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect, test, type BrowserContext, type Route } from '@playwright/test';
-import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../../api/src/db/client';
 import { createHttpApp, type HttpRequestAuth } from '../../api/src/http/app';
+import { createHeadlessMilkdownRuntime } from '../../api/src/services/milkdown-headless-runtime';
 import { createUnavailableLiveMarkdownWriter } from '../../api/src/services/live-writer';
 import { createYSweetTokenService } from '../../api/src/provider/ysweet-token-service';
 import {
@@ -71,7 +71,7 @@ async function waitForProviderReady(handle: YSweetProviderHandle, timeoutMs = 10
   throw new Error(`provider_ready_timeout:${lastError}`);
 }
 
-function createBrowserSmokePool(): DbPool {
+function createBrowserSmokePool(initialYjsState: Uint8Array): DbPool {
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
     params?: readonly unknown[],
@@ -87,13 +87,25 @@ function createBrowserSmokePool(): DbPool {
       return { rows: [{ active: 1 } as Row], rowCount: 1 };
     }
     if (/pending\.status = 'pending'/u.test(sql)) return { rows: [], rowCount: 1 };
+    if (/update document_branch_states[\s\S]+provider_doc_seeded_at = now/u.test(sql)) {
+      return { rows: [], rowCount: 1 };
+    }
     if (/update provider_token_issuances/u.test(sql)) return { rows: [], rowCount: 1 };
+    if (/select s\.provider_doc_seeded_at/u.test(sql)) {
+      return {
+        rows: [{
+          provider_doc_seeded_at: null,
+          yjs_state: Buffer.from(initialYjsState),
+        } as Row],
+        rowCount: 1,
+      };
+    }
     if (/select s\.provider_doc_id/u.test(sql)) {
       return {
         rows: [{
           provider_doc_id: providerDocId,
-          provider_doc_seeded_at: '2026-05-11T00:00:00.000Z',
-          yjs_state: Buffer.from(Y.encodeStateAsUpdate(new Y.Doc())),
+          provider_doc_seeded_at: null,
+          yjs_state: Buffer.from(initialYjsState),
         } as Row],
         rowCount: 1,
       };
@@ -185,7 +197,8 @@ async function createRealProviderHarness(): Promise<{
     }, { cwd: repoRoot, requireAuth: true, requireServerToken: true, requireStorePath: true });
     if (!providerConfig.connectionString) throw new Error('browser_smoke_connection_string_missing');
     provider = startYSweetProviderProcess(providerConfig);
-    const app = createHttpApp(createBrowserSmokePool(), createUnavailableLiveMarkdownWriter(), {
+    const initialState = await createHeadlessMilkdownRuntime().initializeFromMarkdown('');
+    const app = createHttpApp(createBrowserSmokePool(initialState.yjsState), createUnavailableLiveMarkdownWriter(), {
       auth: createBrowserSmokeAuth(),
       providerTokenService: createYSweetTokenService({ connectionString: providerConfig.connectionString }),
       providerHttpProxy: (request, response, next) => {

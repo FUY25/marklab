@@ -84,6 +84,8 @@ export interface ActiveEditSession {
   providerToken: IssuedProviderToken;
 }
 
+export type RefreshableEditSession = Pick<ActiveEditSession, 'docId' | 'branchId' | 'sessionId' | 'refreshToken'>;
+
 export interface CollabSessionClientOptions {
   apiUrl?: string;
   fetcher?: typeof fetch;
@@ -297,7 +299,7 @@ export function createCollabSessionClient(options: CollabSessionClientOptions = 
     return parseCollabSession(await readJsonResponse(response));
   }
 
-  async function refreshProviderToken(session: ActiveEditSession): Promise<IssuedProviderToken> {
+  async function refreshProviderToken(session: RefreshableEditSession): Promise<IssuedProviderToken> {
     if (!session) throw new Error('edit_session_not_started');
     const response = await fetcher(withApiUrl(apiUrl, providerTokenRefreshPath(session)), {
       method: 'POST',

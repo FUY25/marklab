@@ -173,3 +173,75 @@ This file records correctness/security bugs found by plan-level review passes.
 36. Hostile relative-position `tname` values could mutate local Y.Doc state during validation.
     - Impact: `Y.createAbsolutePositionFromRelativePosition` calls `doc.get(tname)` for top-level relative positions. A malicious awareness cursor targeting rotating fake `tname` values could grow every collaborator's local `doc.share` map before MarkLab dropped the cursor as off-document.
     - Resolution: cursor resolution now pre-validates relative-position shape and requires the `tname` to match the existing `Y.Text("contents")` top-level name before calling Yjs; a regression verifies hostile names do not change `doc.share`.
+
+37. Browser editor state used a different Yjs document shape than the server seed/snapshot path.
+    - Impact: the browser bound CodeMirror to `Y.Text("contents")`, while provider seeding and snapshots still used Milkdown/ProseMirror Yjs state. Existing documents could open empty in `apps/collab-web`, and browser edits could be invisible to read-only view snapshots.
+    - Resolution: Y-Sweet provider seeds are now converted from canonical branch Yjs state into browser `Y.Text("contents")` state, and server snapshots convert browser `contents` state back through the canonical Milkdown serializer. Provider-token tests cover seeded initial content and browser-edit snapshot reads.
+
+38. Offline IndexedDB persistence was orphaned across reloads.
+    - Impact: edit sessions kept `sessionId` and `refreshToken` only in memory, while the IndexedDB key included the session id. A tab crash or reload after offline edits created a new session and a new persistence store, leaving unsynced edits behind.
+    - Resolution: edit sessions now persist `sessionId`, `refreshToken`, and the latest provider token in browser storage keyed by document, branch, and route token; reload refreshes the stored session before mounting the provider so the same IndexedDB key is reused. Browser E2E covers an offline draft surviving reload without creating another session after the reload point.
+
+39. Read-only view and live preview used an incomplete ad hoc Markdown renderer.
+    - Impact: links, emphasis, inline code, ordered lists, tables, task lists, images, and other common Markdown rendered as raw source despite the Plan 3 rendered view/preview contract.
+    - Resolution: the ad hoc line parser was replaced with `react-markdown` plus GFM support, with HTML skipped. Read-only view tests cover links, emphasis, inline code, ordered lists, task lists, tables, and script non-execution.
+
+40. Persisted-session refresh denial was bypassed on reload.
+    - Impact: a revoked or forbidden persisted edit session could clear local storage and create a fresh edit session, hiding the terminal denial and leaving editing available when the contract says refresh denial stops editing.
+    - Resolution: persisted-session terminal refresh denial now clears the persisted session, surfaces the denial, and does not mint a fresh edit session. Browser E2E covers reload after `provider_token_revoked`.
+
+41. Persisted-session refresh tokens were not validated before remounting the editor.
+    - Impact: a wrong-doc, wrong-session, downgraded, or read-only provider token returned during reload could mount an editable CodeMirror/provider session before the normal scheduled-refresh validation ran.
+    - Resolution: initial persisted refresh now uses the same provider-doc, session-id, client-token-doc, and full-authorization validation as scheduled refresh. Browser E2E covers a wrong-provider-doc refresh response before editor mount.
+
+42. Rendered Markdown could auto-load attacker-controlled remote images.
+    - Impact: public view/edit preview Markdown could trigger remote image requests that expose the collab URL, including grant tokens in the query string, through the browser referrer.
+    - Resolution: Markdown images render as inert placeholders instead of `<img>` tags, and external Markdown links include `rel="noreferrer noopener"`. Read-only view tests assert no remote image element is created.
+
+43. Persisted edit sessions stored the refresh token and raw Y-Sweet client token together.
+    - Impact: one XSS-readable localStorage value contained both the long-lived refresh secret and the current provider write credential, despite the plan requiring the edit-session refresh token to be stored separately from the Y-Sweet `ClientToken`.
+    - Resolution: persisted edit sessions now store only route/session metadata, the refresh token, and the non-secret provider doc id needed for the IndexedDB key. The raw Y-Sweet `ClientToken` is never persisted; a unit test checks the serialized payload.
+
+44. Storage quota/security failures could break session startup or refresh.
+    - Impact: localStorage writes could throw after a server session was minted, causing the editor to become unavailable or retry refresh without replacing the provider token.
+    - Resolution: persisted-session writes and clears now catch storage errors so quota/private-mode failures degrade reload persistence without breaking the active edit session. Unit coverage simulates quota failure on the real payload write.
+
+45. Offline reload required the control plane to be available before loading IndexedDB edits.
+    - Impact: if the page reloaded during a control-plane outage, previously persisted offline edits were not loaded or visible, weakening the offline/reconnect contract.
+    - Resolution: when a persisted session exists and refresh fails transiently, the editor mounts with the persisted provider doc id/session id, loads the same IndexedDB store, shows `Reconnecting`, and retries refresh without creating a fresh session. Browser E2E covers reload with temporary control-plane refresh failures.
+
+46. Persisted-session storage kept the raw route/share token.
+    - Impact: the share token remained in the localStorage key and payload even though refresh uses the edit-session refresh token and should not need the original grant token after join.
+    - Resolution: the route token is now reduced to a short non-secret namespace hash for storage lookup and is no longer present in the storage key or payload. Unit coverage asserts the raw share token is absent.
+
+47. Persisted-session reads required localStorage writes to succeed.
+    - Impact: quota/private-mode failures could make an already readable persisted session invisible on reload, causing a fresh session and orphaned IndexedDB edits.
+    - Resolution: storage reads no longer run the write probe; only writes require writable storage. Unit coverage verifies an existing session still loads when the storage probe would throw.
+
+48. Protocol-relative Markdown links were treated as internal links.
+    - Impact: `[x](//attacker.example/path)` could navigate to a third-party URL without `noreferrer`, leaking the collab URL and query token on click.
+    - Resolution: protocol-relative links are treated as external and receive `rel="noreferrer noopener"` plus `_blank`. Renderer tests cover this case.
+
+49. Blocked browser storage could throw before the editor degraded to a normal session path.
+    - Impact: sandboxed/private browser contexts can throw on the `window.localStorage` getter or `getItem`, not only on writes. That could break persisted-session reload handling and leave the editor stuck instead of starting a fresh session or showing unavailable state.
+    - Resolution: edit-session storage now treats storage getter/read/remove/write failures as unavailable storage, and unit coverage verifies blocked storage does not throw.
+
+50. Root Vitest discovery skipped `.test.tsx` files.
+    - Impact: renderer hardening tests for skipped HTML, inert images, external-link referrer protection, GFM tables, and task lists were only covered by the app-local Vitest config, not by root direct Vitest runs.
+    - Resolution: the root Vitest include now covers `.test.tsx` under packages, apps, and src. The direct root renderer-test command is part of this fix verification.
+
+51. Provider seed retries could duplicate the whole document.
+    - Impact: converting the same canonical branch Markdown through a fresh Y.Doc produced a different Yjs client id each time, so a seed-marker failure followed by retry could append the full initial document again.
+    - Resolution: provider `contents` seed updates now use a deterministic seed client id for the provider document, and token-service tests apply retry updates to the same Y.Doc to prove the text is inserted once.
+
+52. Already-seeded provider docs could remain in the old Milkdown Yjs shape.
+    - Impact: docs marked seeded before the browser `Y.Text("contents")` contract landed could mint edit tokens without conversion, causing the browser editor to open empty while old provider state still held the document content.
+    - Resolution: initial edit sessions for already-seeded provider docs now ask the token service to read current provider state and add a browser `contents` text when missing. Tests cover the route flag and the Milkdown-state migration.
+
+53. Provider-token refresh skipped provider-shape migration.
+    - Impact: a browser restoring an existing edit session through the refresh endpoint could receive a fresh token for an old seeded provider doc that still lacked `Y.Text("contents")`, so reload could mount an empty editor even though initial join was fixed.
+    - Resolution: refresh token issuance now also requests provider `contents` migration, and route coverage asserts the refresh path passes the migration flag.
+
+54. Changed seed retries could leave stale provider contents.
+    - Impact: deterministic seed client ids made identical retries idempotent, but if the branch Markdown changed after a seed-marker failure, the retry update reused the same Yjs clock range and could be ignored, leaving the provider with stale first-attempt contents.
+    - Resolution: seed issuance now reads current provider state when supported and sends a replacement update if existing `contents` differs from the retry seed. Token-service coverage verifies changed retries replace stale contents.

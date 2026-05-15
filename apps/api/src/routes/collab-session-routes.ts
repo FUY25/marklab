@@ -309,6 +309,7 @@ async function issueProviderTokenWithSeedLock(pool: DbPool, input: {
     const tokenRequest: IssueProviderTokenInput = { ...input.tokenRequest };
     if (seedState.seededAt) {
       delete tokenRequest.seedYjsState;
+      tokenRequest.ensureProviderContentsState = true;
       return issueAndRecheck(tokenRequest);
     }
 
@@ -333,6 +334,7 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
   actor: { actorType: 'agent' | 'user'; actorId?: string; grantId?: string };
   displayName: string;
   seedYjsState?: Uint8Array;
+  ensureProviderContentsState?: boolean;
   isGuestSession: boolean;
   enforceGuestQuota?: boolean;
   recheckBeforeMarkIssued?: () => Promise<void>;
@@ -395,6 +397,7 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
           isGuest: input.isGuestSession,
         },
         ...(input.seedYjsState ? { seedYjsState: input.seedYjsState } : {}),
+        ...(input.ensureProviderContentsState ? { ensureProviderContentsState: true } : {}),
       },
     });
     const markedIssued = await markProviderTokenIssuanceIssuedIfSessionActive(pool, {
@@ -525,7 +528,9 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
           displayName: body.displayName,
           isGuestSession,
           ...(recheckBeforeMarkIssued ? { recheckBeforeMarkIssued } : {}),
-          ...(providerDoc.needsSeed ? { seedYjsState: providerDoc.initialYjsState } : {}),
+          ...(providerDoc.needsSeed
+            ? { seedYjsState: providerDoc.initialYjsState }
+            : { ensureProviderContentsState: true }),
         });
         providerToken = issued.providerToken;
       } catch (error) {
@@ -612,6 +617,7 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
             displayName: existingSession.displayName,
             isGuestSession: existingSession.isGuest,
             enforceGuestQuota: false,
+            ensureProviderContentsState: true,
             ...(recheckBeforeMarkIssued ? { recheckBeforeMarkIssued } : {}),
           });
           providerToken = issued.providerToken;

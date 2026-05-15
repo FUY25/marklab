@@ -171,7 +171,8 @@ describe('createYSweetTokenService', () => {
   it('seeds newly allocated provider documents before minting the client token', async () => {
     const manager = createFakeManager();
     const service = createYSweetTokenService({ manager });
-    const seedYjsState = new Uint8Array([1, 2, 3]);
+    const runtime = createHeadlessMilkdownRuntime();
+    const seedYjsState = (await runtime.initializeFromMarkdown('# Seeded\n')).yjsState;
 
     await service.issueProviderToken({
       providerDocId: 'ml_doc_seeded',
@@ -189,8 +190,33 @@ describe('createYSweetTokenService', () => {
         validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
       },
     ]);
-    expect(manager.updates).toEqual([{ docId: 'ml_doc_seeded', update: seedYjsState }]);
+    expect(manager.updates).toHaveLength(1);
+    expect(manager.updates[0]?.docId).toBe('ml_doc_seeded');
     expect(manager.events).toEqual(['create:ml_doc_seeded', 'update:ml_doc_seeded', 'token:ml_doc_seeded']);
+  });
+
+  it('converts canonical branch Yjs state to browser contents text before seeding Y-Sweet', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const branchState = await runtime.initializeFromMarkdown('# Seeded browser doc\n\nInitial body.\n');
+    const manager = createFakeManager();
+    const service = createYSweetTokenService({ manager });
+
+    await service.issueProviderToken({
+      providerDocId: 'ml_doc_seeded',
+      sessionId: 'session_seed',
+      authorization: 'full',
+      seedYjsState: branchState.yjsState,
+    });
+
+    const update = manager.updates[0]?.update;
+    expect(update).toBeDefined();
+    const seeded = new Y.Doc();
+    try {
+      Y.applyUpdate(seeded, update!);
+      expect(seeded.getText('contents').toString()).toBe('# Seeded browser doc\n\nInitial body.\n');
+    } finally {
+      seeded.destroy();
+    }
   });
 
   it('rejects a seeded provider document when Y-Sweet returns a different document id', async () => {
@@ -211,7 +237,8 @@ describe('createYSweetTokenService', () => {
   it('can reseed an existing provider document idempotently after a marker write failure', async () => {
     const manager = createFakeManager();
     const service = createYSweetTokenService({ manager });
-    const seedYjsState = new Uint8Array([1, 2, 3]);
+    const runtime = createHeadlessMilkdownRuntime();
+    const seedYjsState = (await runtime.initializeFromMarkdown('# Retry seed\n')).yjsState;
 
     await service.issueProviderToken({
       providerDocId: 'ml_doc_seeded',
@@ -230,10 +257,95 @@ describe('createYSweetTokenService', () => {
       { method: 'createDoc', docId: 'ml_doc_seeded' },
       { method: 'createDoc', docId: 'ml_doc_seeded' },
     ]);
-    expect(manager.updates).toEqual([
-      { docId: 'ml_doc_seeded', update: seedYjsState },
-      { docId: 'ml_doc_seeded', update: seedYjsState },
-    ]);
+    expect(manager.updates.map((update) => update.docId)).toEqual(['ml_doc_seeded', 'ml_doc_seeded']);
+    const providerDoc = new Y.Doc();
+    try {
+      for (const update of manager.updates) {
+        Y.applyUpdate(providerDoc, update.update);
+      }
+      expect(providerDoc.getText('contents').toString()).toBe('# Retry seed\n');
+    } finally {
+      providerDoc.destroy();
+    }
+  });
+
+  it('migrates already-seeded Milkdown provider state to browser contents before minting a token', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const existingProviderState = await runtime.initializeFromMarkdown('# Existing provider doc\n\nOld shape.\n');
+    let providerState = existingProviderState.yjsState;
+    const manager = createFakeManager();
+    manager.getDocAsUpdate = vi.fn(async () => providerState);
+    manager.updateDoc = async (docId, update) => {
+      manager.updates.push({ docId, update });
+      const providerDoc = new Y.Doc();
+      try {
+        Y.applyUpdate(providerDoc, providerState);
+        Y.applyUpdate(providerDoc, update);
+        providerState = Y.encodeStateAsUpdate(providerDoc);
+      } finally {
+        providerDoc.destroy();
+      }
+    };
+    const service = createYSweetTokenService({ manager });
+
+    await service.issueProviderToken({
+      providerDocId: 'ml_doc_existing',
+      sessionId: 'session_existing',
+      authorization: 'full',
+      ensureProviderContentsState: true,
+    });
+
+    expect(manager.getDocAsUpdate).toHaveBeenCalledWith('ml_doc_existing');
+    expect(manager.updates.map((update) => update.docId)).toEqual(['ml_doc_existing']);
+    const migrated = new Y.Doc();
+    try {
+      Y.applyUpdate(migrated, providerState);
+      expect(migrated.getText('contents').toString()).toBe('# Existing provider doc\n\nOld shape.\n');
+    } finally {
+      migrated.destroy();
+    }
+  });
+
+  it('replaces stale provider contents when a changed seed retries after marker failure', async () => {
+    const runtime = createHeadlessMilkdownRuntime();
+    const firstSeed = await runtime.initializeFromMarkdown('# First seed\n');
+    const retrySeed = await runtime.initializeFromMarkdown('# Retry changed seed\n');
+    let providerState = Y.encodeStateAsUpdate(new Y.Doc());
+    const manager = createFakeManager();
+    manager.getDocAsUpdate = vi.fn(async () => providerState);
+    manager.updateDoc = async (docId, update) => {
+      manager.updates.push({ docId, update });
+      const providerDoc = new Y.Doc();
+      try {
+        Y.applyUpdate(providerDoc, providerState);
+        Y.applyUpdate(providerDoc, update);
+        providerState = Y.encodeStateAsUpdate(providerDoc);
+      } finally {
+        providerDoc.destroy();
+      }
+    };
+    const service = createYSweetTokenService({ manager });
+
+    await service.issueProviderToken({
+      providerDocId: 'ml_doc_seeded',
+      sessionId: 'session_first',
+      authorization: 'full',
+      seedYjsState: firstSeed.yjsState,
+    });
+    await service.issueProviderToken({
+      providerDocId: 'ml_doc_seeded',
+      sessionId: 'session_retry',
+      authorization: 'full',
+      seedYjsState: retrySeed.yjsState,
+    });
+
+    const providerDoc = new Y.Doc();
+    try {
+      Y.applyUpdate(providerDoc, providerState);
+      expect(providerDoc.getText('contents').toString()).toBe('# Retry changed seed\n');
+    } finally {
+      providerDoc.destroy();
+    }
   });
 
   it('starts the reported token TTL before waiting on the Y-Sweet manager', async () => {
@@ -388,6 +500,50 @@ describe('createYSweetTokenService', () => {
     expect(queries[0]?.params).toEqual(['branch_1', 'doc_1']);
     expect(queries[0]?.sql).toContain('join document_branches');
     expect(queries[0]?.sql).toContain('b.doc_id = $2');
+  });
+
+  it('reads browser contents text provider state as current Markdown snapshots', async () => {
+    const providerDoc = new Y.Doc();
+    providerDoc.getText('contents').insert(0, '# Browser current\n\nEdited in web.\n');
+    const providerState = Y.encodeStateAsUpdate(providerDoc);
+    providerDoc.destroy();
+    const manager: YSweetDocumentManagerLike = {
+      async createDoc(docId) {
+        return { docId: docId ?? 'ml_doc_generated' };
+      },
+      async getClientToken() {
+        throw new Error('not_used');
+      },
+      async getOrCreateDocAndToken() {
+        throw new Error('not_used');
+      },
+      async getDocAsUpdate() {
+        return providerState;
+      },
+      async updateDoc() {
+        throw new Error('not_used');
+      },
+    };
+    const service = createYSweetSnapshotService({
+      pool: {
+        async query<Row = unknown>() {
+          return {
+            rows: [{
+              provider_doc_id: 'ml_doc_current',
+              provider_doc_seeded_at: '2026-05-11T00:00:00.000Z',
+            } as Row],
+            rowCount: 1,
+          };
+        },
+      } as never,
+      manager,
+    });
+
+    await expect(service.readCurrentMarkdownSnapshot({ docId: 'doc_1', branchId: 'branch_1' })).resolves.toMatchObject({
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      markdown: '# Browser current\n\nEdited in web.\n',
+    });
   });
 
   it('maps provider snapshot read failures to an explicit unavailable error', async () => {

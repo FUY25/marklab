@@ -13,6 +13,8 @@ export interface RuntimeMarkdownState {
   hash: string;
 }
 
+export const MARKLAB_PROVIDER_CONTENTS_TEXT_NAME = 'contents';
+
 export interface AppliedHeadlessMarkdownTransaction {
   serializedMarkdown: string;
   yjsState: Uint8Array;
@@ -221,6 +223,53 @@ function calculateChangeMetadata(currentMarkdown: string, targetMarkdown: string
   };
 }
 
+export function encodeProviderContentsMarkdownAsYjsState(markdown: string, seedKey = markdown): Uint8Array {
+  const ydoc = new Y.Doc();
+  try {
+    ydoc.clientID = providerContentsSeedClientId(seedKey);
+    ydoc.getText(MARKLAB_PROVIDER_CONTENTS_TEXT_NAME).insert(0, markdown);
+    return Y.encodeStateAsUpdate(ydoc);
+  } finally {
+    ydoc.destroy();
+  }
+}
+
+function providerContentsSeedClientId(seedKey: string): number {
+  const hashPrefix = sha256Hex(`marklab-provider-contents-seed:${seedKey}`).slice(0, 8);
+  const clientId = Number.parseInt(hashPrefix, 16);
+  return clientId === 0 ? 1 : clientId;
+}
+
+export function readProviderContentsMarkdownFromYjsState(yjsState: Uint8Array): string | null {
+  if (yjsState.byteLength === 0) return null;
+  const ydoc = new Y.Doc();
+  try {
+    Y.applyUpdate(ydoc, yjsState);
+    if (!ydoc.share.has(MARKLAB_PROVIDER_CONTENTS_TEXT_NAME)) return null;
+    try {
+      return ydoc.getText(MARKLAB_PROVIDER_CONTENTS_TEXT_NAME).toString();
+    } catch {
+      throw new Error('invalid_provider_contents_ytext');
+    }
+  } finally {
+    ydoc.destroy();
+  }
+}
+
+export function encodeProviderContentsReplacementYjsUpdate(yjsState: Uint8Array, markdown: string): Uint8Array | null {
+  const ydoc = new Y.Doc();
+  try {
+    Y.applyUpdate(ydoc, yjsState);
+    const contents = ydoc.getText(MARKLAB_PROVIDER_CONTENTS_TEXT_NAME);
+    if (contents.toString() === markdown) return null;
+    contents.delete(0, contents.length);
+    contents.insert(0, markdown);
+    return Y.encodeStateAsUpdate(ydoc);
+  } finally {
+    ydoc.destroy();
+  }
+}
+
 async function createSession(input: { yjsState?: Uint8Array; seedMarkdown?: string }): Promise<RuntimeSession> {
   const dom = new JSDOM('<!doctype html><html><body><div id="editor"></div></body></html>');
   const restoreDom = installDom(dom);
@@ -299,7 +348,10 @@ export function createHeadlessMilkdownRuntime(): HeadlessMilkdownRuntime {
 
     async serializeYjsState(yjsState) {
       return withHeadlessLifecycleLock(async () => {
-        const session = await createSession({ yjsState });
+        const providerContentsMarkdown = readProviderContentsMarkdownFromYjsState(yjsState);
+        const session = providerContentsMarkdown === null
+          ? await createSession({ yjsState })
+          : await createSession({ seedMarkdown: providerContentsMarkdown });
         try {
           return await serializeSession(session);
         } finally {

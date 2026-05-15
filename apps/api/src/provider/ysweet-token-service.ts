@@ -3,7 +3,13 @@ import * as Y from 'yjs';
 import { PROVIDER_TOKEN_TTL_SECONDS } from '../config/provider-token-policy';
 import type { DbPool } from '../db/client';
 import type { CollabSnapshotService } from '../http/app';
-import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
+import {
+  createHeadlessMilkdownRuntime,
+  encodeProviderContentsReplacementYjsUpdate,
+  encodeProviderContentsMarkdownAsYjsState,
+  readProviderContentsMarkdownFromYjsState,
+  type HeadlessMilkdownRuntime,
+} from '../services/milkdown-headless-runtime';
 
 export type ProviderAuthorization = 'full' | 'read-only';
 
@@ -51,7 +57,40 @@ export interface IssueProviderTokenInput {
   authorization: ProviderAuthorization;
   validForSeconds?: number;
   seedYjsState?: Uint8Array;
+  ensureProviderContentsState?: boolean;
   sessionIdentity?: ProviderSessionIdentity;
+}
+
+async function encodeProviderSeedYjsState(
+  yjsState: Uint8Array,
+  runtime: HeadlessMilkdownRuntime,
+  providerDocId: string,
+  currentProviderYjsState?: Uint8Array,
+): Promise<Uint8Array | null> {
+  const providerContentsMarkdown = readProviderContentsMarkdownFromYjsState(yjsState);
+  const markdown = providerContentsMarkdown ?? (await runtime.serializeYjsState(yjsState)).markdown;
+  if (currentProviderYjsState) {
+    const currentContentsMarkdown = readProviderContentsMarkdownFromYjsState(currentProviderYjsState);
+    if (currentContentsMarkdown !== null) {
+      return encodeProviderContentsReplacementYjsUpdate(currentProviderYjsState, markdown);
+    }
+  }
+  return encodeProviderContentsMarkdownAsYjsState(markdown, providerDocId);
+}
+
+async function ensureProviderContentsYjsState(input: {
+  manager: YSweetDocumentManagerLike;
+  providerDocId: string;
+  runtime: HeadlessMilkdownRuntime;
+}): Promise<void> {
+  if (!input.manager.getDocAsUpdate) throw new Error('ysweet_provider_state_read_not_supported');
+  const yjsState = await input.manager.getDocAsUpdate(input.providerDocId);
+  if (readProviderContentsMarkdownFromYjsState(yjsState) !== null) return;
+  const serialized = await input.runtime.serializeYjsState(yjsState);
+  await input.manager.updateDoc(
+    input.providerDocId,
+    encodeProviderContentsMarkdownAsYjsState(serialized.markdown, input.providerDocId),
+  );
 }
 
 export function createYSweetSnapshotService(input: {
@@ -121,6 +160,7 @@ export function createYSweetTokenService(input: {
 } = {}): ProviderTokenService {
   const manager = input.manager ?? new DocumentManager(input.connectionString ?? requiredConnectionString());
   const defaultValidForSeconds = input.defaultValidForSeconds ?? PROVIDER_TOKEN_TTL_SECONDS;
+  const runtime = createHeadlessMilkdownRuntime();
 
   return {
     async issueProviderToken(request) {
@@ -136,9 +176,23 @@ export function createYSweetTokenService(input: {
         // already exists, which lets us retry after a local seed-marker failure.
         const created = await manager.createDoc(request.providerDocId);
         if (created.docId !== request.providerDocId) throw new Error('ysweet_provider_doc_id_mismatch');
-        await manager.updateDoc(created.docId, request.seedYjsState);
+        const currentProviderYjsState = manager.getDocAsUpdate ? await manager.getDocAsUpdate(created.docId) : undefined;
+        const providerSeedYjsState = await encodeProviderSeedYjsState(
+          request.seedYjsState,
+          runtime,
+          request.providerDocId,
+          currentProviderYjsState,
+        );
+        if (providerSeedYjsState) await manager.updateDoc(created.docId, providerSeedYjsState);
         clientToken = await manager.getClientToken(created, tokenRequest);
       } else {
+        if (request.ensureProviderContentsState) {
+          await ensureProviderContentsYjsState({
+            manager,
+            providerDocId: request.providerDocId,
+            runtime,
+          });
+        }
         clientToken = await manager.getOrCreateDocAndToken(request.providerDocId, tokenRequest);
       }
 

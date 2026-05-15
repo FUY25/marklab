@@ -445,6 +445,26 @@ describe('collab session routes', () => {
     expect(pool.statusUpdates[0]).toEqual(['issuance_1', 'doc_1', 'branch_1', response.body.session.sessionId]);
   });
 
+  it('asks the provider service to migrate already-seeded documents into browser contents shape', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ initialProviderDocId: 'ml_doc_existing', initialProviderDocSeededAt: '2026-05-11T00:00:00.000Z' });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session')
+      .send({ mode: 'edit', clientKind: 'browser', displayName: 'Alice' })
+      .expect(201);
+
+    expect(providerTokenService.issued).toEqual([expect.objectContaining({
+      providerDocId: 'ml_doc_existing',
+      ensureProviderContentsState: true,
+    })]);
+    expect(providerTokenService.issued[0]).toEqual(expect.not.objectContaining({
+      seedYjsState: expect.anything(),
+    }));
+  });
+
   it('does not treat admin tokens in query strings as provider-token write auth', async () => {
     process.env.MARKLAB_REQUIRE_AUTH = 'true';
     process.env.MARKLAB_ADMIN_TOKEN_HASH = hashToken('admin-secret');
@@ -1327,6 +1347,7 @@ describe('collab session routes', () => {
       sessionId: 'session_server',
       authorization: 'full',
       validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
+      ensureProviderContentsState: true,
       sessionIdentity: expect.objectContaining({
         sessionId: 'session_server',
         actorType: 'user',

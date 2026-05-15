@@ -12,6 +12,7 @@ interface RouteOptions {
   refreshFailures?: Array<{ error: string; status: number }>;
   editCreateError?: string;
   viewError?: string;
+  refreshTokenResponse?: (sessionId: string) => ReturnType<typeof providerToken>;
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -52,6 +53,8 @@ function providerToken(sessionId: string, expiresInMs: number) {
 async function installControlPlaneRoutes(context: BrowserContext, options: RouteOptions = {}) {
   let sessionCounter = 0;
   const tokenExpiresInMs = options.tokenExpiresInMs ?? 10 * 60 * 1000;
+  const createdSessions: string[] = [];
+  const refreshedSessions: string[] = [];
 
   await context.route(`**/api/docs/${docId}/branches/${branchId}/collab/session**`, async (route: Route) => {
     const request = route.request();
@@ -68,7 +71,10 @@ async function installControlPlaneRoutes(context: BrowserContext, options: Route
         return;
       }
       const sessionId = url.match(/\/collab\/session\/([^/]+)\/provider-token\/refresh/u)?.[1] ?? 'session_refresh';
-      await route.fulfill(jsonResponse({ providerToken: providerToken(sessionId, tokenExpiresInMs) }));
+      refreshedSessions.push(sessionId);
+      await route.fulfill(jsonResponse({
+        providerToken: options.refreshTokenResponse?.(sessionId) ?? providerToken(sessionId, tokenExpiresInMs),
+      }));
       return;
     }
 
@@ -100,6 +106,7 @@ async function installControlPlaneRoutes(context: BrowserContext, options: Route
 
     sessionCounter += 1;
     const sessionId = `session_e2e_${sessionCounter}`;
+    createdSessions.push(sessionId);
     await route.fulfill(jsonResponse({
       mode: 'edit',
       session: {
@@ -111,6 +118,8 @@ async function installControlPlaneRoutes(context: BrowserContext, options: Route
       providerToken: providerToken(sessionId, tokenExpiresInMs),
     }));
   });
+
+  return { createdSessions, refreshedSessions };
 }
 
 function editUrl() {
@@ -186,6 +195,110 @@ test('edit tab queues local edits while offline and flushes them after reconnect
   });
   await expect(pageA.locator('.connection-pill')).toHaveText('Connected');
   await expect(pageB.locator('.cm-content')).toContainText('offline draft');
+  await context.close();
+});
+
+test('edit tab reload reuses its session and restores unsynced offline IndexedDB edits', async ({ browser }) => {
+  const context = await browser.newContext();
+  const routeState = await installControlPlaneRoutes(context);
+  const page = await context.newPage();
+
+  await page.goto(editUrl());
+  await expect(page.locator('.connection-pill')).toHaveText('Connected');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('marklab:e2e-provider-status', { detail: { status: 'offline' } }));
+  });
+  await expect(page.locator('.connection-pill')).toHaveText('Offline');
+
+  await page.locator('.cm-content').click();
+  await page.keyboard.type('offline reload draft');
+  await expect(page.locator('.cm-content')).toContainText('offline reload draft');
+  await page.waitForTimeout(500);
+  const createdBeforeReload = [...routeState.createdSessions];
+
+  await page.reload();
+
+  await expect(page.locator('.cm-content')).toContainText('offline reload draft');
+  expect(routeState.createdSessions).toEqual(createdBeforeReload);
+  expect(routeState.refreshedSessions.some((sessionId) => createdBeforeReload.includes(sessionId))).toBe(true);
+  await context.close();
+});
+
+test('edit tab reload stops editing when persisted refresh is denied', async ({ browser }) => {
+  const context = await browser.newContext();
+  const routeOptions: RouteOptions = {};
+  const routeState = await installControlPlaneRoutes(context, routeOptions);
+  const page = await context.newPage();
+
+  await page.goto(editUrl());
+  await expect(page.locator('.connection-pill')).toHaveText('Connected');
+  const createdBeforeReload = [...routeState.createdSessions];
+  routeOptions.refreshError = 'provider_token_revoked';
+
+  await page.reload();
+
+  await expect(page.getByRole('status')).toContainText('provider_token_revoked');
+  await expect(page.locator('.connection-pill')).toHaveText('Unavailable');
+  await expect(page.locator('.cm-editor')).toHaveCount(0);
+  expect(routeState.createdSessions).toEqual(createdBeforeReload);
+  await context.close();
+});
+
+test('edit tab reload rejects invalid refreshed provider tokens before mounting the editor', async ({ browser }) => {
+  const context = await browser.newContext();
+  const routeOptions: RouteOptions = {};
+  const routeState = await installControlPlaneRoutes(context, routeOptions);
+  const page = await context.newPage();
+
+  await page.goto(editUrl());
+  await expect(page.locator('.connection-pill')).toHaveText('Connected');
+  const createdBeforeReload = [...routeState.createdSessions];
+  routeOptions.refreshTokenResponse = (sessionId) => {
+    const token = providerToken(sessionId, 10 * 60 * 1000);
+    return {
+      ...token,
+      providerDocId: 'wrong_provider_doc',
+      clientToken: {
+        ...token.clientToken,
+        docId: 'wrong_provider_doc',
+      },
+    };
+  };
+
+  await page.reload();
+
+  await expect(page.getByRole('status')).toContainText('invalid_provider_token_refresh');
+  await expect(page.locator('.connection-pill')).toHaveText('Unavailable');
+  await expect(page.locator('.cm-editor')).toHaveCount(0);
+  expect(routeState.createdSessions).toEqual(createdBeforeReload);
+  await context.close();
+});
+
+test('edit tab reload shows IndexedDB edits when control-plane refresh is temporarily unavailable', async ({ browser }) => {
+  const context = await browser.newContext();
+  const routeOptions: RouteOptions = {};
+  const routeState = await installControlPlaneRoutes(context, routeOptions);
+  const page = await context.newPage();
+
+  await page.goto(editUrl());
+  await expect(page.locator('.connection-pill')).toHaveText('Connected');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('marklab:e2e-provider-status', { detail: { status: 'offline' } }));
+  });
+  await expect(page.locator('.connection-pill')).toHaveText('Offline');
+  await page.locator('.cm-content').click();
+  await page.keyboard.type('control plane down draft');
+  await expect(page.locator('.cm-content')).toContainText('control plane down draft');
+  await page.waitForTimeout(500);
+  const createdBeforeReload = [...routeState.createdSessions];
+  routeOptions.refreshFailures = Array.from({ length: 4 }, () => ({ error: 'temporarily_unavailable', status: 503 }));
+
+  await page.reload();
+
+  await expect(page.locator('.cm-content')).toContainText('control plane down draft');
+  await expect(page.locator('.connection-pill')).toHaveText('Reconnecting');
+  expect(routeState.createdSessions).toEqual(createdBeforeReload);
   await context.close();
 });
 

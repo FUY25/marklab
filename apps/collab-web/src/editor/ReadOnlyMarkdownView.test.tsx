@@ -16,7 +16,24 @@ describe('ReadOnlyMarkdownView', () => {
           versionId: 'ver_1',
           versionNumber: 3,
           hash: 'sha256:view',
-          markdown: '# Shared\n\nBody\n\n- One\n- Two\n\n<script>alert(1)</script>',
+          markdown: [
+            '# Shared',
+            '',
+            'Body with **bold**, `code`, [MarkLab](https://example.com), and [protocol](//attacker.example/path).',
+            '',
+            '1. First',
+            '2. Second',
+            '',
+            '- [x] Done',
+            '',
+            '| A | B |',
+            '| - | - |',
+            '| 1 | 2 |',
+            '',
+            '![diagram](https://attacker.example/pixel.png)',
+            '',
+            '<script>alert(1)</script>',
+          ].join('\n'),
         },
       })),
     };
@@ -32,8 +49,17 @@ describe('ReadOnlyMarkdownView', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Shared' })).toBeTruthy();
-    expect(screen.getByText('Body')).toBeTruthy();
-    expect(screen.getByText('One')).toBeTruthy();
+    expect(screen.getByText('bold').tagName).toBe('STRONG');
+    expect(screen.getByText('code').tagName).toBe('CODE');
+    expect(screen.getByRole('link', { name: 'MarkLab' }).getAttribute('href')).toBe('https://example.com');
+    expect(screen.getByRole('link', { name: 'MarkLab' }).getAttribute('rel')).toBe('noreferrer noopener');
+    expect(screen.getByRole('link', { name: 'protocol' }).getAttribute('rel')).toBe('noreferrer noopener');
+    expect(screen.getByText('First')).toBeTruthy();
+    expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByRole('columnheader', { name: 'A' })).toBeTruthy();
+    expect(screen.getByRole('cell', { name: '2' })).toBeTruthy();
+    expect(screen.getByText('Image: diagram')).toBeTruthy();
+    expect(document.querySelector('img')).toBeNull();
     expect(document.querySelector('script')).toBeNull();
     expect(client.createSession).toHaveBeenCalledWith({
       docId: 'doc_1',

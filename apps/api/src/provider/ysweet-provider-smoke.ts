@@ -11,6 +11,7 @@ import { WebSocket } from 'ws';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import { createHttpApp, type HttpRequestAuth } from '../http/app';
+import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createYSweetTokenService } from './ysweet-token-service';
 import {
@@ -67,7 +68,7 @@ async function waitForProviderReady(handle: YSweetProviderHandle, timeoutMs = 10
   throw new Error(`provider_ready_timeout:${lastError}`);
 }
 
-function createSmokePool(): DbPool {
+function createSmokePool(initialYjsState: Uint8Array): DbPool {
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
     params?: readonly unknown[],
@@ -87,15 +88,27 @@ function createSmokePool(): DbPool {
     if (/pending\.status = 'pending'/u.test(sql)) {
       return { rows: [], rowCount: 1 };
     }
+    if (/update document_branch_states[\s\S]+provider_doc_seeded_at = now/u.test(sql)) {
+      return { rows: [], rowCount: 1 };
+    }
     if (/update provider_token_issuances/u.test(sql)) {
       return { rows: [], rowCount: 1 };
+    }
+    if (/select s\.provider_doc_seeded_at/u.test(sql)) {
+      return {
+        rows: [{
+          provider_doc_seeded_at: null,
+          yjs_state: Buffer.from(initialYjsState),
+        } as Row],
+        rowCount: 1,
+      };
     }
     if (/select s\.provider_doc_id/u.test(sql)) {
       return {
         rows: [{
           provider_doc_id: providerDocId,
-          provider_doc_seeded_at: '2026-05-11T00:00:00.000Z',
-          yjs_state: Buffer.from(Y.encodeStateAsUpdate(new Y.Doc())),
+          provider_doc_seeded_at: null,
+          yjs_state: Buffer.from(initialYjsState),
         } as Row],
         rowCount: 1,
       };
@@ -254,7 +267,8 @@ async function main(): Promise<void> {
   const connectionString = providerConfig.connectionString;
   if (!connectionString) throw new Error('smoke_connection_string_missing');
   let provider = startYSweetProviderProcess(providerConfig);
-  const pool = createSmokePool();
+  const initialState = await createHeadlessMilkdownRuntime().initializeFromMarkdown('');
+  const pool = createSmokePool(initialState.yjsState);
   const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
     auth: createSmokeAuth(),
     providerTokenService: createYSweetTokenService({ connectionString }),
