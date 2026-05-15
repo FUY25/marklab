@@ -54,6 +54,14 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - Plan 3's automated browser suite includes both memory-provider collaboration tests and a real API-root Y-Sweet websocket browser smoke; production still needs the same path verified against deployed infrastructure.
 - Production smoke must verify `/collab` serves the collab-web entry, `/collab-web/assets/...` assets load, existing `apps/web` routes such as `/relay/...` still load, view mode opens without provider websocket traffic, and edit mode refresh denial surfaces unavailable.
 
+## Native Facts From Plan 4
+
+- Native source is `apps/marklab-macos/` and package/deploy docs should treat it as the MarkLab.app source of truth for alpha. It is not deployed by Fly, but launch readiness depends on the CLI/native package produced from this repo.
+- MarkLab.app embeds the hosted `/collab` editor through a WKWebView for shared editing. Production origin and CORS/CSP settings must allow the native app to load the hosted collab route while keeping API credential injection restricted to same-origin `/api/` requests.
+- The API must preserve `clientKind=app` only for native user bearer requests with `X-MarkLab-Native-App: 1` and a non-guest actor. Production smoke should verify a public browser link cannot spoof app kind and that the native embedded client becomes unavailable if the server downgrades app kind.
+- Native local state uses the CLI daemon boundary `marklab share --json --daemon-only` plus `/api/local/app-context`. Production/package smokes must prove this does not mint hidden relay grants and that CLI share/join/status/wait still work while the app owns the file.
+- Plan 4 local smoke command is `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. It proves app-kind/browser convergence, disk projection, and cursor exchange locally. Production launch still needs a deployed-infrastructure native host plus browser guest smoke using the packaged app/CLI.
+
 ## File Structure
 
 - Modify `fly.toml`
@@ -141,6 +149,7 @@ This plan is the launch gate. It does not add product features. It verifies the 
 - [ ] Run collab-web static route smoke for `/collab`, `/collab-web/assets/...`, and an existing `apps/web` route such as `/relay/...`.
 - [ ] Run workspace-owned document smoke: login, create workspace, create/import document with `workspaceId`, list it through `/api/workspaces/:workspaceId/documents`, create edit/view grants.
 - [ ] Run native host plus browser guest smoke.
+- [ ] Run native app-kind spoofing smoke: public browser/cookie-authenticated traffic with `clientKind=app` is downgraded, while packaged MarkLab.app bearer plus `X-MarkLab-Native-App: 1` is preserved as app kind.
 - [ ] Run CLI share/join/status/wait smoke.
 - [ ] Run conflict/reconnect smoke.
 - [ ] Run revoked link smoke.

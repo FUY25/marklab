@@ -37,6 +37,13 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 - Documents with `workspace_id is null` still use the legacy fallback guest quota so old/local documents keep working. Billing should not make that fallback path the public hosted default.
 - The workspace settings browser shell was created by Plan 3 at `/workspaces/:workspaceId/settings` in `apps/collab-web`. It has Members and Documents tabs wired to the Plan 2 server APIs plus a disabled Plan & Billing placeholder. This plan replaces that placeholder with the real billing view.
 
+## Native Facts From Plan 4
+
+- Native MarkLab.app edit sessions use the same control-plane edit-session and refresh-token path as browser edit sessions, but ask for `clientKind=app`.
+- The API only preserves app kind for authenticated native user bearer requests with `X-MarkLab-Native-App: 1` and a non-guest actor. Guest/public-link traffic is downgraded to browser. Billing and audit code must therefore count trusted app sessions from server-derived session metadata, not from client-supplied request bodies.
+- Native app sharing creates/imports workspace-owned documents and then creates public edit/view access grants only for collaborators. The first-party embedded app editor is grantless and must not consume guest edit quota.
+- Manual/free billing smoke should include a native app edit-session creation or refresh check so app-kind sessions do not bypass plan-table enforcement for collaborator links.
+
 ## File Structure
 
 - Modify `apps/api/src/db/schema.sql`
@@ -68,6 +75,7 @@ The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.
 - [ ] Replace any remaining inline member-seat SQL with a shared lookup against `seat_limits.member_seats`.
 - [ ] If quota enforcement depends on new columns or tables during provider-token issuance, add them to the `/healthz` schema readiness contract so production cannot go green with an incomplete billing schema.
 - [ ] Keep guest view sessions outside guest edit quota (already true; verify with a regression test).
+- [ ] Keep first-party native app editor sessions outside guest edit quota while still counting collaborator browser/native guest edit sessions against `seat_limits.concurrent_guest_edits`.
 - [ ] Add tests for free-limit pass/fail and paid-limit pass/fail.
 - [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits for workspace documents. Existing guest edit sessions still refresh when quota is full.
 
