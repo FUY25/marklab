@@ -12,6 +12,8 @@ const conflict = {
   baseMarkdown: '# Base\n\nOriginal shared text.\n',
   baseYjsStateBase64: null,
   baseHash: 'base-hash',
+  lastProjectedMarkdown: '# Base\n\nOriginal shared text.\n',
+  lastProjectedHash: 'base-hash',
   localMarkdown: '# Local\n\nOffline local change.\n',
   localYjsStateBase64: 'bG9jYWw=',
   localHash: 'local-hash',
@@ -142,7 +144,7 @@ test('reviews an open local reconnect conflict without enabling editor writes', 
   await expect(drawer.getByRole('region', { name: 'Resolution choices', exact: true })).toContainText(
     'Choose a resolution',
   );
-  await expect(drawer.getByRole('region', { name: 'AI merge', exact: true })).toContainText('Merged Markdown output');
+  await expect(drawer.getByRole('region', { name: 'Resolved Markdown', exact: true })).toContainText('Apply resolved Markdown');
   await expect(
     drawer.locator('.document-drawer-section').evaluateAll((sections) =>
       sections
@@ -154,17 +156,14 @@ test('reviews an open local reconnect conflict without enabling editor writes', 
     'My local version',
     'Shared version',
     'Base version',
+    'Conflict diff',
     'Resolution choices',
     'Use my local version confirmation',
     'Use shared version confirmation',
-    'AI merge',
+    'Resolved Markdown',
   ]);
   await expect(page.getByTestId('milkdown-editor')).toHaveCount(0);
   expect(api.flushCalls()).toBe(0);
-
-  await drawer.getByRole('button', { name: 'Copy AI merge prompt' }).click();
-  await expect(drawer).toContainText('AI merge prompt copied.');
-  await expect(page.evaluate(() => navigator.clipboard.readText())).resolves.toContain('<my_local_offline_markdown>');
 
   const useShared = drawer.getByRole('button', { name: 'Use shared version', exact: true });
   await expect(useShared).toBeDisabled();
@@ -195,8 +194,10 @@ test('posts pasted resolved Markdown with the conflict revision guard', async ({
   await page.goto(`${webUrl}/local#token=local-token`);
 
   const drawer = page.getByTestId('conflict-review-drawer');
-  await drawer.getByRole('textbox', { name: 'Merged Markdown output' }).fill('# Resolved\n\nMerged final text.\n');
-  await drawer.getByRole('button', { name: 'Apply AI merge' }).click();
+  await drawer.getByRole('textbox', { name: 'Resolved Markdown' }).fill('# Resolved\n\nMerged final text.\n');
+  await expect(drawer.getByLabel('Resolved Markdown preview')).toContainText('Merged final text.');
+  await drawer.getByLabel('Type APPLY RESOLVED to confirm').fill('APPLY RESOLVED');
+  await drawer.getByRole('button', { name: 'Apply resolved Markdown' }).click();
 
   expect(api.resolvePayload()).toEqual({
     markdown: '# Resolved\n\nMerged final text.\n',

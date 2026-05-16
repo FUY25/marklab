@@ -1012,11 +1012,6 @@ button:disabled {
   line-height: 1.5;
 }
 
-.conflict-ai-merge-actions {
-  display: flex;
-  justify-content: flex-start;
-}
-
 .conflict-preview-section pre {
   box-sizing: border-box;
   max-height: 220px;

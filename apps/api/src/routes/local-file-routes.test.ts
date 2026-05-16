@@ -52,16 +52,22 @@ function createFakeLocalFileService(): LocalFileService {
     prepareResolvedConflict: vi.fn(async () => {
       throw new Error('unexpected_conflict_resolution');
     }),
+    preflightConflictResolutionLocalCommit: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    commitConflictResolutionLocally: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    adoptAppliedConflictResolutionState: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    refreshOpenConflictFromDisk: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
+    refreshOpenConflictAfterSharedPublish: vi.fn(async () => {
+      throw new Error('unexpected_conflict_resolution');
+    }),
     completeConflictResolution: vi.fn(async () => {
-      throw new Error('unexpected_conflict_resolution');
-    }),
-    useSharedConflict: vi.fn(async () => {
-      throw new Error('unexpected_conflict_resolution');
-    }),
-    useLocalConflict: vi.fn(async () => {
-      throw new Error('unexpected_conflict_resolution');
-    }),
-    resolveConflict: vi.fn(async () => {
       throw new Error('unexpected_conflict_resolution');
     }),
     listVersions: () => [],
@@ -224,6 +230,12 @@ describe('local file routes', () => {
         }),
         revokeLink: vi.fn(async () => undefined),
         shareState,
+        verifySharedState: vi.fn(async () => undefined),
+        publishResolvedState: vi.fn(async () => ({
+          sharedRevision: 8,
+          sharedHash: 'sha256:shared',
+          hostSessionId: 'host-1',
+        })),
       },
     });
 
@@ -279,6 +291,12 @@ describe('local file routes', () => {
         }),
         revokeLink: vi.fn(async () => undefined),
         shareState,
+        verifySharedState: vi.fn(async () => undefined),
+        publishResolvedState: vi.fn(async () => ({
+          sharedRevision: 2,
+          sharedHash: 'sha256:shared',
+          hostSessionId: 'host-1',
+        })),
       },
     });
 

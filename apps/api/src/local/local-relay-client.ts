@@ -36,6 +36,14 @@ export interface LocalRelayHostController {
   stop(): void;
   createLink(role: RelayAccessRole): Promise<CreatedRelayAccessGrant & { url: string }>;
   shareState(): Promise<RelayShareState>;
+  verifySharedState(input: { expectedSharedRevision: number; expectedSharedHash: string }): Promise<void>;
+  publishResolvedState(input: {
+    relayRoomId: string;
+    yjsState: Uint8Array;
+    sharedHash: string;
+    expectedSharedRevision: number;
+    expectedSharedHash: string;
+  }): Promise<{ sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }>;
   revokeLink(grantId: string): Promise<void>;
 }
 
@@ -46,6 +54,7 @@ export interface LocalRelayMirrorController {
   verifySharedState(input: { expectedSharedRevision: number; expectedSharedHash: string }): Promise<void>;
   publishResolvedState(input: {
     yjsState: Uint8Array;
+    sharedHash?: string;
     expectedSharedRevision: number;
     expectedSharedHash: string;
   }): Promise<{ sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }>;
@@ -101,6 +110,25 @@ function relaySharedHash(value: string | null | undefined): string {
   return value ?? '';
 }
 
+function relayFailureMessage(
+  message: { reason?: string | null; error?: string | null },
+  fallback: string,
+): string {
+  return message.reason || message.error || fallback;
+}
+
+function isReconnectConflictRejection(reason: string): boolean {
+  return reason === 'host_offline' || reason === 'host_lease_expired';
+}
+
+interface PendingHostPublish {
+  sharedHash: string;
+  expectedSharedRevision: number;
+  timer: NodeJS.Timeout;
+  resolve(result: { sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }): void;
+  reject(error: Error): void;
+}
+
 function relayWebSocketOrigin(relayWebSocketUrl: string): string | undefined {
   try {
     const url = new URL(relayWebSocketUrl);
@@ -122,7 +150,7 @@ async function currentLocalYjsState(localFileService: LocalFileService): Promise
   return loaded.yjsState;
 }
 
-async function applyRelayUpdateToLocalFile(localFileService: LocalFileService, update: Uint8Array): Promise<Uint8Array> {
+async function applyRelayUpdateToLocalFile(localFileService: LocalFileService, update: Uint8Array): Promise<Uint8Array | null> {
   const loaded = await localFileService.loadRoomState(localFileService.roomName);
   if (!loaded) throw new Error('local_room_not_found');
   const doc = new Y.Doc();
@@ -130,17 +158,19 @@ async function applyRelayUpdateToLocalFile(localFileService: LocalFileService, u
     Y.applyUpdate(doc, loaded.yjsState);
     Y.applyUpdate(doc, update);
     const nextState = Y.encodeStateAsUpdate(doc);
-    await localFileService.storeRoomState(localFileService.roomName, nextState, loaded.stateFingerprint);
+    const stored = await localFileService.storeRoomState(localFileService.roomName, nextState, loaded.stateFingerprint);
+    if (!stored.stored) return null;
     return currentLocalYjsState(localFileService);
   } finally {
     doc.destroy();
   }
 }
 
-async function replaceLocalFileWithRelayState(localFileService: LocalFileService, yjsState: Uint8Array): Promise<Uint8Array> {
+async function replaceLocalFileWithRelayState(localFileService: LocalFileService, yjsState: Uint8Array): Promise<Uint8Array | null> {
   const loaded = await localFileService.loadRoomState(localFileService.roomName);
   if (!loaded) throw new Error('local_room_not_found');
-  await localFileService.storeRoomState(localFileService.roomName, yjsState, loaded.stateFingerprint);
+  const stored = await localFileService.storeRoomState(localFileService.roomName, yjsState, loaded.stateFingerprint);
+  if (!stored.stored) return null;
   return currentLocalYjsState(localFileService);
 }
 
@@ -163,8 +193,12 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
   private currentHostSessionId: string | null = null;
   private currentHostToken: string | null = null;
   private lastPublishedHash: string | null = null;
+  private lastSharedRevision: number | null = null;
+  private lastSharedHash: string | null = null;
   private handlingProposal = false;
   private messageChain: Promise<void> = Promise.resolve();
+  private pendingHostPublish: PendingHostPublish | null = null;
+  private pendingLocalHostPublishHash: string | null = null;
 
   constructor(private readonly options: CreateLocalRelayHostControllerOptions) {}
 
@@ -185,6 +219,8 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       absolutePath: summary.absolutePath,
       lastHostSessionId: this.currentHostSessionId,
       lastPublishedHash: this.lastPublishedHash,
+      lastSharedRevision: this.lastSharedRevision,
+      lastSharedHash: this.lastSharedHash,
       updatedAt: new Date().toISOString(),
     });
   }
@@ -195,7 +231,9 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     this.currentRelayRoomId = saved.relayRoomId;
     this.currentHostSessionId = `host_${randomUUID()}`;
     this.currentHostToken = saved.hostAuthToken;
-    this.lastPublishedHash = null;
+    this.lastPublishedHash = saved.lastPublishedHash ?? null;
+    this.lastSharedRevision = saved.lastSharedRevision ?? null;
+    this.lastSharedHash = saved.lastSharedHash ?? saved.lastPublishedHash ?? null;
     this.options.relayService.rememberHostToken?.(saved.relayRoomId, saved.hostAuthToken);
     return true;
   }
@@ -205,6 +243,9 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     this.currentHostSessionId = null;
     this.currentHostToken = null;
     this.lastPublishedHash = null;
+    this.lastSharedRevision = null;
+    this.lastSharedHash = null;
+    this.pendingLocalHostPublishHash = null;
   }
 
   async resumeHosted(): Promise<boolean> {
@@ -247,6 +288,8 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     this.currentHostSessionId = hostSessionId;
     this.currentHostToken = hostToken;
     this.lastPublishedHash = summary.hash;
+    this.lastSharedRevision = room.sharedRevision;
+    this.lastSharedHash = room.lastSharedHash ?? summary.hash;
     await this.start();
     await this.saveCurrentHostState();
     return { relayRoomId: room.relayRoomId, hostSessionId };
@@ -270,7 +313,6 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
           hostToken,
         }),
       );
-      this.startPublishingLocalChanges();
     });
     socket.on('message', (raw) => {
       this.messageChain = this.messageChain
@@ -282,6 +324,8 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     });
     socket.on('close', () => {
       this.stopPublishingLocalChanges();
+      this.rejectPendingHostPublish(new Error('relay_host_publish_closed'));
+      this.pendingLocalHostPublishHash = null;
       if (this.socket === socket) this.socket = null;
     });
     socket.on('error', () => undefined);
@@ -298,10 +342,16 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       };
       const handleReadyMessage = (raw: WebSocket.RawData) => {
         try {
-          const message = JSON.parse(raw.toString()) as { type?: string };
+          const message = JSON.parse(raw.toString()) as {
+            type?: string;
+            sharedRevision?: number;
+            lastSharedHash?: string | null;
+            hostSessionId?: string | null;
+            yjsStateBase64?: string | null;
+          };
           if (message.type !== 'hello_ack') return;
           cleanup();
-          resolve();
+          void this.handleHostHelloAck(message).then(resolve, reject);
         } catch {
           // Keep waiting for the relay hello acknowledgement.
         }
@@ -309,6 +359,9 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       socket.on('message', handleReadyMessage);
       socket.on('error', handleReadyError);
     });
+    if (this.socket === socket && !this.options.localFileService.getSummary().conflict) {
+      this.startPublishingLocalChanges();
+    }
   }
 
   private startPublishingLocalChanges(): void {
@@ -327,6 +380,11 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
   private async publishLocalChangeIfNeeded(): Promise<void> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (this.handlingProposal) return;
+    if (this.pendingHostPublish) return;
+    if (this.pendingLocalHostPublishHash) {
+      this.socket.send(JSON.stringify({ type: 'ping' }));
+      return;
+    }
     if (!isBackingFileAvailable(this.options.localFileService)) {
       await this.pauseHostForMissingBackingFile();
       return;
@@ -338,48 +396,76 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       return;
     }
     const yjsState = await currentLocalYjsState(this.options.localFileService);
-    this.socket.send(
-      JSON.stringify({
-        type: 'host_update',
-        yjsStateBase64: encodeBase64(yjsState),
-        sharedHash: summary.hash,
-      }),
-    );
-    this.lastPublishedHash = summary.hash;
-    await this.saveCurrentHostState();
+    const expectedSharedRevision = this.lastSharedRevision;
+    const expectedSharedHash = this.lastSharedHash;
+    this.pendingLocalHostPublishHash = summary.hash;
+    try {
+      this.socket.send(
+        JSON.stringify({
+          type: 'host_update',
+          yjsStateBase64: encodeBase64(yjsState),
+          sharedHash: summary.hash,
+          ...(expectedSharedRevision !== null ? { expectedSharedRevision } : {}),
+          ...(expectedSharedHash !== null ? { expectedSharedHash: relaySharedHash(expectedSharedHash) } : {}),
+        }),
+      );
+    } catch (error) {
+      this.pendingLocalHostPublishHash = null;
+      throw error;
+    }
   }
 
   private async handleMessage(raw: string): Promise<void> {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const activeSocket = this.socket;
+    if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return;
     const message = JSON.parse(raw) as {
       type: string;
       proposalId?: string;
       updateBase64?: string;
+      sharedRevision?: number;
       sharedHash?: string;
+      lastSharedHash?: string | null;
+      hostSessionId?: string | null;
       replace?: boolean;
+      reason?: string;
+      error?: string;
     };
+    if (message.type === 'accepted_update') {
+      await this.recordSharedStateFromRelayMessage(message);
+      await this.resolvePendingHostPublish(message);
+      await this.resolvePendingLocalHostPublish(message);
+      return;
+    }
+    if (message.type === 'rejected' || message.type === 'error') {
+      this.rejectPendingHostPublish(new Error(relayFailureMessage(message, 'relay_host_publish_rejected')));
+      this.pendingLocalHostPublishHash = null;
+      return;
+    }
     if (message.type !== 'proposal' || !message.proposalId || !message.updateBase64) return;
 
+    if (!isBackingFileAvailable(this.options.localFileService)) {
+      activeSocket.send(
+        JSON.stringify({
+          type: 'host_reject',
+          proposalId: message.proposalId,
+          reason: 'host_file_missing',
+        }),
+      );
+      await this.pauseHostForMissingBackingFile();
+      return;
+    }
+
     try {
-      if (!isBackingFileAvailable(this.options.localFileService)) {
-        await this.pauseHostForMissingBackingFile();
-        this.socket.send(
-          JSON.stringify({
-            type: 'host_reject',
-            proposalId: message.proposalId,
-            reason: 'host_file_missing',
-          }),
-        );
-        return;
-      }
       this.handlingProposal = true;
+      await this.recordSharedStateFromRelayMessage(message);
       const acceptedState = message.replace
         ? await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(message.updateBase64))
         : await applyRelayUpdateToLocalFile(this.options.localFileService, decodeBase64(message.updateBase64));
+      if (!acceptedState) throw new Error('conflict_required');
       const summary = this.options.localFileService.getSummary();
       this.lastPublishedHash = summary.hash;
       await this.saveCurrentHostState();
-      this.socket.send(
+      activeSocket.send(
         JSON.stringify({
           type: 'host_ack',
           proposalId: message.proposalId,
@@ -388,13 +474,15 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
         }),
       );
     } catch {
-      this.socket.send(
-        JSON.stringify({
-          type: 'host_reject',
-          proposalId: message.proposalId,
-          reason: 'host_write_failed',
-        }),
-      );
+      if (activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.send(
+          JSON.stringify({
+            type: 'host_reject',
+            proposalId: message.proposalId,
+            reason: 'host_write_failed',
+          }),
+        );
+      }
     } finally {
       this.handlingProposal = false;
     }
@@ -411,8 +499,88 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
     this.stopPublishingLocalChanges();
   }
 
+  private async handleHostHelloAck(message: {
+    sharedRevision?: number;
+    lastSharedHash?: string | null;
+    hostSessionId?: string | null;
+    yjsStateBase64?: string | null;
+  }): Promise<void> {
+    const previousPublishedHash = this.lastPublishedHash;
+    const previousSharedRevision = this.lastSharedRevision;
+    const previousSharedHash = this.lastSharedHash;
+    const remoteSharedRevision = typeof message.sharedRevision === 'number' ? message.sharedRevision : null;
+    const remoteSharedHash = message.lastSharedHash ?? null;
+    await this.recordSharedStateFromRelayMessage(message);
+    const sharedChanged = (
+      (previousSharedRevision !== null && remoteSharedRevision !== null && previousSharedRevision !== remoteSharedRevision)
+      || (previousSharedHash !== null && remoteSharedHash !== null && relaySharedHash(previousSharedHash) !== relaySharedHash(remoteSharedHash))
+    );
+    if (!sharedChanged) return;
+
+    const summary = this.options.localFileService.getSummary();
+    if (summary.conflict) return;
+    const localChanged = previousPublishedHash !== null
+      ? summary.hash !== previousPublishedHash
+      : previousSharedHash !== null && summary.hash !== relaySharedHash(previousSharedHash);
+    if (!message.yjsStateBase64) {
+      await this.options.localFileService.pauseForRelayConflict(
+        'Relay reconnect conflict. Review needed before syncing resumes.',
+      );
+      this.stopPublishingLocalChanges();
+      this.socket?.close(4009, 'relay_reconnect_conflict');
+      return;
+    }
+    if (localChanged) {
+      await this.openHostReconnectConflictFromRelay({
+        yjsStateBase64: message.yjsStateBase64,
+        sharedHash: remoteSharedHash,
+        sharedRevision: remoteSharedRevision,
+        baseHash: previousPublishedHash ?? previousSharedHash ?? null,
+      });
+      return;
+    }
+
+    const acceptedState = await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(message.yjsStateBase64));
+    if (!acceptedState) {
+      await this.openHostReconnectConflictFromRelay({
+        yjsStateBase64: message.yjsStateBase64,
+        sharedHash: remoteSharedHash,
+        sharedRevision: remoteSharedRevision,
+        baseHash: previousPublishedHash ?? previousSharedHash ?? null,
+      });
+      return;
+    }
+    const updatedSummary = this.options.localFileService.getSummary();
+    this.lastPublishedHash = updatedSummary.hash;
+    await this.saveCurrentHostState();
+  }
+
+  private async openHostReconnectConflictFromRelay(input: {
+    yjsStateBase64: string;
+    sharedHash: string | null;
+    sharedRevision: number | null;
+    baseHash: string | null;
+  }): Promise<void> {
+    const relayRoomId = this.currentRelayRoomId;
+    if (!relayRoomId) return;
+    await this.options.localFileService.openReconnectConflict({
+      relayRoomId,
+      sharedYjsStateBase64: input.yjsStateBase64,
+      sharedHash: input.sharedHash,
+      sharedRevision: input.sharedRevision ?? this.lastSharedRevision ?? 0,
+      expectedSharedRevision: input.sharedRevision ?? this.lastSharedRevision ?? 0,
+      expectedSharedHash: relaySharedHash(input.sharedHash ?? this.lastSharedHash),
+      baseHash: input.baseHash,
+    });
+    await this.options.relayService.markHostOffline(relayRoomId, this.currentHostSessionId);
+    this.stopPublishingLocalChanges();
+    this.socket?.close(4009, 'relay_reconnect_conflict');
+  }
+
   stop(): void {
     this.stopPublishingLocalChanges();
+    this.rejectPendingHostPublish(new Error('relay_host_publish_closed'));
+    this.pendingLocalHostPublishHash = null;
     this.socket?.close(1001, 'host_stopped');
     this.socket = null;
   }
@@ -455,6 +623,124 @@ class DefaultLocalRelayHostController implements LocalRelayHostController {
       )),
       mode: 'relay-host',
     };
+  }
+
+  async verifySharedState(input: { expectedSharedRevision: number; expectedSharedHash: string }): Promise<void> {
+    const shareState = await this.shareState();
+    if (shareState.relayRoomId !== this.currentRelayRoomId || !shareState.hostOnline) throw new Error('host_offline');
+    if (
+      shareState.sharedRevision !== input.expectedSharedRevision ||
+      relaySharedHash(shareState.lastSharedHash) !== input.expectedSharedHash
+    ) {
+      throw new Error('stale_conflict_shared_state');
+    }
+  }
+
+  async publishResolvedState(input: {
+    relayRoomId: string;
+    yjsState: Uint8Array;
+    sharedHash: string;
+    expectedSharedRevision: number;
+    expectedSharedHash: string;
+  }): Promise<{ sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }> {
+    if (this.currentRelayRoomId !== input.relayRoomId) throw new Error('forbidden');
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      if (this.socket && this.socket.readyState !== WebSocket.OPEN) {
+        this.socket.close();
+        this.socket = null;
+      }
+      await this.start();
+    }
+    await this.verifySharedState(input);
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) throw new Error('host_offline');
+    if (this.pendingHostPublish || this.handlingProposal) throw new Error('proposal_in_flight');
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingHostPublish?.timer === timer) this.pendingHostPublish = null;
+        reject(new Error('relay_host_publish_timeout'));
+      }, 10000);
+      timer.unref();
+      this.pendingHostPublish = {
+        sharedHash: input.sharedHash,
+        expectedSharedRevision: input.expectedSharedRevision,
+        timer,
+        resolve,
+        reject,
+      };
+      try {
+        this.socket?.send(
+          JSON.stringify({
+            type: 'host_update',
+            yjsStateBase64: encodeBase64(input.yjsState),
+            sharedHash: input.sharedHash,
+            expectedSharedRevision: input.expectedSharedRevision,
+            expectedSharedHash: input.expectedSharedHash,
+            replace: true,
+          }),
+        );
+      } catch (error) {
+        this.rejectPendingHostPublish(error instanceof Error ? error : new Error('relay_host_publish_failed'));
+      }
+    });
+  }
+
+  private rejectPendingHostPublish(error: Error): void {
+    const pending = this.pendingHostPublish;
+    if (!pending) return;
+    this.pendingHostPublish = null;
+    clearTimeout(pending.timer);
+    pending.reject(error);
+  }
+
+  private async recordSharedStateFromRelayMessage(message: {
+    sharedRevision?: number;
+    sharedHash?: string | null;
+    lastSharedHash?: string | null;
+    hostSessionId?: string | null;
+  }): Promise<void> {
+    const sharedRevision = typeof message.sharedRevision === 'number' ? message.sharedRevision : null;
+    const sharedHash = message.sharedHash ?? message.lastSharedHash ?? null;
+    if (sharedRevision === null && sharedHash === null && !message.hostSessionId) return;
+    if (sharedRevision !== null) this.lastSharedRevision = sharedRevision;
+    if (sharedHash !== null) this.lastSharedHash = sharedHash;
+    this.currentHostSessionId = message.hostSessionId ?? this.currentHostSessionId;
+    await this.saveCurrentHostState();
+  }
+
+  private async resolvePendingHostPublish(message: {
+    sharedRevision?: number;
+    sharedHash?: string | null;
+    hostSessionId?: string | null;
+  }): Promise<void> {
+    const pending = this.pendingHostPublish;
+    if (!pending) return;
+    const sharedRevision = Number(message.sharedRevision ?? -1);
+    const sharedHash = message.sharedHash ?? null;
+    if (sharedRevision <= pending.expectedSharedRevision || relaySharedHash(sharedHash) !== pending.sharedHash) return;
+    this.pendingHostPublish = null;
+    clearTimeout(pending.timer);
+    this.lastPublishedHash = pending.sharedHash;
+    this.currentHostSessionId = message.hostSessionId ?? this.currentHostSessionId;
+    await this.saveCurrentHostState();
+    pending.resolve({
+      sharedRevision,
+      sharedHash,
+      hostSessionId: this.currentHostSessionId,
+    });
+  }
+
+  private async resolvePendingLocalHostPublish(message: {
+    proposalId?: string | null;
+    sharedHash?: string | null;
+    hostSessionId?: string | null;
+  }): Promise<void> {
+    const pendingHash = this.pendingLocalHostPublishHash;
+    if (!pendingHash || message.proposalId) return;
+    if (relaySharedHash(message.sharedHash) !== pendingHash) return;
+    this.pendingLocalHostPublishHash = null;
+    this.lastPublishedHash = pendingHash;
+    this.currentHostSessionId = message.hostSessionId ?? this.currentHostSessionId;
+    await this.saveCurrentHostState();
   }
 
   async revokeLink(grantId: string): Promise<void> {
@@ -561,7 +847,13 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
             hostSessionId?: string | null;
             sharedRevision?: number;
             lastSharedHash?: string | null;
+            reason?: string | null;
+            error?: string | null;
           };
+          if (message.type === 'error' || message.type === 'rejected') {
+            finish(new Error(relayFailureMessage(message, 'relay_mirror_verify_rejected')));
+            return;
+          }
           if (message.type !== 'hello_ack') return;
           const remote = this.recordHelloAck(message);
           this.assertExpectedRemoteSharedState(remote, input);
@@ -579,6 +871,7 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
 
   async publishResolvedState(input: {
     yjsState: Uint8Array;
+    sharedHash?: string;
     expectedSharedRevision: number;
     expectedSharedHash: string;
   }): Promise<{ sharedRevision: number; sharedHash: string | null; hostSessionId: string | null }> {
@@ -615,7 +908,8 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
             lastSharedHash?: string | null;
             sharedHash?: string | null;
             proposalId?: string | null;
-            reason?: string;
+            reason?: string | null;
+            error?: string | null;
           };
           if (message.type === 'hello_ack') {
             const remote = this.recordHelloAck(message);
@@ -627,6 +921,8 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
                 proposalId,
                 updateBase64: encodeBase64(input.yjsState),
                 replace: true,
+                expectedSharedRevision: input.expectedSharedRevision,
+                expectedSharedHash: input.expectedSharedHash,
               }),
             );
             return;
@@ -637,14 +933,25 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
               sharedHash: message.sharedHash ?? null,
               hostSessionId: message.hostSessionId ?? this.lastHostSessionId,
             };
+            if (
+              result.sharedRevision <= input.expectedSharedRevision ||
+              (input.sharedHash && relaySharedHash(result.sharedHash) !== input.sharedHash)
+            ) {
+              finish(new Error('relay_shared_state_not_accepted'));
+              return;
+            }
             this.lastAcceptedSharedRevision = result.sharedRevision;
             this.lastAcceptedSharedHash = result.sharedHash;
             this.lastHostSessionId = result.hostSessionId;
             finish(null, result);
             return;
           }
+          if (message.type === 'error') {
+            finish(new Error(relayFailureMessage(message, 'relay_mirror_publish_rejected')));
+            return;
+          }
           if (message.type === 'rejected' && (!message.proposalId || message.proposalId === proposalId || sentProposal)) {
-            finish(new Error(message.reason || 'relay_mirror_publish_rejected'));
+            finish(new Error(relayFailureMessage(message, 'relay_mirror_publish_rejected')));
           }
         } catch (error) {
           finish(error);
@@ -714,7 +1021,14 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
             sharedRevision?: number;
             lastSharedHash?: string | null;
             yjsStateBase64?: string | null;
+            reason?: string | null;
+            error?: string | null;
           };
+          if (message.type === 'error' || message.type === 'rejected') {
+            cleanup();
+            reject(new Error(relayFailureMessage(message, 'relay_mirror_connect_rejected')));
+            return;
+          }
           if (message.type !== 'hello_ack') return;
           cleanup();
           void this.handleHelloAck(message).then(resolve, reject);
@@ -757,12 +1071,16 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
     }
     const yjsState = await currentLocalYjsState(this.options.localFileService);
     const proposalId = randomUUID();
+    const expectedSharedRevision = this.lastAcceptedSharedRevision;
+    const expectedSharedHash = this.lastAcceptedSharedHash;
     this.pendingProposalId = proposalId;
     this.socket.send(
       JSON.stringify({
         type: 'propose_update',
         proposalId,
         updateBase64: encodeBase64(yjsState),
+        ...(expectedSharedRevision !== null ? { expectedSharedRevision } : {}),
+        ...(expectedSharedHash !== null ? { expectedSharedHash: relaySharedHash(expectedSharedHash) } : {}),
       }),
     );
   }
@@ -796,6 +1114,8 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
           sharedYjsStateBase64: message.yjsStateBase64,
           sharedHash,
           sharedRevision,
+          expectedSharedRevision: sharedRevision,
+          expectedSharedHash: relaySharedHash(sharedHash),
           baseYjsStateBase64: saved?.lastAcceptedYjsStateBase64 ?? null,
           baseHash: saved?.lastAcceptedLocalHash ?? null,
         });
@@ -865,22 +1185,56 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
     });
   }
 
+  private async markMirrorDisconnected(): Promise<void> {
+    const saved = this.options.localFileService.getRelayJoinState();
+    if (!saved) return;
+    await this.options.localFileService.saveRelayJoinState({
+      ...saved,
+      disconnectedCleanly: false,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   private async applyAcceptedState(
     yjsStateBase64: string,
     input: { sharedRevision: number; sharedHash: string | null; hostSessionId: string | null },
   ): Promise<void> {
-    if (this.options.localFileService.getCurrentConflict()) return;
+    if (this.options.localFileService.getCurrentConflict()) {
+      await this.refreshOpenConflictFromAcceptedState(yjsStateBase64, input);
+      return;
+    }
     if (!isBackingFileAvailable(this.options.localFileService)) {
       await this.pauseMirrorForMissingBackingFile();
       return;
     }
     this.applyingRemote = true;
     try {
-      await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(yjsStateBase64));
+      const replacedState = await replaceLocalFileWithRelayState(this.options.localFileService, decodeBase64(yjsStateBase64));
+      if (!replacedState) {
+        await this.refreshOpenConflictFromAcceptedState(yjsStateBase64, input);
+        return;
+      }
       await this.persistAcceptedJoinState(input);
     } finally {
       this.applyingRemote = false;
     }
+  }
+
+  private async refreshOpenConflictFromAcceptedState(
+    yjsStateBase64: string,
+    input: { sharedRevision: number; sharedHash: string | null; hostSessionId: string | null },
+  ): Promise<void> {
+    const saved = this.options.localFileService.getRelayJoinState();
+    await this.options.localFileService.openReconnectConflict({
+      relayRoomId: this.options.relayRoomId,
+      sharedYjsStateBase64: yjsStateBase64,
+      sharedHash: input.sharedHash,
+      sharedRevision: input.sharedRevision,
+      expectedSharedRevision: input.sharedRevision,
+      expectedSharedHash: relaySharedHash(input.sharedHash),
+      baseYjsStateBase64: saved?.lastAcceptedYjsStateBase64 ?? null,
+      baseHash: saved?.lastAcceptedLocalHash ?? null,
+    });
   }
 
   private async handleMessage(raw: string): Promise<void> {
@@ -891,31 +1245,63 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
       proposalId?: string | null;
       sharedRevision?: number;
       sharedHash?: string | null;
+      lastSharedHash?: string | null;
       hostSessionId?: string | null;
       hostOnline?: boolean;
-      reason?: string;
+      reason?: string | null;
+      error?: string | null;
     };
     if (message.type === 'host_status') {
       this.hostOnline = Boolean(message.hostOnline);
       if (!this.hostOnline) {
         this.sawHostOffline = true;
-        const saved = this.options.localFileService.getRelayJoinState();
-        if (saved) {
-          await this.options.localFileService.saveRelayJoinState({
-            ...saved,
-            disconnectedCleanly: false,
-            updatedAt: new Date().toISOString(),
-          });
-        }
+        await this.markMirrorDisconnected();
         return;
       }
 
-      if (this.sawHostOffline && this.options.localFileService.getSummary().hash !== this.lastAcceptedLocalHash) {
-        await this.options.localFileService.pauseForRelayConflict(
-          'Relay reconnect conflict. Review needed before syncing resumes.',
+      if (this.sawHostOffline) {
+        const saved = this.options.localFileService.getRelayJoinState();
+        const currentHash = this.options.localFileService.getSummary().hash;
+        const acceptedLocalHash = this.lastAcceptedLocalHash ?? saved?.lastAcceptedLocalHash ?? null;
+        const remoteSharedRevision = Number(message.sharedRevision ?? this.lastAcceptedSharedRevision ?? saved?.lastAcceptedSharedRevision ?? 0);
+        const remoteSharedHash = message.sharedHash ?? message.lastSharedHash ?? this.lastAcceptedSharedHash ?? saved?.lastAcceptedSharedHash ?? null;
+        const localChanged = Boolean(acceptedLocalHash && currentHash !== acceptedLocalHash);
+        const sharedChanged = Boolean(
+          saved &&
+            (
+              remoteSharedRevision !== saved.lastAcceptedSharedRevision
+              || relaySharedHash(remoteSharedHash) !== saved.lastAcceptedSharedHash
+            ),
         );
-        this.socket?.close(4009, 'relay_reconnect_conflict');
-        return;
+        if (localChanged && sharedChanged) {
+          if (message.yjsStateBase64) {
+            await this.options.localFileService.openReconnectConflict({
+              relayRoomId: this.options.relayRoomId,
+              sharedYjsStateBase64: message.yjsStateBase64,
+              sharedHash: remoteSharedHash,
+              sharedRevision: remoteSharedRevision,
+              expectedSharedRevision: remoteSharedRevision,
+              expectedSharedHash: relaySharedHash(remoteSharedHash),
+              baseYjsStateBase64: saved?.lastAcceptedYjsStateBase64 ?? null,
+              baseHash: saved?.lastAcceptedLocalHash ?? null,
+            });
+          } else {
+            await this.options.localFileService.pauseForRelayConflict(
+              'Relay reconnect conflict. Review needed before syncing resumes.',
+            );
+          }
+          this.socket?.close(4009, 'relay_reconnect_conflict');
+          return;
+        }
+        if (!localChanged && sharedChanged && message.yjsStateBase64) {
+          await this.applyAcceptedState(message.yjsStateBase64, {
+            sharedRevision: remoteSharedRevision,
+            sharedHash: remoteSharedHash,
+            hostSessionId: message.hostSessionId ?? this.lastHostSessionId,
+          });
+          this.sawHostOffline = false;
+          return;
+        }
       }
       this.sawHostOffline = false;
       return;
@@ -933,21 +1319,47 @@ class DefaultLocalRelayMirrorController implements LocalRelayMirrorController {
       return;
     }
     if (message.type === 'rejected') {
+      const reason = relayFailureMessage(message, 'relay_mirror_write_rejected');
       if (message.proposalId && message.proposalId === this.pendingProposalId) this.pendingProposalId = null;
+      if (reason === 'proposal_in_flight') return;
+      await this.markMirrorDisconnected();
+      if (reason === 'relay_shared_state_not_accepted') {
+        const state = message.updateBase64 ?? message.yjsStateBase64;
+        if (state) {
+          const saved = this.options.localFileService.getRelayJoinState();
+          const sharedHash = message.sharedHash ?? message.lastSharedHash ?? this.lastAcceptedSharedHash ?? null;
+          const sharedRevision = Number(message.sharedRevision ?? this.lastAcceptedSharedRevision ?? 0);
+          await this.options.localFileService.openReconnectConflict({
+            relayRoomId: this.options.relayRoomId,
+            sharedYjsStateBase64: state,
+            sharedHash,
+            sharedRevision,
+            expectedSharedRevision: sharedRevision,
+            expectedSharedHash: relaySharedHash(sharedHash),
+            baseYjsStateBase64: saved?.lastAcceptedYjsStateBase64 ?? null,
+            baseHash: saved?.lastAcceptedLocalHash ?? null,
+          });
+          this.socket?.close(4009, 'relay_reconnect_conflict');
+          return;
+        }
+      }
+      if (!isReconnectConflictRejection(reason)) {
+        this.hostOnline = false;
+        this.stopPublishingLocalChanges();
+        this.socket?.close(4003, reason);
+        return;
+      }
       this.sawHostOffline = true;
       this.hostOnline = false;
-      await this.options.localFileService.pauseForRelayConflict(
-        'Relay reconnect conflict. Review needed before syncing resumes.',
-      );
-      this.socket?.close(4009, 'relay_reconnect_conflict');
-      const saved = this.options.localFileService.getRelayJoinState();
-      if (saved) {
-        await this.options.localFileService.saveRelayJoinState({
-          ...saved,
-          disconnectedCleanly: false,
-          updatedAt: new Date().toISOString(),
-        });
-      }
+      return;
+    }
+    if (message.type === 'error') {
+      const reason = relayFailureMessage(message, 'relay_mirror_error');
+      this.pendingProposalId = null;
+      await this.markMirrorDisconnected();
+      this.hostOnline = false;
+      this.stopPublishingLocalChanges();
+      this.socket?.close(4003, reason);
     }
   }
 

@@ -12,6 +12,6 @@ let package = Package(
   targets: [
     .target(name: "MarkLabMacOS"),
     .executableTarget(name: "MarkLabApp", dependencies: ["MarkLabMacOS"]),
-    .testTarget(name: "MarkLabMacOSTests", dependencies: ["MarkLabMacOS"]),
+    .testTarget(name: "MarkLabMacOSTests", dependencies: ["MarkLabMacOS", "MarkLabApp"]),
   ]
 )

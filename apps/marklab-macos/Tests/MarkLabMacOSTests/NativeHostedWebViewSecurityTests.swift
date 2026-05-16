@@ -6,10 +6,14 @@ import Testing
 struct NativeHostedWebViewSecurityTests {
   @Test("allows only the expected collab origin and route")
   func allowsOnlyExpectedCollabOriginAndRoute() throws {
-    let expectedURL = try #require(URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app"))
+    let expectedURL = try #require(URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app&localDocId=local_1"))
 
     #expect(nativeHostedWebViewURLIsAllowed(
-      try #require(URL(string: "https://app.example.test/collab?clientKind=app&mode=edit&branchId=branch_1&docId=doc_1")),
+      try #require(URL(string: "https://app.example.test/collab?clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&localDocId=local_1")),
+      expectedURL: expectedURL
+    ))
+    #expect(!nativeHostedWebViewURLIsAllowed(
+      try #require(URL(string: "https://app.example.test/collab?clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&localDocId=local_1#localDaemonToken=local-secret&localApiUrl=http://127.0.0.1:3011")),
       expectedURL: expectedURL
     ))
     #expect(!nativeHostedWebViewURLIsAllowed(
@@ -30,6 +34,10 @@ struct NativeHostedWebViewSecurityTests {
     ))
     #expect(!nativeHostedWebViewURLIsAllowed(
       try #require(URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app&extra=1")),
+      expectedURL: expectedURL
+    ))
+    #expect(!nativeHostedWebViewURLIsAllowed(
+      try #require(URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app&localDocId=other")),
       expectedURL: expectedURL
     ))
     #expect(!nativeHostedWebViewURLIsAllowed(

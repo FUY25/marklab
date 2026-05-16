@@ -218,6 +218,42 @@ export class RemoteRelayRoomService implements RelayRouteService {
     return { grantId, relayRoomId };
   }
 
+  async acceptSharedState(input: {
+    relayRoomId: string;
+    yjsState: Uint8Array;
+    sharedHash: string;
+    expectedRevision?: number | null;
+    expectedSharedHash?: string | null;
+  }): Promise<RelayRoom> {
+    const response = await fetch(this.apiUrl(`/api/relay/rooms/${encodeURIComponent(input.relayRoomId)}/shared-state`), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.hostToken(input.relayRoomId)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        yjsStateBase64: encodeBase64(input.yjsState),
+        sharedHash: input.sharedHash,
+        expectedSharedRevision: input.expectedRevision ?? null,
+        expectedSharedHash: input.expectedSharedHash ?? null,
+      }),
+    });
+    const room = await readJsonResponse<{
+      relayRoomId: string;
+      hostSessionId: string | null;
+      state: RelayRoom['state'];
+      sharedRevision: number;
+      lastSharedHash: string | null;
+    }>(response);
+    const now = new Date().toISOString();
+    return {
+      ...room,
+      lastEphemeralYjsState: input.yjsState,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
   async markHostOffline(relayRoomId: string): Promise<RelayRoom | null> {
     const response = await fetch(this.apiUrl(`/api/relay/rooms/${encodeURIComponent(relayRoomId)}/host-offline`), {
       method: 'POST',

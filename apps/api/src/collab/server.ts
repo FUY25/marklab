@@ -1,4 +1,5 @@
 import { Hocuspocus } from '@hocuspocus/server';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
@@ -16,7 +17,12 @@ interface StoreDocumentStateOptions {
 export interface CollabServerHandle {
   server: Hocuspocus;
   flushDocument(roomName: string): Promise<void>;
-  applyDocumentState(roomName: string, yjsState: Uint8Array): Promise<void>;
+  applyDocumentState(
+    roomName: string,
+    yjsState: Uint8Array,
+    options?: { expectedCurrentHash?: string },
+  ): Promise<Uint8Array | void>;
+  verifyDocumentState(roomName: string, options?: { expectedCurrentHash?: string }): Promise<void>;
   closeDocumentConnections(roomName: string): void;
 }
 
@@ -56,6 +62,48 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
 
   function localStoreForRoom(documentName: string): CollabRoomStore | null {
     return localStore?.canHandleRoom(documentName) ? localStore : null;
+  }
+
+  function activeMarkdownFromDocument(document: Y.Doc): string {
+    const contents = document.getText('contents').toString();
+    const legacyContents = document.getText('prosemirror').toString();
+    if (!contents && legacyContents) return legacyContents;
+    return contents;
+  }
+
+  function assertActiveDocumentHash(document: Y.Doc, expectedCurrentHash: string | undefined): void {
+    if (expectedCurrentHash && sha256Hex(activeMarkdownFromDocument(document)) !== expectedCurrentHash) {
+      throw new Error('stale_conflict_shared_state');
+    }
+  }
+
+  function replaceYTextWithChangedRange(text: Y.Text, nextText: string): void {
+    const currentText = text.toString();
+    if (currentText === nextText) return;
+
+    let start = 0;
+    while (
+      start < currentText.length
+      && start < nextText.length
+      && currentText.charCodeAt(start) === nextText.charCodeAt(start)
+    ) {
+      start += 1;
+    }
+
+    let currentEnd = currentText.length;
+    let nextEnd = nextText.length;
+    while (
+      currentEnd > start
+      && nextEnd > start
+      && currentText.charCodeAt(currentEnd - 1) === nextText.charCodeAt(nextEnd - 1)
+    ) {
+      currentEnd -= 1;
+      nextEnd -= 1;
+    }
+
+    if (currentEnd > start) text.delete(start, currentEnd - start);
+    const inserted = nextText.slice(start, nextEnd);
+    if (inserted) text.insert(start, inserted);
   }
 
   function assertLocalRoomAllowed(documentName: string): void {
@@ -252,23 +300,55 @@ export function createCollabServer(pool: DbPool, options: CreateCollabServerOpti
       if (!document) return;
       await storeDocumentState(roomName, document, { failOnPersistFailure: true });
     },
-    async applyDocumentState(roomName: string, yjsState: Uint8Array) {
+    async applyDocumentState(
+      roomName: string,
+      yjsState: Uint8Array,
+      options?: { expectedCurrentHash?: string },
+    ) {
       const document = activeDocumentByRoomName.get(roomName);
       if (!document) return;
 
       const nextState = new Uint8Array(yjsState);
       const validationDocument = new Y.Doc();
+      let nextTextName: 'contents' | 'prosemirror' = 'contents';
+      let nextText = '';
       try {
         Y.applyUpdate(validationDocument, nextState);
+        const nextContents = validationDocument.getText('contents').toString();
+        const nextProsemirror = validationDocument.getText('prosemirror').toString();
+        const activeContents = document.getText('contents');
+        const activeProsemirror = document.getText('prosemirror');
+        if (!nextContents && (nextProsemirror || (activeProsemirror.length > 0 && activeContents.length === 0))) {
+          nextTextName = 'prosemirror';
+          nextText = nextProsemirror;
+        } else {
+          nextText = nextContents;
+        }
       } finally {
         validationDocument.destroy();
       }
 
+      const contents = document.getText(nextTextName);
+      const legacyContents = document.getText(nextTextName === 'contents' ? 'prosemirror' : 'contents');
+      assertActiveDocumentHash(document, options?.expectedCurrentHash);
+      document.transact(() => {
+        replaceYTextWithChangedRange(contents, nextText);
+        if (legacyContents.length > 0) legacyContents.delete(0, legacyContents.length);
+      }, localStoreUpdateOrigin);
+      const appliedState = Y.encodeStateAsUpdate(document);
+      const loadedState = localStoreForRoom(roomName)
+        ? appliedState
+        : nextState;
       loadedStateByDocument.set(document, {
-        stateFingerprint: encodeYjsStateFingerprint(nextState),
-        yjsState: nextState,
+        stateFingerprint: encodeYjsStateFingerprint(loadedState),
+        yjsState: loadedState,
       });
-      Y.applyUpdate(document, nextState);
+      return appliedState;
+    },
+    async verifyDocumentState(roomName: string, options?: { expectedCurrentHash?: string }) {
+      const document = activeDocumentByRoomName.get(roomName);
+      if (!document) return;
+      assertActiveDocumentHash(document, options?.expectedCurrentHash);
     },
     closeDocumentConnections(roomName: string) {
       server.closeConnections(roomName);

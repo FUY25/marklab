@@ -32,4 +32,38 @@ struct LocalMarkdownDocumentTests {
 
     #expect(try String(contentsOf: file, encoding: .utf8) == "# Shared\n\nCollaborative edit.\n")
   }
+
+  @Test("does not overwrite an external atomic replacement during guarded save")
+  func guardedSaveRejectsExternalAtomicReplacement() throws {
+    let directory = try TemporaryDirectory()
+    let file = directory.url.appending(path: "shared.md")
+    try Data("Expected\n".utf8).write(to: file)
+
+    var document = try LocalMarkdownDocument.open(fileURL: file, shared: true)
+    document.replaceText("MarkLab replacement\n")
+    let committed = try document.saveIfCurrentMarkdownMatches("Expected\n") {
+      let replacement = directory.url.appending(path: "external.md")
+      try? Data("External atomic replacement\n".utf8).write(to: replacement)
+      _ = try? FileManager.default.replaceItemAt(file, withItemAt: replacement)
+    }
+
+    #expect(committed == false)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "External atomic replacement\n")
+  }
+
+  @Test("restores original markdown when guarded save destination mismatches after commit")
+  func guardedSaveRestoresOriginalWhenCommittedDestinationMismatches() throws {
+    let directory = try TemporaryDirectory()
+    let file = directory.url.appending(path: "shared.md")
+    try Data("Expected\n".utf8).write(to: file)
+
+    var document = try LocalMarkdownDocument.open(fileURL: file, shared: true)
+    document.replaceText("MarkLab replacement\n")
+    let committed = try document.saveIfCurrentMarkdownMatches("Expected\n", beforeVerify: {
+      try? Data("Corrupt linked destination\n".utf8).write(to: file)
+    })
+
+    #expect(committed == false)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "Expected\n")
+  }
 }

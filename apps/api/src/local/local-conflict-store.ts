@@ -12,12 +12,16 @@ export interface ReconnectConflict {
   baseMarkdown: string | null;
   baseYjsStateBase64: string | null;
   baseHash: string | null;
+  lastProjectedMarkdown: string;
+  lastProjectedHash: string;
   localMarkdown: string;
   localYjsStateBase64: string;
   localHash: string;
   sharedMarkdown: string;
   sharedYjsStateBase64: string;
   sharedHash: string;
+  expectedSharedRevision: number;
+  expectedSharedHash: string;
   sharedStateFingerprint: string;
   sharedRevision: number;
   createdAt: string;
@@ -54,7 +58,19 @@ function parseConflictFile(value: unknown): LocalConflictFile {
 
   return {
     schemaVersion: 1,
-    conflicts: value.conflicts as Record<string, ReconnectConflict>,
+    conflicts: Object.fromEntries(
+      Object.entries(value.conflicts).map(([conflictId, conflict]) => {
+        const reconnectConflict = conflict as ReconnectConflict & Partial<Pick<ReconnectConflict, 'lastProjectedMarkdown' | 'lastProjectedHash'>>;
+        return [
+          conflictId,
+          {
+            ...reconnectConflict,
+            lastProjectedMarkdown: reconnectConflict.lastProjectedMarkdown ?? reconnectConflict.baseMarkdown ?? '',
+            lastProjectedHash: reconnectConflict.lastProjectedHash ?? reconnectConflict.baseHash ?? '',
+          },
+        ];
+      }),
+    ),
   };
 }
 

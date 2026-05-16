@@ -92,6 +92,8 @@ export interface OpenReconnectConflictInput {
   sharedYjsStateBase64: string;
   sharedHash: string | null;
   sharedRevision: number;
+  expectedSharedRevision?: number;
+  expectedSharedHash?: string | null;
   baseMarkdown?: string | null;
   baseYjsStateBase64?: string | null;
   baseHash?: string | null;
@@ -107,7 +109,9 @@ export interface LocalConflictResolutionResult {
 
 export interface PreparedLocalConflictResolution {
   conflictId: string;
+  markdown: string;
   hash: string;
+  stateFingerprint: string;
   yjsState: Uint8Array;
 }
 
@@ -123,7 +127,7 @@ export interface LocalRoomStore {
 
 export interface LocalWatcherCallbacks {
   flushRoom(roomName: string): Promise<void>;
-  applyRoomState(roomName: string, yjsState: Uint8Array): Promise<void>;
+  applyRoomState(roomName: string, yjsState: Uint8Array): Promise<Uint8Array | void>;
 }
 
 interface LocalVersionRecord {
@@ -164,18 +168,25 @@ export interface LocalFileService extends LocalRoomStore {
     expectedSharedRevision: number,
     expectedSharedHash: string,
   ): Promise<PreparedLocalConflictResolution>;
-  completeConflictResolution(conflictId: string, sharedRevision: number | null): Promise<LocalConflictResolutionResult>;
-  useSharedConflict(conflictId: string): Promise<LocalConflictResolutionResult>;
-  useLocalConflict(
+  preflightConflictResolutionLocalCommit(conflictId: string): Promise<void>;
+  commitConflictResolutionLocally(
     conflictId: string,
-    expectedSharedRevision?: number,
-    expectedSharedHash?: string,
-  ): Promise<LocalConflictResolutionResult>;
-  resolveConflict(
+    preparedResolution: PreparedLocalConflictResolution,
+  ): Promise<PreparedLocalConflictResolution>;
+  adoptAppliedConflictResolutionState(
+    preparedResolution: PreparedLocalConflictResolution,
+    appliedYjsState: Uint8Array,
+  ): Promise<PreparedLocalConflictResolution>;
+  refreshOpenConflictFromDisk(conflictId: string): Promise<ReconnectConflict>;
+  refreshOpenConflictAfterSharedPublish(
     conflictId: string,
-    markdown: string,
-    expectedSharedRevision: number,
-    expectedSharedHash: string,
+    preparedResolution: PreparedLocalConflictResolution,
+    sharedRevision: number | null,
+  ): Promise<ReconnectConflict>;
+  completeConflictResolution(
+    conflictId: string,
+    sharedRevision: number | null,
+    preparedResolution: PreparedLocalConflictResolution,
   ): Promise<LocalConflictResolutionResult>;
   listVersions(): LocalVersionSummary[];
   getVersion(versionId: string): LocalVersionDetail;
@@ -194,6 +205,10 @@ export interface LocalFileServiceOptions {
   beforeProjectionOpen?: () => Promise<void> | void;
   beforeProjectionCommit?: () => Promise<void> | void;
   beforeProjectionRename?: () => Promise<void> | void;
+  beforeConflictResolutionCommit?: () => Promise<void> | void;
+  beforeConflictResolutionReplace?: () => Promise<void> | void;
+  beforeConflictResolutionVerify?: () => Promise<void> | void;
+  beforeConflictResolutionComplete?: () => Promise<void> | void;
   runtime?: LocalFileRuntime;
 }
 
@@ -240,6 +255,8 @@ async function writeMarkdownFileAtomicallyIfUnchanged(
   beforeFinalCheck?: () => Promise<void> | void,
   beforeCommit?: () => Promise<void> | void,
   beforeRename?: () => Promise<void> | void,
+  beforeReplace?: () => Promise<void> | void,
+  beforeVerify?: () => Promise<void> | void,
 ): Promise<boolean> {
   const directory = dirname(absolutePath);
   const temporaryPath = join(directory, `.${basename(absolutePath)}.marklab-${process.pid}-${Date.now()}.tmp`);
@@ -296,38 +313,78 @@ async function writeMarkdownFileAtomicallyIfUnchanged(
       return false;
     }
 
-    const backupPath = join(directory, `.${basename(absolutePath)}.marklab-backup-${process.pid}-${Date.now()}-${randomUUID()}.bak`);
-    let backupNeedsCleanup = false;
+    const movedAsidePath = join(directory, `.${basename(absolutePath)}.marklab-guard-${process.pid}-${Date.now()}-${randomUUID()}.bak`);
+    let movedAsideNeedsCleanup = false;
+    let movedAsideWasExpected = false;
+    async function restoreMovedAside(restoreOverDestination: boolean): Promise<void> {
+      if (!movedAsideNeedsCleanup) return;
+      try {
+        await link(movedAsidePath, absolutePath);
+        await rm(movedAsidePath, { force: true });
+        movedAsideNeedsCleanup = false;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? '';
+        if (code === 'EEXIST') {
+          if (restoreOverDestination) {
+            await rm(absolutePath, { force: true });
+            await link(movedAsidePath, absolutePath);
+          }
+          await rm(movedAsidePath, { force: true });
+          movedAsideNeedsCleanup = false;
+          return;
+        }
+        if (code === 'ENOENT') {
+          movedAsideNeedsCleanup = false;
+          return;
+        }
+        throw error;
+      }
+    }
+
     try {
-      await link(absolutePath, backupPath);
-      backupNeedsCleanup = true;
+      await rename(absolutePath, movedAsidePath);
+      movedAsideNeedsCleanup = true;
 
-      const backedUpMarkdown = await readMarkdownFile(backupPath);
-      if (collabMarkdownHash(backedUpMarkdown) !== expectedHash) {
-        await rm(backupPath, { force: true });
-        backupNeedsCleanup = false;
+      if (!(await openFileStillMatchesPath(file, movedAsidePath))) {
+        await restoreMovedAside(false);
         return false;
       }
 
-      if (!(await openFileStillMatchesPath(file, absolutePath))) {
-        await rm(backupPath, { force: true });
-        backupNeedsCleanup = false;
+      const movedAsideMarkdown = await readMarkdownFile(movedAsidePath);
+      if (collabMarkdownHash(movedAsideMarkdown) !== expectedHash) {
+        await restoreMovedAside(false);
+        return false;
+      }
+      movedAsideWasExpected = true;
+
+      await beforeReplace?.();
+      try {
+        await link(temporaryPath, absolutePath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? '';
+        if (code === 'EEXIST') {
+          await restoreMovedAside(false);
+          return false;
+        }
+        if (code === 'ENOENT') {
+          await restoreMovedAside(movedAsideWasExpected);
+          return false;
+        }
+        throw error;
+      }
+
+      await beforeVerify?.();
+      const committedMarkdown = await readMarkdownFile(absolutePath);
+      if (collabMarkdownHash(committedMarkdown) !== collabMarkdownHash(markdown)) {
+        await restoreMovedAside(movedAsideWasExpected);
         return false;
       }
 
-      const latestMarkdownBeforeReplace = await readMarkdownFile(absolutePath);
-      if (collabMarkdownHash(latestMarkdownBeforeReplace) !== expectedHash) {
-        await rm(backupPath, { force: true });
-        backupNeedsCleanup = false;
-        return false;
-      }
-
-      await rename(temporaryPath, absolutePath);
-      await rm(backupPath, { force: true });
-      backupNeedsCleanup = false;
+      await rm(movedAsidePath, { force: true });
+      movedAsideNeedsCleanup = false;
     } catch (error) {
-      if (backupNeedsCleanup) {
-        await rm(backupPath, { force: true });
+      if (movedAsideNeedsCleanup) {
+        await restoreMovedAside(movedAsideWasExpected).catch(() => rm(movedAsidePath, { force: true }).catch(() => undefined));
       }
       if (['ENOENT', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
       throw error;
@@ -675,16 +732,23 @@ export async function createLocalFileServiceWithOptions(
     await createVersion('open', currentMarkdown, currentYjsState, currentHash);
   }
 
-  async function createConflictRecoverySnapshot(): Promise<void> {
-    if (lastConflictRecoveryHash === currentHash) return;
+  async function createConflictRecoverySnapshot(snapshot?: {
+    markdown: string;
+    yjsState: Uint8Array;
+    hash: string;
+  }): Promise<void> {
+    const markdown = snapshot?.markdown ?? currentMarkdown;
+    const yjsState = snapshot?.yjsState ?? currentYjsState;
+    const hash = snapshot?.hash ?? currentHash;
+    if (lastConflictRecoveryHash === hash) return;
     const latest = versions.at(-1);
-    if (latest?.operation === 'conflict_recovery' && latest.hash === currentHash) {
-      lastConflictRecoveryHash = currentHash;
+    if (latest?.operation === 'conflict_recovery' && latest.hash === hash) {
+      lastConflictRecoveryHash = hash;
       return;
     }
 
-    await createVersion('conflict_recovery', currentMarkdown, currentYjsState, currentHash);
-    lastConflictRecoveryHash = currentHash;
+    await createVersion('conflict_recovery', markdown, yjsState, hash);
+    lastConflictRecoveryHash = hash;
   }
 
   function getVersionByHash(hash: string | null | undefined): LocalVersionRecord | null {
@@ -704,52 +768,194 @@ export async function createLocalFileServiceWithOptions(
     expectedSharedRevision: number,
     expectedSharedHash: string,
   ): void {
-    if (expectedSharedRevision !== openConflict.sharedRevision || expectedSharedHash !== openConflict.sharedHash) {
+    if (
+      expectedSharedRevision !== (openConflict.expectedSharedRevision ?? openConflict.sharedRevision)
+      || expectedSharedHash !== (openConflict.expectedSharedHash ?? openConflict.sharedHash)
+    ) {
       throw new Error('stale_conflict_shared_state');
     }
   }
 
-  async function markConflictResolved(openConflict: ReconnectConflict): Promise<void> {
+  function conflictExpectedSharedRevision(openConflict: ReconnectConflict): number {
+    return openConflict.expectedSharedRevision ?? openConflict.sharedRevision;
+  }
+
+  function conflictExpectedSharedHash(openConflict: ReconnectConflict): string {
+    return openConflict.expectedSharedHash ?? openConflict.sharedHash;
+  }
+
+  async function refreshOpenConflictFromDisk(
+    openConflict: ReconnectConflict,
+    sharedOverride?: {
+      markdown: string;
+      yjsState: Uint8Array;
+      hash: string;
+      stateFingerprint: string;
+      sharedRevision: number | null;
+    },
+  ): Promise<void> {
+    let localDiskMarkdown: string;
+    try {
+      localDiskMarkdown = normalizeCollabMarkdown(await readMarkdownFile(absolutePath));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        await pauseOpenConflictForMissingBackingFile(openConflict);
+        throw new Error('host_file_missing');
+      }
+      throw error;
+    }
+    const localDiskState = await documentRuntime.initializeFromMarkdown(localDiskMarkdown);
+    if (localDiskState.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
     const updated: ReconnectConflict = {
       ...openConflict,
-      localMarkdown: currentMarkdown,
-      localYjsStateBase64: encodeBase64(currentYjsState),
-      localHash: currentHash,
+      localMarkdown: localDiskMarkdown,
+      localYjsStateBase64: encodeBase64(localDiskState.yjsState),
+      localHash: rawMarkdownHash(localDiskMarkdown),
+      sharedMarkdown: sharedOverride?.markdown ?? openConflict.sharedMarkdown,
+      sharedYjsStateBase64: sharedOverride ? encodeBase64(sharedOverride.yjsState) : openConflict.sharedYjsStateBase64,
+      sharedHash: sharedOverride?.hash ?? openConflict.sharedHash,
+      expectedSharedRevision: sharedOverride?.sharedRevision ?? openConflict.expectedSharedRevision ?? openConflict.sharedRevision,
+      expectedSharedHash: sharedOverride?.hash ?? openConflict.expectedSharedHash ?? openConflict.sharedHash,
+      sharedStateFingerprint: sharedOverride?.stateFingerprint ?? openConflict.sharedStateFingerprint,
+      sharedRevision: sharedOverride?.sharedRevision ?? openConflict.sharedRevision,
+      status: 'open',
+      updatedAt: new Date().toISOString(),
+    };
+    await conflictStore.saveConflict(updated);
+    currentOpenConflict = updated;
+    conflict = 'Relay reconnect conflict. Review needed before syncing resumes.';
+  }
+
+  async function pauseOpenConflictForMissingBackingFile(openConflict: ReconnectConflict): Promise<void> {
+    conflict = 'host_file_missing';
+    await createConflictRecoverySnapshot({
+      markdown: openConflict.localMarkdown,
+      yjsState: decodeBase64(openConflict.localYjsStateBase64),
+      hash: openConflict.localHash,
+    });
+    await persistCurrentDocument();
+  }
+
+  async function assertConflictDiskUnchanged(
+    openConflict: ReconnectConflict,
+    sharedOverride?: Parameters<typeof refreshOpenConflictFromDisk>[1],
+  ): Promise<void> {
+    let diskMarkdown: string;
+    try {
+      diskMarkdown = await readMarkdownFile(absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        await pauseOpenConflictForMissingBackingFile(openConflict);
+        throw new Error('host_file_missing');
+      }
+      throw error;
+    }
+    if (collabMarkdownHash(diskMarkdown) === openConflict.localHash) return;
+    await refreshOpenConflictFromDisk(openConflict, sharedOverride);
+    throw new Error('local_state_changed');
+  }
+
+  async function preparePendingConflictResolutionFromYjs(
+    openConflict: ReconnectConflict,
+    yjsState: Uint8Array,
+  ): Promise<PreparedLocalConflictResolution> {
+    await assertConflictDiskUnchanged(openConflict);
+    const serialized = await documentRuntime.serializeYjsState(yjsState);
+    if (serialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+    const prepared: PreparedLocalConflictResolution = {
+      conflictId: openConflict.conflictId,
+      markdown: serialized.markdown,
+      yjsState: serialized.yjsState,
+      hash: rawMarkdownHash(serialized.markdown),
+      stateFingerprint: encodeYjsStateFingerprint(serialized.yjsState),
+    };
+    return {
+      ...prepared,
+      yjsState: new Uint8Array(prepared.yjsState),
+    };
+  }
+
+  async function preparePendingConflictResolutionFromMarkdown(
+    openConflict: ReconnectConflict,
+    markdown: string,
+  ): Promise<PreparedLocalConflictResolution> {
+    await assertConflictDiskUnchanged(openConflict);
+    const sharedYjsState = decodeBase64(openConflict.sharedYjsStateBase64);
+    const applied = await documentRuntime.applyChangedRanges({
+      branchId: localDocId,
+      yjsState: sharedYjsState,
+      seedMarkdown: openConflict.sharedMarkdown,
+      targetCanonicalMarkdown: markdown,
+    });
+    if (applied.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+    const prepared: PreparedLocalConflictResolution = {
+      conflictId: openConflict.conflictId,
+      markdown: applied.serializedMarkdown,
+      yjsState: applied.yjsState,
+      hash: rawMarkdownHash(applied.serializedMarkdown),
+      stateFingerprint: encodeYjsStateFingerprint(applied.yjsState),
+    };
+    return {
+      ...prepared,
+      yjsState: new Uint8Array(prepared.yjsState),
+    };
+  }
+
+  async function commitPreparedConflictResolution(
+    openConflict: ReconnectConflict,
+    prepared: PreparedLocalConflictResolution,
+  ): Promise<void> {
+    if (prepared.conflictId !== openConflict.conflictId) throw new Error('stale_conflict_resolution');
+    const committed = await writeMarkdownFileAtomicallyIfUnchanged(
+      absolutePath,
+      prepared.markdown,
+      openConflict.localHash,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.beforeConflictResolutionReplace,
+      options.beforeConflictResolutionVerify,
+    );
+    if (!committed) {
+      await refreshOpenConflictFromDisk(openConflict);
+      throw new Error('local_state_changed');
+    }
+    currentYjsState = prepared.yjsState;
+    currentMarkdown = prepared.markdown;
+    currentHash = prepared.hash;
+    currentStateFingerprint = prepared.stateFingerprint;
+    markProjectedBaseline(prepared.markdown, prepared.stateFingerprint);
+    await persistCurrentDocument();
+  }
+
+  async function preparedResolutionFromAppliedState(
+    prepared: PreparedLocalConflictResolution,
+    appliedYjsState: Uint8Array,
+  ): Promise<PreparedLocalConflictResolution> {
+    const serialized = await documentRuntime.serializeYjsState(appliedYjsState);
+    if (serialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+    const appliedHash = rawMarkdownHash(serialized.markdown);
+    if (appliedHash !== prepared.hash) throw new Error('local_provider_state_mismatch');
+    return {
+      conflictId: prepared.conflictId,
+      markdown: serialized.markdown,
+      hash: appliedHash,
+      stateFingerprint: encodeYjsStateFingerprint(serialized.yjsState),
+      yjsState: serialized.yjsState,
+    };
+  }
+
+  async function markConflictResolved(openConflict: ReconnectConflict, sharedRevision: number | null): Promise<void> {
+    const updated: ReconnectConflict = {
+      ...openConflict,
+      sharedRevision: sharedRevision ?? openConflict.sharedRevision,
       status: 'resolved',
       updatedAt: new Date().toISOString(),
     };
     await conflictStore.saveConflict(updated);
     if (currentOpenConflict?.conflictId === updated.conflictId) currentOpenConflict = null;
     conflict = null;
-  }
-
-  async function replaceCurrentStateFromYjs(yjsState: Uint8Array): Promise<void> {
-    const serialized = await documentRuntime.serializeYjsState(yjsState);
-    if (serialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
-    await writeMarkdownFileAtomically(absolutePath, serialized.markdown);
-    currentYjsState = serialized.yjsState;
-    currentMarkdown = serialized.markdown;
-    currentHash = rawMarkdownHash(serialized.markdown);
-    currentStateFingerprint = encodeYjsStateFingerprint(serialized.yjsState);
-    markProjectedBaseline(serialized.markdown, currentStateFingerprint);
-    await persistCurrentDocument();
-  }
-
-  async function replaceCurrentStateFromMarkdown(markdown: string): Promise<void> {
-    const applied = await documentRuntime.applyChangedRanges({
-      branchId: localDocId,
-      yjsState: currentYjsState,
-      seedMarkdown: currentMarkdown,
-      targetCanonicalMarkdown: markdown,
-    });
-    if (applied.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
-    await writeMarkdownFileAtomically(absolutePath, applied.serializedMarkdown);
-    currentYjsState = applied.yjsState;
-    currentMarkdown = applied.serializedMarkdown;
-    currentHash = rawMarkdownHash(applied.serializedMarkdown);
-    currentStateFingerprint = encodeYjsStateFingerprint(applied.yjsState);
-    markProjectedBaseline(applied.serializedMarkdown, currentStateFingerprint);
-    await persistCurrentDocument();
   }
 
   async function createConflictResolutionSnapshot(message: string): Promise<void> {
@@ -777,6 +983,48 @@ export async function createLocalFileServiceWithOptions(
     await metadataStore.saveRelayJoin(relayJoinState);
   }
 
+  async function pauseForProviderConflict(input: {
+    markdown: string;
+    yjsState: Uint8Array;
+    hash: string;
+  }): Promise<void> {
+    const joinState = relayJoinState;
+    if (joinState?.relayRoomId) {
+      await createReconnectConflict({
+        relayRoomId: joinState.relayRoomId,
+        sharedYjsStateBase64: encodeBase64(input.yjsState),
+        sharedHash: input.hash,
+        sharedRevision: joinState.lastAcceptedSharedRevision,
+        baseMarkdown: lastProjectedMarkdown,
+        baseYjsStateBase64: joinState.lastAcceptedYjsStateBase64 ?? null,
+        baseHash: joinState.lastAcceptedLocalHash,
+      });
+      return;
+    }
+
+    const hostState = relayHostState;
+    if (hostState?.relayRoomId) {
+      const expectedSharedRevision = hostState.lastSharedRevision ?? 0;
+      const expectedSharedHash = hostState.lastSharedHash ?? hostState.lastPublishedHash ?? lastProjectedHash;
+      await createReconnectConflict({
+        relayRoomId: hostState.relayRoomId,
+        sharedYjsStateBase64: encodeBase64(input.yjsState),
+        sharedHash: input.hash,
+        sharedRevision: expectedSharedRevision,
+        expectedSharedRevision,
+        expectedSharedHash,
+        baseMarkdown: lastProjectedMarkdown,
+        baseYjsStateBase64: null,
+        baseHash: lastProjectedHash,
+      });
+      return;
+    }
+
+    conflict = 'File changed outside MarkLab. Review needed.';
+    await createConflictRecoverySnapshot();
+    await persistCurrentDocument();
+  }
+
   async function applySerializedRoomState(yjsState: Uint8Array): Promise<PendingProviderApply | null> {
     const serialized = await documentRuntime.serializeYjsState(yjsState);
     if (serialized.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
@@ -797,9 +1045,11 @@ export async function createLocalFileServiceWithOptions(
       currentMarkdown = serialized.markdown;
       currentHash = rawMarkdownHash(serialized.markdown);
       currentStateFingerprint = nextFingerprint;
-      conflict = 'File changed outside MarkLab. Review needed.';
-      await createConflictRecoverySnapshot();
-      await persistCurrentDocument();
+      await pauseForProviderConflict({
+        markdown: serialized.markdown,
+        yjsState: serialized.yjsState,
+        hash: rawMarkdownHash(serialized.markdown),
+      });
       return null;
     }
 
@@ -905,9 +1155,11 @@ export async function createLocalFileServiceWithOptions(
     });
 
     if (decision.kind === 'conflict') {
-      conflict = 'File changed outside MarkLab. Review needed.';
-      await createConflictRecoverySnapshot();
-      await persistCurrentDocument();
+      await pauseForProviderConflict({
+        markdown: providerMarkdownAtDecision,
+        yjsState: providerYjsStateAtDecision,
+        hash: rawMarkdownHash(providerMarkdownAtDecision),
+      });
       return null;
     }
 
@@ -993,6 +1245,12 @@ export async function createLocalFileServiceWithOptions(
 
   async function pauseForDiskRaceConflict(): Promise<void> {
     conflict = 'File changed outside MarkLab. Review needed.';
+    await createConflictRecoverySnapshot();
+    await persistCurrentDocument();
+  }
+
+  async function pauseForMissingBackingFileState(kind: 'host' | 'mirror'): Promise<void> {
+    conflict = kind === 'host' ? 'host_file_missing' : 'mirror_file_missing';
     await createConflictRecoverySnapshot();
     await persistCurrentDocument();
   }
@@ -1158,6 +1416,82 @@ export async function createLocalFileServiceWithOptions(
     }
   }
 
+  async function createReconnectConflict(input: OpenReconnectConflictInput): Promise<ReconnectConflict> {
+    const sharedYjsState = decodeBase64(input.sharedYjsStateBase64);
+    const shared = await documentRuntime.serializeYjsState(sharedYjsState);
+    if (shared.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+    const sharedHash = input.sharedHash ?? rawMarkdownHash(shared.markdown);
+    const expectedSharedRevision = input.expectedSharedRevision ?? input.sharedRevision;
+    const expectedSharedHash = input.expectedSharedHash ?? (input.sharedHash ?? '');
+    const sharedStateFingerprint = encodeYjsStateFingerprint(shared.yjsState);
+    if (currentOpenConflict?.status === 'open') {
+      await refreshOpenConflictFromDisk(currentOpenConflict, {
+        markdown: shared.markdown,
+        yjsState: shared.yjsState,
+        hash: sharedHash,
+        stateFingerprint: sharedStateFingerprint,
+        sharedRevision: input.sharedRevision,
+      });
+      return { ...(await requireOpenConflict(currentOpenConflict.conflictId)) };
+    }
+    let localDiskMarkdown: string;
+    try {
+      localDiskMarkdown = normalizeCollabMarkdown(await readMarkdownFile(absolutePath));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        await pauseForMissingBackingFileState(relayHostState?.relayRoomId === input.relayRoomId ? 'host' : 'mirror');
+        throw new Error('local_file_missing');
+      }
+      throw error;
+    }
+    const localDiskState = await documentRuntime.initializeFromMarkdown(localDiskMarkdown);
+    if (localDiskState.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
+    const baseVersion = getVersionByHash(input.baseHash ?? relayJoinState?.lastAcceptedLocalHash);
+    let baseMarkdown = input.baseMarkdown ?? baseVersion?.markdown ?? null;
+    let baseYjsStateBase64 = input.baseYjsStateBase64 ?? (baseVersion ? encodeBase64(baseVersion.yjsState) : null);
+    if (!baseMarkdown && baseYjsStateBase64) {
+      const base = await documentRuntime.serializeYjsState(decodeBase64(baseYjsStateBase64));
+      if (base.yjsState.byteLength > 0) {
+        baseMarkdown = base.markdown;
+        baseYjsStateBase64 = encodeBase64(base.yjsState);
+      }
+    }
+    const now = new Date().toISOString();
+    const openConflict: ReconnectConflict = {
+      conflictId: `conflict_${randomUUID()}`,
+      relayRoomId: input.relayRoomId,
+      localDocId,
+      localPath: absolutePath,
+      baseMarkdown,
+      baseYjsStateBase64,
+      baseHash: input.baseHash ?? baseVersion?.hash ?? null,
+      lastProjectedMarkdown,
+      lastProjectedHash,
+      localMarkdown: localDiskMarkdown,
+      localYjsStateBase64: encodeBase64(localDiskState.yjsState),
+      localHash: rawMarkdownHash(localDiskMarkdown),
+      sharedMarkdown: shared.markdown,
+      sharedYjsStateBase64: encodeBase64(shared.yjsState),
+      sharedHash,
+      expectedSharedRevision,
+      expectedSharedHash,
+      sharedStateFingerprint,
+      sharedRevision: input.sharedRevision,
+      createdAt: now,
+      updatedAt: now,
+      status: 'open',
+    };
+    currentOpenConflict = openConflict;
+    conflict = 'Relay reconnect conflict. Review needed before syncing resumes.';
+    await conflictStore.saveConflict(openConflict);
+    await createVersion('conflict_opened', localDiskMarkdown, localDiskState.yjsState, rawMarkdownHash(localDiskMarkdown), {
+      source: 'system',
+      message: 'Reconnect conflict opened',
+    });
+    await persistCurrentDocument();
+    return { ...openConflict };
+  }
+
   if (backingFileMissingOnStartup) {
     conflict = 'host_file_missing';
     await createConflictRecoverySnapshot();
@@ -1290,9 +1624,7 @@ export async function createLocalFileServiceWithOptions(
       return existsSync(absolutePath);
     },
     async pauseForMissingBackingFile(kind) {
-      conflict = kind === 'host' ? 'host_file_missing' : 'mirror_file_missing';
-      await createConflictRecoverySnapshot();
-      await persistCurrentDocument();
+      await pauseForMissingBackingFileState(kind);
     },
     async pauseForRelayConflict(message) {
       conflict = message;
@@ -1307,174 +1639,94 @@ export async function createLocalFileServiceWithOptions(
       return candidate && candidate.localPath === absolutePath ? { ...candidate } : null;
     },
     async openReconnectConflict(input) {
-      if (currentOpenConflict?.status === 'open') return { ...currentOpenConflict };
-      const sharedYjsState = decodeBase64(input.sharedYjsStateBase64);
-      const shared = await documentRuntime.serializeYjsState(sharedYjsState);
-      if (shared.yjsState.byteLength === 0) throw new Error('invalid_live_yjs_state');
-      const baseVersion = getVersionByHash(input.baseHash ?? relayJoinState?.lastAcceptedLocalHash);
-      let baseMarkdown = input.baseMarkdown ?? baseVersion?.markdown ?? null;
-      let baseYjsStateBase64 = input.baseYjsStateBase64 ?? (baseVersion ? encodeBase64(baseVersion.yjsState) : null);
-      if (!baseMarkdown && baseYjsStateBase64) {
-        const base = await documentRuntime.serializeYjsState(decodeBase64(baseYjsStateBase64));
-        if (base.yjsState.byteLength > 0) {
-          baseMarkdown = base.markdown;
-          baseYjsStateBase64 = encodeBase64(base.yjsState);
-        }
-      }
-      const now = new Date().toISOString();
-      const openConflict: ReconnectConflict = {
-        conflictId: `conflict_${randomUUID()}`,
-        relayRoomId: input.relayRoomId,
-        localDocId,
-        localPath: absolutePath,
-        baseMarkdown,
-        baseYjsStateBase64,
-        baseHash: input.baseHash ?? baseVersion?.hash ?? null,
-        localMarkdown: currentMarkdown,
-        localYjsStateBase64: encodeBase64(currentYjsState),
-        localHash: currentHash,
-        sharedMarkdown: shared.markdown,
-        sharedYjsStateBase64: encodeBase64(shared.yjsState),
-        sharedHash: input.sharedHash ?? rawMarkdownHash(shared.markdown),
-        sharedStateFingerprint: encodeYjsStateFingerprint(shared.yjsState),
-        sharedRevision: input.sharedRevision,
-        createdAt: now,
-        updatedAt: now,
-        status: 'open',
-      };
-      currentOpenConflict = openConflict;
-      conflict = 'Relay reconnect conflict. Review needed before syncing resumes.';
-      await conflictStore.saveConflict(openConflict);
-      await createVersion('conflict_opened', currentMarkdown, currentYjsState, currentHash, {
-        source: 'system',
-        message: 'Reconnect conflict opened',
-      });
-      await persistCurrentDocument();
-      return { ...openConflict };
+      return createReconnectConflict(input);
     },
     async prepareUseSharedConflict(conflictId) {
       const openConflict = await requireOpenConflict(conflictId);
-      await createConflictRecoverySnapshot();
+      await createConflictRecoverySnapshot({
+        markdown: openConflict.localMarkdown,
+        yjsState: decodeBase64(openConflict.localYjsStateBase64),
+        hash: openConflict.localHash,
+      });
       await createConflictResolutionSnapshot('Pre-resolution snapshot before applying shared conflict version');
-      await replaceCurrentStateFromYjs(decodeBase64(openConflict.sharedYjsStateBase64));
-      if (relayJoinState?.relayRoomId === openConflict.relayRoomId) {
-        relayJoinState = {
-          ...relayJoinState,
-          lastAcceptedLocalHash: currentHash,
-          lastAcceptedSharedHash: openConflict.sharedHash,
-          lastAcceptedSharedRevision: openConflict.sharedRevision,
-          lastAcceptedYjsStateBase64: encodeBase64(currentYjsState),
-          lastAcceptedStateFingerprint: currentStateFingerprint,
-          disconnectedCleanly: true,
-          updatedAt: new Date().toISOString(),
-        };
-        await metadataStore.saveRelayJoin(relayJoinState);
-      }
-      await persistCurrentDocument();
-      return {
-        conflictId: openConflict.conflictId,
-        hash: currentHash,
-        yjsState: new Uint8Array(currentYjsState),
-      };
+      return preparePendingConflictResolutionFromYjs(openConflict, decodeBase64(openConflict.sharedYjsStateBase64));
     },
     async prepareUseLocalConflict(conflictId, expectedSharedRevision, expectedSharedHash) {
       const openConflict = await requireOpenConflict(conflictId);
       assertExpectedSharedState(
         openConflict,
-        expectedSharedRevision ?? openConflict.sharedRevision,
-        expectedSharedHash ?? openConflict.sharedHash,
+        expectedSharedRevision ?? conflictExpectedSharedRevision(openConflict),
+        expectedSharedHash ?? conflictExpectedSharedHash(openConflict),
       );
-      await createConflictRecoverySnapshot();
+      await createConflictRecoverySnapshot({
+        markdown: openConflict.localMarkdown,
+        yjsState: decodeBase64(openConflict.localYjsStateBase64),
+        hash: openConflict.localHash,
+      });
       await createConflictResolutionSnapshot('Pre-resolution snapshot before applying local conflict version');
-      await replaceCurrentStateFromMarkdown(openConflict.localMarkdown);
-      await persistCurrentDocument();
-      return {
-        conflictId: openConflict.conflictId,
-        hash: currentHash,
-        yjsState: new Uint8Array(currentYjsState),
-      };
+      return preparePendingConflictResolutionFromMarkdown(openConflict, openConflict.localMarkdown);
     },
     async prepareResolvedConflict(conflictId, markdown, expectedSharedRevision, expectedSharedHash) {
       const openConflict = await requireOpenConflict(conflictId);
       assertExpectedSharedState(openConflict, expectedSharedRevision, expectedSharedHash);
-      await createConflictRecoverySnapshot();
+      await createConflictRecoverySnapshot({
+        markdown: openConflict.localMarkdown,
+        yjsState: decodeBase64(openConflict.localYjsStateBase64),
+        hash: openConflict.localHash,
+      });
       await createConflictResolutionSnapshot('Pre-resolution snapshot before applying pasted conflict resolution');
-      await replaceCurrentStateFromMarkdown(markdown);
-      await persistCurrentDocument();
+      return preparePendingConflictResolutionFromMarkdown(openConflict, markdown);
+    },
+    async preflightConflictResolutionLocalCommit(conflictId) {
+      const openConflict = await requireOpenConflict(conflictId);
+      await assertConflictDiskUnchanged(openConflict);
+      await options.beforeConflictResolutionCommit?.();
+      await assertConflictDiskUnchanged(openConflict);
+    },
+    async commitConflictResolutionLocally(conflictId, preparedResolution) {
+      const openConflict = await requireOpenConflict(conflictId);
+      await commitPreparedConflictResolution(openConflict, preparedResolution);
       return {
-        conflictId: openConflict.conflictId,
-        hash: currentHash,
-        yjsState: new Uint8Array(currentYjsState),
+        ...preparedResolution,
+        yjsState: new Uint8Array(preparedResolution.yjsState),
       };
     },
-    async completeConflictResolution(conflictId, sharedRevision) {
+    async adoptAppliedConflictResolutionState(preparedResolution, appliedYjsState) {
+      return preparedResolutionFromAppliedState(preparedResolution, appliedYjsState);
+    },
+    async refreshOpenConflictFromDisk(conflictId) {
       const openConflict = await requireOpenConflict(conflictId);
+      await refreshOpenConflictFromDisk(openConflict);
+      const refreshed = await requireOpenConflict(conflictId);
+      return { ...refreshed };
+    },
+    async refreshOpenConflictAfterSharedPublish(conflictId, preparedResolution, sharedRevision) {
+      const openConflict = await requireOpenConflict(conflictId);
+      await refreshOpenConflictFromDisk(openConflict, { ...preparedResolution, sharedRevision });
+      const refreshed = await requireOpenConflict(conflictId);
+      return { ...refreshed };
+    },
+    async completeConflictResolution(conflictId, sharedRevision, preparedResolution) {
+      const openConflict = await requireOpenConflict(conflictId);
+      if (currentHash !== preparedResolution.hash || currentStateFingerprint !== preparedResolution.stateFingerprint) {
+        throw new Error('local_state_changed');
+      }
+      await options.beforeConflictResolutionComplete?.();
+      const diskMarkdown = await readMarkdownFile(absolutePath);
+      if (collabMarkdownHash(diskMarkdown) !== preparedResolution.hash) {
+        await refreshOpenConflictFromDisk(openConflict, { ...preparedResolution, sharedRevision });
+        await persistCurrentDocument();
+        throw new Error('local_state_changed');
+      }
       await updateRelayJoinAfterResolution(openConflict, sharedRevision);
       await createConflictResolutionSnapshot('Post-resolution snapshot after conflict side effects completed');
-      await markConflictResolved(openConflict);
+      await markConflictResolved(openConflict, sharedRevision);
       await persistCurrentDocument();
       return {
         conflictId: openConflict.conflictId,
         status: 'resolved',
         hash: currentHash,
         sharedRevision,
-        yjsState: new Uint8Array(currentYjsState),
-      };
-    },
-    async useSharedConflict(conflictId) {
-      const openConflict = await requireOpenConflict(conflictId);
-      await createConflictRecoverySnapshot();
-      await createConflictResolutionSnapshot('Pre-resolution snapshot before applying shared conflict version');
-      await replaceCurrentStateFromYjs(decodeBase64(openConflict.sharedYjsStateBase64));
-      await updateRelayJoinAfterResolution(openConflict, openConflict.sharedRevision);
-      await createConflictResolutionSnapshot('Post-resolution snapshot after conflict side effects completed');
-      await markConflictResolved(openConflict);
-      await persistCurrentDocument();
-      return {
-        conflictId: openConflict.conflictId,
-        status: 'resolved',
-        hash: currentHash,
-        sharedRevision: openConflict.sharedRevision,
-        yjsState: new Uint8Array(currentYjsState),
-      };
-    },
-    async useLocalConflict(conflictId, expectedSharedRevision, expectedSharedHash) {
-      const openConflict = await requireOpenConflict(conflictId);
-      assertExpectedSharedState(
-        openConflict,
-        expectedSharedRevision ?? openConflict.sharedRevision,
-        expectedSharedHash ?? openConflict.sharedHash,
-      );
-      await createConflictRecoverySnapshot();
-      await createConflictResolutionSnapshot('Pre-resolution snapshot before applying local conflict version');
-      await replaceCurrentStateFromMarkdown(openConflict.localMarkdown);
-      await updateRelayJoinAfterResolution(openConflict, openConflict.sharedRevision);
-      await createConflictResolutionSnapshot('Post-resolution snapshot after conflict side effects completed');
-      await markConflictResolved(openConflict);
-      await persistCurrentDocument();
-      return {
-        conflictId: openConflict.conflictId,
-        status: 'resolved',
-        hash: currentHash,
-        sharedRevision: openConflict.sharedRevision,
-        yjsState: new Uint8Array(currentYjsState),
-      };
-    },
-    async resolveConflict(conflictId, markdown, expectedSharedRevision, expectedSharedHash) {
-      const openConflict = await requireOpenConflict(conflictId);
-      assertExpectedSharedState(openConflict, expectedSharedRevision, expectedSharedHash);
-      await createConflictRecoverySnapshot();
-      await createConflictResolutionSnapshot('Pre-resolution snapshot before applying pasted conflict resolution');
-      await replaceCurrentStateFromMarkdown(markdown);
-      await updateRelayJoinAfterResolution(openConflict, openConflict.sharedRevision);
-      await createConflictResolutionSnapshot('Post-resolution snapshot after conflict side effects completed');
-      await markConflictResolved(openConflict);
-      await persistCurrentDocument();
-      return {
-        conflictId: openConflict.conflictId,
-        status: 'resolved',
-        hash: currentHash,
-        sharedRevision: openConflict.sharedRevision,
         yjsState: new Uint8Array(currentYjsState),
       };
     },

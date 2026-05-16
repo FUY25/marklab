@@ -40,11 +40,12 @@ public func nativeHostedWebViewURLIsAllowed(_ url: URL, expectedURL: URL) -> Boo
     return false
   }
   return actualQuery == expectedQuery
+    && nativeHostedWebViewFragmentValues(url) == nativeHostedWebViewFragmentValues(expectedURL)
 }
 
 private func nativeHostedWebViewQueryValues(_ url: URL) -> [String: String]? {
   let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-  let allowedKeys = Set(["docId", "branchId", "token", "mode", "clientKind"])
+  let allowedKeys = Set(["docId", "branchId", "token", "mode", "clientKind", "localDocId"])
   var seen = Set<String>()
   var values: [String: String] = [:]
   for item in queryItems {
@@ -54,4 +55,11 @@ private func nativeHostedWebViewQueryValues(_ url: URL) -> [String: String]? {
   }
   guard !values.isEmpty else { return nil }
   return values
+}
+
+private func nativeHostedWebViewFragmentValues(_ url: URL) -> [String: String] {
+  guard let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedFragment, !fragment.isEmpty else {
+    return [:]
+  }
+  return ["__invalid": fragment]
 }

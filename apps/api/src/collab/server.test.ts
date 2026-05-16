@@ -19,7 +19,12 @@ interface TestableHocuspocus {
 interface TestableCollabServer {
   server: TestableHocuspocus;
   flushDocument(roomName: string): Promise<void>;
-  applyDocumentState(roomName: string, yjsState: Uint8Array): Promise<void>;
+  applyDocumentState(
+    roomName: string,
+    yjsState: Uint8Array,
+    options?: { expectedCurrentHash?: string },
+  ): Promise<Uint8Array | void>;
+  verifyDocumentState(roomName: string, options?: { expectedCurrentHash?: string }): Promise<void>;
 }
 
 function createState(text: string): Uint8Array {
@@ -43,6 +48,22 @@ function textFromState(state: Uint8Array): string {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, state);
   const text = doc.getText('prosemirror').toString();
+  doc.destroy();
+  return text;
+}
+
+function createContentsState(text: string): Uint8Array {
+  const doc = new Y.Doc();
+  doc.getText('contents').insert(0, text);
+  const update = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return update;
+}
+
+function contentsTextFromState(state: Uint8Array): string {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, state);
+  const text = doc.getText('contents').toString();
   doc.destroy();
   return text;
 }
@@ -355,6 +376,112 @@ describe('createCollabServer persistence hooks', () => {
 
       expect(store.getStoreAttemptCount()).toBe(1);
       expect(textFromState(store.getPersistedState())).toBe('api result');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('replaces active contents text instead of merging a resolved conflict update', async () => {
+    const initialState = createContentsState('local shared');
+    const resolvedState = createContentsState('shared');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('prosemirror').insert(0, 'legacy local shared');
+
+      const appliedState = await collab.applyDocumentState(roomName, resolvedState);
+
+      expect(contentsTextFromState(Y.encodeStateAsUpdate(document))).toBe('shared');
+      expect(document.getText('prosemirror').toString()).toBe('');
+      expect(appliedState).toBeInstanceOf(Uint8Array);
+      expect(contentsTextFromState(appliedState ?? new Uint8Array())).toBe('shared');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('applies active contents replacement as a minimal text range in one transaction', async () => {
+    const initialMarkdown = 'alpha shared omega';
+    const resolvedMarkdown = 'alpha local omega';
+    const initialState = createContentsState(initialMarkdown);
+    const resolvedState = createContentsState(resolvedMarkdown);
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+    const events: Y.YTextEvent[] = [];
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('contents').observe((event) => events.push(event));
+
+      await collab.applyDocumentState(roomName, resolvedState, { expectedCurrentHash: sha256Hex(initialMarkdown) });
+
+      expect(document.getText('contents').toString()).toBe(resolvedMarkdown);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.delta).toEqual([
+        { retain: 'alpha '.length },
+        { insert: 'local' },
+      ]);
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('rejects active provider replacement when the expected shared hash is stale', async () => {
+    const initialState = createContentsState('shared');
+    const resolvedState = createContentsState('local wins');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('contents').insert(document.getText('contents').length, ' plus live edit');
+
+      await expect(
+        collab.applyDocumentState(roomName, resolvedState, { expectedCurrentHash: sha256Hex('shared') }),
+      ).rejects.toThrow('stale_conflict_shared_state');
+
+      expect(document.getText('contents').toString()).toBe('shared plus live edit');
+    } finally {
+      document.destroy();
+      await collab.server.destroy?.();
+    }
+  });
+
+  it('checks active provider state without replacing it before conflict publish', async () => {
+    const initialState = createContentsState('shared');
+    const store = createPersistencePool(initialState);
+    const collab = createCollabServer(store.pool) as unknown as TestableCollabServer;
+    const document = new Y.Doc();
+    const roomName = toRoomName('doc_001', 'br_main');
+
+    try {
+      const loadedState = await collab.server.configuration.onLoadDocument({ documentName: roomName, document });
+      expect(loadedState).toBeInstanceOf(Uint8Array);
+      Y.applyUpdate(document, loadedState ?? new Uint8Array());
+      document.getText('contents').insert(document.getText('contents').length, ' plus live edit');
+
+      await expect(
+        collab.verifyDocumentState(roomName, { expectedCurrentHash: sha256Hex('shared') }),
+      ).rejects.toThrow('stale_conflict_shared_state');
+
+      expect(document.getText('contents').toString()).toBe('shared plus live edit');
     } finally {
       document.destroy();
       await collab.server.destroy?.();

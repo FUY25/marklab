@@ -1,7 +1,11 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { HttpAppOptions } from '../http/app';
-import type { LocalFileService, LocalConflictResolutionResult } from '../local/local-file-service';
+import type {
+  LocalFileService,
+  LocalConflictResolutionResult,
+  PreparedLocalConflictResolution,
+} from '../local/local-file-service';
 import type { ReconnectConflict } from '../local/local-conflict-store';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import { createLocalTokenGuard } from './local-file-routes';
@@ -10,7 +14,7 @@ const maxConflictMarkdownBytes = 1_000_000;
 
 const expectedSharedStateSchema = z.object({
   expectedSharedRevision: z.number().int().nonnegative(),
-  expectedSharedHash: z.string().min(1),
+  expectedSharedHash: z.string(),
 });
 
 const resolveConflictSchema = expectedSharedStateSchema.extend({
@@ -49,6 +53,13 @@ function publicResolutionResponse(result: LocalConflictResolutionResult): Omit<L
 }
 
 async function resolvedSharedRevision(options: HttpAppOptions, conflict: ReconnectConflict): Promise<number | null> {
+  if (options.localRelayHost) {
+    try {
+      return (await options.localRelayHost.shareState()).sharedRevision ?? conflict.sharedRevision;
+    } catch {
+      return conflict.sharedRevision;
+    }
+  }
   if (!options.relayService) return conflict.sharedRevision;
   try {
     return (await options.relayService.getRoom(conflict.relayRoomId)).sharedRevision;
@@ -85,10 +96,45 @@ async function requireOpenConflict(
 }
 
 function requirePublishPermission(service: LocalFileService, options: HttpAppOptions, conflict: ReconnectConflict): void {
-  if (options.localRelayHost) return;
+  if (options.localRelayHost) {
+    if (options.localRelayHost.relayRoomId !== conflict.relayRoomId) throw new Error('forbidden');
+    return;
+  }
   const joinState = service.getRelayJoinState();
   if (joinState?.relayRoomId === conflict.relayRoomId && joinState.relayRole === 'edit') return;
   throw new Error('forbidden');
+}
+
+function conflictExpectedSharedRevision(conflict: ReconnectConflict): number {
+  return conflict.expectedSharedRevision ?? conflict.sharedRevision;
+}
+
+function conflictExpectedSharedHash(conflict: ReconnectConflict): string {
+  return conflict.expectedSharedHash ?? conflict.sharedHash;
+}
+
+function assertExpectedConflictSharedState(
+  conflict: ReconnectConflict,
+  expectedSharedRevision: number,
+  expectedSharedHash: string,
+): void {
+  if (
+    expectedSharedRevision !== conflictExpectedSharedRevision(conflict)
+    || expectedSharedHash !== conflictExpectedSharedHash(conflict)
+  ) {
+    throw new Error('stale_conflict_shared_state');
+  }
+}
+
+function isRelayUnavailableError(error: unknown): boolean {
+  return error instanceof Error && [
+    'relay_host_publish_timeout',
+    'relay_host_publish_closed',
+    'relay_mirror_publish_timeout',
+    'relay_mirror_publish_closed',
+    'relay_mirror_verify_timeout',
+    'relay_mirror_verify_closed',
+  ].includes(error.message);
 }
 
 async function verifyCurrentSharedState(
@@ -97,12 +143,24 @@ async function verifyCurrentSharedState(
   expectedSharedRevision: number,
   expectedSharedHash: string,
 ): Promise<void> {
-  if (expectedSharedRevision !== conflict.sharedRevision || expectedSharedHash !== conflict.sharedHash) {
+  if (
+    expectedSharedRevision !== conflictExpectedSharedRevision(conflict)
+    || expectedSharedHash !== conflictExpectedSharedHash(conflict)
+  ) {
     throw new Error('stale_conflict_shared_state');
   }
-  if (options.localRelayMirror && !options.localRelayHost) {
-    await options.localRelayMirror.verifySharedState({ expectedSharedRevision, expectedSharedHash });
-    return;
+  try {
+    if (options.localRelayMirror && !options.localRelayHost) {
+      await options.localRelayMirror.verifySharedState({ expectedSharedRevision, expectedSharedHash });
+      return;
+    }
+    if (options.localRelayHost) {
+      await options.localRelayHost.verifySharedState({ expectedSharedRevision, expectedSharedHash });
+      return;
+    }
+  } catch (error) {
+    if (isRelayUnavailableError(error)) throw new Error('host_offline');
+    throw error;
   }
   if (!options.relayService) throw new Error('relay_service_not_configured');
   const current = await options.relayService.getRoom(conflict.relayRoomId);
@@ -121,26 +179,51 @@ async function publishConflictResolution(
     expectedSharedHash: string;
   },
 ): Promise<{ sharedRevision: number; lastSharedHash: string | null }> {
+  function requireExpectedPublishedHash(result: { sharedRevision: number; lastSharedHash: string | null }) {
+    if ((result.lastSharedHash ?? '') !== input.sharedHash) throw new Error('relay_shared_state_not_accepted');
+    return result;
+  }
+
   try {
     if (options.localRelayMirror && !options.localRelayHost) {
       const result = await options.localRelayMirror.publishResolvedState({
         yjsState: input.yjsState,
+        sharedHash: input.sharedHash,
         expectedSharedRevision: input.expectedRevision,
         expectedSharedHash: input.expectedSharedHash,
       });
-      return { sharedRevision: result.sharedRevision, lastSharedHash: result.sharedHash };
+      return requireExpectedPublishedHash({ sharedRevision: result.sharedRevision, lastSharedHash: result.sharedHash });
+    }
+    if (options.localRelayHost) {
+      if (options.localRelayHost.relayRoomId !== input.relayRoomId) throw new Error('forbidden');
+      const result = await options.localRelayHost.publishResolvedState({
+        relayRoomId: input.relayRoomId,
+        yjsState: input.yjsState,
+        sharedHash: input.sharedHash,
+        expectedSharedRevision: input.expectedRevision,
+        expectedSharedHash: input.expectedSharedHash,
+      });
+      return requireExpectedPublishedHash({ sharedRevision: result.sharedRevision, lastSharedHash: result.sharedHash });
     }
     if (!options.relayService) throw new Error('relay_service_not_configured');
-    return await options.relayService.acceptSharedState(input);
+    return requireExpectedPublishedHash(await options.relayService.acceptSharedState(input));
   } catch (error) {
+    if (error instanceof Error && error.message === 'host_offline') throw error;
+    if (isRelayUnavailableError(error)) throw new Error('host_offline');
     if (
       error instanceof Error &&
-      ['relay_shared_state_not_accepted', 'host_offline', 'proposal_in_flight'].includes(error.message)
+      ['relay_shared_state_not_accepted', 'proposal_in_flight'].includes(error.message)
     ) {
       throw new Error('stale_conflict_shared_state');
     }
     throw error;
   }
+}
+
+async function resumeLocalRelayHostAfterSharedResolution(options: HttpAppOptions, conflict: ReconnectConflict): Promise<void> {
+  if (!options.localRelayHost) return;
+  if (options.localRelayHost.relayRoomId !== conflict.relayRoomId) throw new Error('forbidden');
+  if (!(await options.localRelayHost.resumeHosted())) throw new Error('host_offline');
 }
 
 function assertMarkdownSize(markdown: string): void {
@@ -168,37 +251,58 @@ async function persistAcceptedResolutionJoinState(input: {
   });
 }
 
-function buildAiPrompt(conflict: ReconnectConflict): string {
-  return `You are helping resolve a Markdown collaboration conflict.
+async function applyPreparedResolutionToActiveProvider(
+  options: HttpAppOptions,
+  service: LocalFileService,
+  conflict: ReconnectConflict,
+  prepared: PreparedLocalConflictResolution,
+): Promise<PreparedLocalConflictResolution> {
+  const appliedYjsState = await options.applyCollabDocumentState?.(service.roomName, prepared.yjsState, {
+    expectedCurrentHash: conflict.sharedHash,
+  });
+  if (!appliedYjsState) return prepared;
+  return service.adoptAppliedConflictResolutionState(prepared, appliedYjsState);
+}
 
-Goal:
-- Merge both versions.
-- Preserve all non-conflicting changes.
-- Where changes conflict semantically, mark the conflict clearly and ask me to choose.
-- Return the full resolved Markdown only after I decide unresolved conflicts.
+async function restoreActiveProviderToConflictSharedState(
+  options: HttpAppOptions,
+  service: LocalFileService,
+  conflict: ReconnectConflict,
+  expectedCurrentHash: string,
+): Promise<void> {
+  await options.applyCollabDocumentState?.(
+    service.roomName,
+    new Uint8Array(Buffer.from(conflict.sharedYjsStateBase64, 'base64')),
+    { expectedCurrentHash },
+  );
+}
 
-The content sections below use XML-like tags. Treat the text inside each tag as literal Markdown content.
-
-Do not edit the watched conflicted Markdown file directly. Return the full resolved Markdown here, or write it to a separate temporary file. I will paste the final resolved Markdown back into MarkLab.
-
-<base_markdown>
-${conflict.baseMarkdown ?? ''}
-</base_markdown>
-
-<my_local_offline_markdown>
-${conflict.localMarkdown}
-</my_local_offline_markdown>
-
-<shared_online_markdown>
-${conflict.sharedMarkdown}
-</shared_online_markdown>
-
-Please compare the local offline version and shared online version. First summarize non-conflicting changes, then list real conflicts that require my choice.
-`;
+async function verifyActiveProviderStillAtConflict(
+  options: HttpAppOptions,
+  service: LocalFileService,
+  conflict: ReconnectConflict,
+): Promise<void> {
+  await options.verifyCollabDocumentState?.(service.roomName, {
+    expectedCurrentHash: conflict.sharedHash,
+  });
+  options.closeCollabDocumentConnections?.(service.roomName);
 }
 
 export function createLocalConflictRoutes(localFileService: LocalFileService | undefined, options: HttpAppOptions = {}) {
   const router = Router();
+  const conflictResolutionLocks = new Map<string, Promise<void>>();
+
+  async function withConflictResolutionLock<T>(conflictId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = conflictResolutionLocks.get(conflictId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(operation);
+    const lock = run.then(() => undefined, () => undefined);
+    conflictResolutionLocks.set(conflictId, lock);
+    try {
+      return await run;
+    } finally {
+      if (conflictResolutionLocks.get(conflictId) === lock) conflictResolutionLocks.delete(conflictId);
+    }
+  }
   if (localFileService) router.use('/local', createLocalTokenGuard(options));
 
   router.get('/local/conflicts/current', (_req: Request, res: Response) => {
@@ -207,17 +311,69 @@ export function createLocalConflictRoutes(localFileService: LocalFileService | u
     res.json({ conflict: service.getCurrentConflict() });
   });
 
+  router.get('/local/conflicts/:conflictId', async (req: Request, res: Response, next: NextFunction) => {
+    const service = requireLocalFileService(localFileService, res);
+    if (!service) return;
+
+    try {
+      res.json({ conflict: await loadConflict(service, routeConflictId(req)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/local/conflicts/:conflictId/use-shared', async (req: Request, res: Response, next: NextFunction) => {
     const service = requireLocalFileService(localFileService, res);
     if (!service) return;
 
     try {
-      const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
-      if (!conflict) return;
-      const prepared = await service.prepareUseSharedConflict(conflict.conflictId);
-      await options.applyCollabDocumentState?.(service.roomName, prepared.yjsState);
-      const resolved = await service.completeConflictResolution(conflict.conflictId, conflict.sharedRevision);
-      res.json(publicResolutionResponse(resolved));
+      await withConflictResolutionLock(routeConflictId(req), async () => {
+        const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
+        if (!conflict) return;
+        const body = expectedSharedStateSchema.parse(req.body);
+        assertExpectedConflictSharedState(conflict, body.expectedSharedRevision, body.expectedSharedHash);
+        const prepared = await service.prepareUseSharedConflict(conflict.conflictId);
+        await service.preflightConflictResolutionLocalCommit(conflict.conflictId);
+        await verifyActiveProviderStillAtConflict(options, service, conflict);
+        const appliedPrepared = await applyPreparedResolutionToActiveProvider(options, service, conflict, prepared);
+        let sharedRevision = conflictExpectedSharedRevision(conflict);
+        if (prepared.hash !== conflictExpectedSharedHash(conflict)) {
+          requirePublishPermission(service, options, conflict);
+          await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
+          try {
+            const room = await publishConflictResolution(options, {
+              relayRoomId: conflict.relayRoomId,
+              yjsState: appliedPrepared.yjsState,
+              sharedHash: appliedPrepared.hash,
+              expectedRevision: conflictExpectedSharedRevision(conflict),
+              expectedSharedHash: conflictExpectedSharedHash(conflict),
+            });
+            sharedRevision = room.sharedRevision;
+          } catch (error) {
+            await restoreActiveProviderToConflictSharedState(options, service, conflict, appliedPrepared.hash).catch(() => undefined);
+            await service.refreshOpenConflictFromDisk(conflict.conflictId).catch(() => undefined);
+            throw error;
+          }
+        } else {
+          let hostWasOffline = false;
+          try {
+            await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
+          } catch (error) {
+            if (!(error instanceof Error && error.message === 'host_offline')) throw error;
+            hostWasOffline = true;
+          }
+          if (hostWasOffline) await resumeLocalRelayHostAfterSharedResolution(options, conflict);
+        }
+        let resolved: LocalConflictResolutionResult;
+        try {
+          await service.commitConflictResolutionLocally(conflict.conflictId, appliedPrepared);
+          resolved = await service.completeConflictResolution(conflict.conflictId, sharedRevision, appliedPrepared);
+        } catch (error) {
+          await service.refreshOpenConflictAfterSharedPublish(conflict.conflictId, appliedPrepared, sharedRevision).catch(() => undefined);
+          throw error;
+        }
+        res.json(publicResolutionResponse(resolved));
+      });
     } catch (error) {
       next(error);
     }
@@ -228,33 +384,56 @@ export function createLocalConflictRoutes(localFileService: LocalFileService | u
     if (!service) return;
 
     try {
-      const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
-      if (!conflict) return;
-      requirePublishPermission(service, options, conflict);
-      const body = expectedSharedStateSchema.parse(req.body);
-      await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
-      const prepared = await service.prepareUseLocalConflict(
-        conflict.conflictId,
-        body.expectedSharedRevision,
-        body.expectedSharedHash,
-      );
-      await options.applyCollabDocumentState?.(service.roomName, prepared.yjsState);
-      const room = await publishConflictResolution(options, {
-        relayRoomId: conflict.relayRoomId,
-        yjsState: prepared.yjsState,
-        sharedHash: prepared.hash,
-        expectedRevision: conflict.sharedRevision,
-        expectedSharedHash: conflict.sharedHash,
+      await withConflictResolutionLock(routeConflictId(req), async () => {
+        const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
+        if (!conflict) return;
+        requirePublishPermission(service, options, conflict);
+        const body = expectedSharedStateSchema.parse(req.body);
+        await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
+        const prepared = await service.prepareUseLocalConflict(
+          conflict.conflictId,
+          body.expectedSharedRevision,
+          body.expectedSharedHash,
+        );
+        await service.preflightConflictResolutionLocalCommit(conflict.conflictId);
+        await verifyActiveProviderStillAtConflict(options, service, conflict);
+        let appliedPrepared = prepared;
+        try {
+          appliedPrepared = await applyPreparedResolutionToActiveProvider(options, service, conflict, prepared);
+        } catch (error) {
+          await service.refreshOpenConflictFromDisk(conflict.conflictId).catch(() => undefined);
+          throw error;
+        }
+        let room: Awaited<ReturnType<typeof publishConflictResolution>>;
+        try {
+          room = await publishConflictResolution(options, {
+            relayRoomId: conflict.relayRoomId,
+            yjsState: appliedPrepared.yjsState,
+            sharedHash: appliedPrepared.hash,
+            expectedRevision: conflictExpectedSharedRevision(conflict),
+            expectedSharedHash: conflictExpectedSharedHash(conflict),
+          });
+        } catch (error) {
+          await restoreActiveProviderToConflictSharedState(options, service, conflict, appliedPrepared.hash).catch(() => undefined);
+          await service.refreshOpenConflictFromDisk(conflict.conflictId).catch(() => undefined);
+          throw error;
+        }
+        try {
+          await service.commitConflictResolutionLocally(conflict.conflictId, appliedPrepared);
+          const resolved = await service.completeConflictResolution(conflict.conflictId, room.sharedRevision, appliedPrepared);
+          await persistAcceptedResolutionJoinState({
+            service,
+            conflict,
+            hash: appliedPrepared.hash,
+            sharedRevision: room.sharedRevision,
+            yjsState: appliedPrepared.yjsState,
+          });
+          res.json(publicResolutionResponse(resolved));
+        } catch (error) {
+          await service.refreshOpenConflictAfterSharedPublish(conflict.conflictId, appliedPrepared, room.sharedRevision).catch(() => undefined);
+          throw error;
+        }
       });
-      await persistAcceptedResolutionJoinState({
-        service,
-        conflict,
-        hash: prepared.hash,
-        sharedRevision: room.sharedRevision,
-        yjsState: prepared.yjsState,
-      });
-      const resolved = await service.completeConflictResolution(conflict.conflictId, room.sharedRevision);
-      res.json(publicResolutionResponse(resolved));
     } catch (error) {
       next(error);
     }
@@ -265,47 +444,58 @@ export function createLocalConflictRoutes(localFileService: LocalFileService | u
     if (!service) return;
 
     try {
-      const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
-      if (!conflict) return;
-      requirePublishPermission(service, options, conflict);
-      const body = resolveConflictSchema.parse(req.body);
-      assertMarkdownSize(body.markdown);
-      await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
-      const prepared = await service.prepareResolvedConflict(
-        conflict.conflictId,
-        body.markdown,
-        body.expectedSharedRevision,
-        body.expectedSharedHash,
-      );
-      await options.applyCollabDocumentState?.(service.roomName, prepared.yjsState);
-      const room = await publishConflictResolution(options, {
-        relayRoomId: conflict.relayRoomId,
-        yjsState: prepared.yjsState,
-        sharedHash: prepared.hash,
-        expectedRevision: conflict.sharedRevision,
-        expectedSharedHash: conflict.sharedHash,
+      await withConflictResolutionLock(routeConflictId(req), async () => {
+        const conflict = await requireOpenConflict(service, options, routeConflictId(req), res);
+        if (!conflict) return;
+        requirePublishPermission(service, options, conflict);
+        const body = resolveConflictSchema.parse(req.body);
+        assertMarkdownSize(body.markdown);
+        await verifyCurrentSharedState(options, conflict, body.expectedSharedRevision, body.expectedSharedHash);
+        const prepared = await service.prepareResolvedConflict(
+          conflict.conflictId,
+          body.markdown,
+          body.expectedSharedRevision,
+          body.expectedSharedHash,
+        );
+        await service.preflightConflictResolutionLocalCommit(conflict.conflictId);
+        await verifyActiveProviderStillAtConflict(options, service, conflict);
+        let appliedPrepared = prepared;
+        try {
+          appliedPrepared = await applyPreparedResolutionToActiveProvider(options, service, conflict, prepared);
+        } catch (error) {
+          await service.refreshOpenConflictFromDisk(conflict.conflictId).catch(() => undefined);
+          throw error;
+        }
+        let room: Awaited<ReturnType<typeof publishConflictResolution>>;
+        try {
+          room = await publishConflictResolution(options, {
+            relayRoomId: conflict.relayRoomId,
+            yjsState: appliedPrepared.yjsState,
+            sharedHash: appliedPrepared.hash,
+            expectedRevision: conflictExpectedSharedRevision(conflict),
+            expectedSharedHash: conflictExpectedSharedHash(conflict),
+          });
+        } catch (error) {
+          await restoreActiveProviderToConflictSharedState(options, service, conflict, appliedPrepared.hash).catch(() => undefined);
+          await service.refreshOpenConflictFromDisk(conflict.conflictId).catch(() => undefined);
+          throw error;
+        }
+        try {
+          await service.commitConflictResolutionLocally(conflict.conflictId, appliedPrepared);
+          const resolved = await service.completeConflictResolution(conflict.conflictId, room.sharedRevision, appliedPrepared);
+          await persistAcceptedResolutionJoinState({
+            service,
+            conflict,
+            hash: appliedPrepared.hash,
+            sharedRevision: room.sharedRevision,
+            yjsState: appliedPrepared.yjsState,
+          });
+          res.json(publicResolutionResponse(resolved));
+        } catch (error) {
+          await service.refreshOpenConflictAfterSharedPublish(conflict.conflictId, appliedPrepared, room.sharedRevision).catch(() => undefined);
+          throw error;
+        }
       });
-      await persistAcceptedResolutionJoinState({
-        service,
-        conflict,
-        hash: prepared.hash,
-        sharedRevision: room.sharedRevision,
-        yjsState: prepared.yjsState,
-      });
-      const resolved = await service.completeConflictResolution(conflict.conflictId, room.sharedRevision);
-      res.json(publicResolutionResponse(resolved));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  router.get('/local/conflicts/:conflictId/ai-prompt', async (req: Request, res: Response, next: NextFunction) => {
-    const service = requireLocalFileService(localFileService, res);
-    if (!service) return;
-
-    try {
-      const conflict = await loadConflict(service, routeConflictId(req));
-      res.json({ prompt: buildAiPrompt(conflict) });
     } catch (error) {
       next(error);
     }

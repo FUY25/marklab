@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:f
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 import { encodeYjsStateFingerprint } from '../services/yjs-state-fingerprint';
 import { createLocalFileServiceWithOptions, type LocalFileService } from './local-file-service';
@@ -242,6 +243,44 @@ describe('LocalFileService', () => {
     restarted.stopWatcher();
   });
 
+  it('pauses relay conflict opening when the backing file disappears before the conflict package is created', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Base\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    const shared = await runtime.initializeFromMarkdown('# Shared\n');
+    await rm(file);
+
+    await expect(service.openReconnectConflict({
+      relayRoomId: 'relay_room_1',
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      sharedHash: sha256Hex(shared.markdown),
+      sharedRevision: 1,
+      baseMarkdown: '# Base\n',
+      baseHash: sha256Hex('# Base\n'),
+    })).rejects.toThrow('local_file_missing');
+    expect(service.getSummary().conflict).toBe('mirror_file_missing');
+    expect(service.getCurrentConflict()).toBeNull();
+    service.stopWatcher();
+  });
+
+  it('defaults reconnect conflict shared-state guard to empty when the relay hash is null', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Local\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    const shared = await runtime.initializeFromMarkdown('# Shared with null relay hash\n');
+
+    const conflict = await service.openReconnectConflict({
+      relayRoomId: 'relay_room_1',
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      sharedHash: null,
+      sharedRevision: 0,
+      baseMarkdown: '# Base\n',
+      baseHash: sha256Hex('# Base\n'),
+    });
+
+    expect(conflict.sharedHash).toBe(sha256Hex('# Shared with null relay hash\n'));
+    expect(conflict.expectedSharedHash).toBe('');
+    service.stopWatcher();
+  });
+
   it('ingests a disk-only edit made while the daemon was stopped on restart', async () => {
     const { file, metadataPath } = await createTempMarkdown('# Base\n');
     const first = await createLocalFileServiceWithOptions(file, { metadataPath });
@@ -268,6 +307,70 @@ describe('LocalFileService', () => {
     expect(await readFile(file, 'utf8')).toBe('# Local while closed\n');
     expect(restarted.getSummary().conflict).toBeNull();
     restarted.stopWatcher();
+  });
+
+  it('does not overwrite an external atomic replacement during conflict resolution commit', async () => {
+    const { file, directory, metadataPath, conflictPath } = await createTempMarkdown('# Local\n');
+    const service = await createLocalFileServiceWithOptions(file, {
+      metadataPath,
+      conflictPath,
+      beforeConflictResolutionReplace: async () => {
+        const replacementPath = join(directory, 'external-replacement.md');
+        await writeFile(replacementPath, '# External atomic replacement\n', 'utf8');
+        await rename(replacementPath, file);
+      },
+    });
+    const shared = await runtime.initializeFromMarkdown('# Shared\n');
+    const conflict = await service.openReconnectConflict({
+      relayRoomId: 'relay_room_1',
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      sharedHash: sha256Hex(shared.markdown),
+      sharedRevision: 1,
+      baseMarkdown: '# Base\n',
+      baseHash: sha256Hex('# Base\n'),
+    });
+    const prepared = await service.prepareUseLocalConflict(conflict.conflictId, conflict.expectedSharedRevision, conflict.expectedSharedHash);
+
+    await expect(service.commitConflictResolutionLocally(conflict.conflictId, prepared)).rejects.toThrow('local_state_changed');
+
+    expect(await readFile(file, 'utf8')).toBe('# External atomic replacement\n');
+    expect(service.getCurrentConflict()).toMatchObject({
+      status: 'open',
+      localMarkdown: '# External atomic replacement\n',
+      sharedMarkdown: '# Shared\n',
+    });
+    service.stopWatcher();
+  });
+
+  it('restores the moved-aside local markdown when a committed conflict destination changes before verification', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Local\n');
+    const service = await createLocalFileServiceWithOptions(file, {
+      metadataPath,
+      conflictPath,
+      beforeConflictResolutionVerify: async () => {
+        await writeFile(file, '# Corrupt linked destination\n', 'utf8');
+      },
+    });
+    const shared = await runtime.initializeFromMarkdown('# Shared\n');
+    const conflict = await service.openReconnectConflict({
+      relayRoomId: 'relay_room_1',
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      sharedHash: sha256Hex(shared.markdown),
+      sharedRevision: 1,
+      baseMarkdown: '# Base\n',
+      baseHash: sha256Hex('# Base\n'),
+    });
+    const prepared = await service.prepareUseLocalConflict(conflict.conflictId, conflict.expectedSharedRevision, conflict.expectedSharedHash);
+
+    await expect(service.commitConflictResolutionLocally(conflict.conflictId, prepared)).rejects.toThrow('local_state_changed');
+
+    expect(await readFile(file, 'utf8')).toBe('# Local\n');
+    expect(service.getCurrentConflict()).toMatchObject({
+      status: 'open',
+      localMarkdown: '# Local\n',
+      sharedMarkdown: '# Shared\n',
+    });
+    service.stopWatcher();
   });
 
   it('does not commit a stopped-daemon disk edit if the disk changes after provider apply', async () => {
@@ -1000,6 +1103,55 @@ describe('LocalFileService', () => {
     service.stopWatcher();
   });
 
+  it('creates a resolvable reconnect conflict package when a relayed provider update conflicts with disk', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Base\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    const loaded = await service.loadRoomState(service.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    await service.saveRelayJoinState({
+      schemaVersion: 1,
+      relayRoomId: 'relay_1',
+      grantId: 'grant_1',
+      sessionId: 'session_1',
+      localDocId: service.getSummary().localDocId,
+      absolutePath: service.getSummary().absolutePath,
+      lastAcceptedLocalHash: sha256Hex('# Base\n'),
+      lastAcceptedSharedHash: sha256Hex('# Base\n'),
+      lastAcceptedSharedRevision: 3,
+      lastAcceptedYjsStateBase64: Buffer.from(loaded.yjsState).toString('base64'),
+      lastAcceptedStateFingerprint: loaded.stateFingerprint,
+      lastHostSessionId: 'host_1',
+      disconnectedCleanly: false,
+      relayRole: 'edit',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    });
+    const remote = await runtime.applyChangedRanges({
+      branchId: service.getSummary().localDocId,
+      yjsState: loaded.yjsState,
+      seedMarkdown: '# Base\n',
+      targetCanonicalMarkdown: '# Remote relayed\n',
+    });
+
+    await writeFile(file, '# Local disk\n', 'utf8');
+    const stored = await service.storeRoomState(service.roomName, remote.yjsState, loaded.stateFingerprint);
+
+    expect(stored.stored).toBe(false);
+    expect(await readFile(file, 'utf8')).toBe('# Local disk\n');
+    expect(service.getSummary().conflict).toBe('Relay reconnect conflict. Review needed before syncing resumes.');
+    expect(service.getCurrentConflict()).toMatchObject({
+      relayRoomId: 'relay_1',
+      localMarkdown: '# Local disk\n',
+      localHash: sha256Hex('# Local disk\n'),
+      sharedMarkdown: '# Remote relayed\n',
+      sharedHash: sha256Hex('# Remote relayed\n'),
+      sharedRevision: 3,
+      baseMarkdown: '# Base\n',
+      baseHash: sha256Hex('# Base\n'),
+      status: 'open',
+    });
+    service.stopWatcher();
+  });
+
   it('keeps relay reconnect sync paused after recreating the daemon service', async () => {
     const { file, metadataPath, conflictPath } = await createTempMarkdown('# Local offline\n');
     const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
@@ -1031,6 +1183,40 @@ describe('LocalFileService', () => {
       'conflict_required',
     );
     restarted.stopWatcher();
+  });
+
+  it('captures the latest local disk markdown in reconnect conflict packages', async () => {
+    const { file, metadataPath, conflictPath } = await createTempMarkdown('# Base\n');
+    const service = await createLocalFileServiceWithOptions(file, { metadataPath, conflictPath });
+    const loaded = await service.loadRoomState(service.roomName);
+    if (!loaded) throw new Error('missing_loaded_state');
+    const remote = await runtime.applyChangedRanges({
+      branchId: service.getSummary().localDocId,
+      yjsState: loaded.yjsState,
+      seedMarkdown: '# Base\n',
+      targetCanonicalMarkdown: '# Remote cached\n',
+    });
+    await service.storeRoomState(service.roomName, remote.yjsState, loaded.stateFingerprint);
+    await writeFile(file, '# Local disk conflict\n', 'utf8');
+    const shared = await runtime.initializeFromMarkdown('# Shared reconnect\n');
+
+    const conflict = await service.openReconnectConflict({
+      relayRoomId: 'relay_1',
+      sharedRevision: 3,
+      sharedHash: shared.hash,
+      sharedYjsStateBase64: Buffer.from(shared.yjsState).toString('base64'),
+      baseMarkdown: '# Base\n',
+      baseYjsStateBase64: Buffer.from(loaded.yjsState).toString('base64'),
+      baseHash: 'sha256:base',
+    });
+
+    expect(conflict.localMarkdown).toBe('# Local disk conflict\n');
+    expect(conflict.localHash).toBe(sha256Hex('# Local disk conflict\n'));
+    const conflictOpenedVersion = service.listVersions().find((version) => version.operation === 'conflict_opened');
+    expect(conflictOpenedVersion).toBeTruthy();
+    expect(service.getVersion(conflictOpenedVersion!.versionId).markdown).toBe('# Local disk conflict\n');
+    expect(await readFile(file, 'utf8')).toBe('# Local disk conflict\n');
+    service.stopWatcher();
   });
 
   it('round-trips supported Markdown through external edit, room state, and disk save', async () => {

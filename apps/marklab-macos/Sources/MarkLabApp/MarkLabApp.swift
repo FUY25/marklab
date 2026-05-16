@@ -13,12 +13,6 @@ struct MarkLabApp: App {
   }
 }
 
-struct MarkLabConflict: Equatable {
-  let localMarkdown: String
-  let sharedMarkdown: String
-  let baselineMarkdown: String
-}
-
 struct PendingDiskIngestion: Equatable {
   let revision: Int
   let markdown: String
@@ -46,11 +40,15 @@ final class MarkLabAppModel: ObservableObject {
   @Published var conflict: MarkLabConflict?
   @Published var pendingDiskIngestion: PendingDiskIngestion?
   @Published var localDaemonContext: NativeAppContext?
+  @Published var resolvedConflictMarkdown = ""
+  @Published var resolvedConflictConfirmation = ""
 
   private var document: LocalMarkdownDocument?
   private let hostedShareController: NativeHostedShareController?
   private let baselineStore: NativeProjectionBaselineStore
+  private let conflictStore: NativeConflictStore
   let nativeBearerToken: String?
+  private let beforeDiskIngestionReplace: (() -> Void)?
   private var nativeShareController: NativeShareController?
   private var lastProjectedMarkdown: String?
   private var pendingSharedMarkdown: String?
@@ -61,11 +59,15 @@ final class MarkLabAppModel: ObservableObject {
   init(
     hostedShareController: NativeHostedShareController? = MarkLabAppModel.makeHostedShareControllerFromEnvironment(),
     baselineStore: NativeProjectionBaselineStore = FileNativeProjectionBaselineStore.defaultStore(),
-    nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"]
+    conflictStore: NativeConflictStore = NativeConflictStore.defaultStore(),
+    nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"],
+    beforeDiskIngestionReplace: (() -> Void)? = nil
   ) {
     self.hostedShareController = hostedShareController
     self.baselineStore = baselineStore
+    self.conflictStore = conflictStore
     self.nativeBearerToken = nativeBearerToken
+    self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
     if hostedShareController == nil {
       statusText = "Open a Markdown file. Sign in/workspace environment is required before sharing."
     }
@@ -76,7 +78,18 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   var actionsEnabled: Bool {
-    hostedShareController != nil && document != nil
+    hostedShareController != nil && document != nil && conflict == nil
+  }
+
+  var canResolveConflictThroughSharedEditor: Bool {
+    guard let conflict else { return false }
+    return embeddedCollabURL != nil || conflict.sharedEditorURL != nil
+  }
+
+  var canApplyResolvedConflictMarkdown: Bool {
+    canResolveConflictThroughSharedEditor
+      && !resolvedConflictMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && resolvedConflictConfirmation == "APPLY RESOLVED"
   }
 
   func openFile() {
@@ -97,20 +110,29 @@ final class MarkLabAppModel: ObservableObject {
       latestLink = nil
       latestGrantId = nil
       embeddedCollabURL = nil
-      conflict = nil
       pendingDiskIngestion = nil
       localDaemonContext = nil
       nativeShareController = nil
       pendingSharedMarkdown = nil
       lastProjectedMarkdown = (try? baselineStore.loadBaseline(fileURL: url))?.lastProjectedMarkdown ?? opened.markdownForSave()
+      if let persistedConflict = try? conflictStore.load(fileURL: url) {
+        embeddedCollabURL = persistedConflict.sharedEditorURL
+        setConflict(persistedConflict, status: "Conflict: review required before syncing resumes.")
+      } else {
+        clearConflictState()
+        statusText = "Editing \(url.lastPathComponent)."
+      }
       startFileWatcher(for: url)
-      statusText = "Editing \(url.lastPathComponent)."
     } catch {
       statusText = "Unable to open Markdown file."
     }
   }
 
   func saveFile() throws {
+    if conflict != nil {
+      statusText = "Resolve the conflict before saving."
+      return
+    }
     if embeddedCollabURL != nil {
       try flushPendingSharedProjection()
       return
@@ -132,6 +154,10 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func startSharing() {
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before sharing."
+      return
+    }
     guard let hostedShareController, let fileURL = document?.fileURL else { return }
     Task {
       do {
@@ -151,6 +177,10 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func createLink(role: NativeLinkRole) {
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before creating a link."
+      return
+    }
     guard let hostedShareController else { return }
     Task {
       do {
@@ -186,6 +216,10 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func restoreLatestVersion() {
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before restoring a version."
+      return
+    }
     guard
       let nativeShareController,
       let versionId = localDaemonContext?.versions.first?.versionId
@@ -208,6 +242,22 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func receiveSharedMarkdownSnapshot(_ markdown: String) {
+    if let openConflict = conflict {
+      text = markdown
+      pendingSharedMarkdown = nil
+      projectionTask?.cancel()
+      if markdown != openConflict.sharedMarkdown {
+        setConflict(
+          MarkLabConflict(
+            localMarkdown: openConflict.localMarkdown,
+            sharedMarkdown: markdown,
+            baselineMarkdown: openConflict.baselineMarkdown
+          ),
+          status: "Shared editor changed again. Review the updated conflict before resolving."
+        )
+      }
+      return
+    }
     pendingSharedMarkdown = markdown
     text = markdown
     projectionTask?.cancel()
@@ -241,12 +291,14 @@ final class MarkLabAppModel: ObservableObject {
     if let lastProjectedMarkdown,
        diskMarkdown != lastProjectedMarkdown,
        diskMarkdown != markdown {
-      conflict = MarkLabConflict(
-        localMarkdown: diskMarkdown,
-        sharedMarkdown: markdown,
-        baselineMarkdown: lastProjectedMarkdown
+      setConflict(
+        MarkLabConflict(
+          localMarkdown: diskMarkdown,
+          sharedMarkdown: markdown,
+          baselineMarkdown: lastProjectedMarkdown
+        ),
+        status: "Conflict: local file changed outside MarkLab while collaboration changed."
       )
-      statusText = "Conflict: local file changed outside MarkLab while collaboration changed."
       return
     }
     currentDocument.replaceText(markdown)
@@ -266,12 +318,14 @@ final class MarkLabAppModel: ObservableObject {
       if let lastProjectedMarkdown,
          text != lastProjectedMarkdown,
          diskMarkdown != text {
-        conflict = MarkLabConflict(
-          localMarkdown: diskMarkdown,
-          sharedMarkdown: text,
-          baselineMarkdown: lastProjectedMarkdown
+        setConflict(
+          MarkLabConflict(
+            localMarkdown: diskMarkdown,
+            sharedMarkdown: text,
+            baselineMarkdown: lastProjectedMarkdown
+          ),
+          status: "Conflict: local file changed outside MarkLab while collaboration changed."
         )
-        statusText = "Conflict: local file changed outside MarkLab while collaboration changed."
         return
       }
       diskIngestionRevision += 1
@@ -290,62 +344,169 @@ final class MarkLabAppModel: ObservableObject {
 
   func keepSharedConflictVersion() {
     guard let conflict else { return }
-    do {
-      try forceProjectSharedConflictVersion(conflict.sharedMarkdown)
-    } catch {
-      statusText = "Unable to keep shared version."
+    guard ensureConflictSharedEditorAvailable() else {
+      statusText = "Open the shared editor before resolving this conflict."
+      return
     }
+    guard refreshConflictIfDiskChanged(conflict, sharedMarkdown: conflict.sharedMarkdown) else { return }
+    queueConflictMarkdownForSharedEditor(conflict.sharedMarkdown, fallbackConflict: conflict)
   }
 
   func acceptLocalConflictVersion() {
     guard let conflict else { return }
+    guard ensureConflictSharedEditorAvailable() else {
+      statusText = "Open the shared editor before resolving this conflict."
+      return
+    }
+    guard refreshConflictIfDiskChanged(conflict, sharedMarkdown: conflict.sharedMarkdown) else { return }
+    queueConflictMarkdownForSharedEditor(conflict.localMarkdown, fallbackConflict: conflict)
+  }
+
+  func resolveConflictWithMergedMarkdown() {
+    guard let conflict else { return }
+    guard ensureConflictSharedEditorAvailable() else {
+      statusText = "Open the shared editor before resolving this conflict."
+      return
+    }
+    guard refreshConflictIfDiskChanged(conflict, sharedMarkdown: conflict.sharedMarkdown) else { return }
+    let markdown = resolvedConflictMarkdown
+    guard canApplyResolvedConflictMarkdown else {
+      statusText = "Paste resolved Markdown and type APPLY RESOLVED before applying it."
+      return
+    }
+    queueConflictMarkdownForSharedEditor(markdown, fallbackConflict: conflict)
+  }
+
+  private func queueConflictMarkdownForSharedEditor(_ markdown: String, fallbackConflict conflict: MarkLabConflict) {
     diskIngestionRevision += 1
     pendingDiskIngestion = PendingDiskIngestion(
       revision: diskIngestionRevision,
-      markdown: conflict.localMarkdown,
+      markdown: markdown,
       baselineMarkdown: conflict.sharedMarkdown,
       conflictOnFailure: conflict
     )
-    statusText = "Queued local disk version for the shared editor."
+    statusText = "Queued conflict resolution for the shared editor."
+  }
+
+  private func ensureConflictSharedEditorAvailable() -> Bool {
+    if embeddedCollabURL != nil { return true }
+    if let url = conflict?.sharedEditorURL {
+      embeddedCollabURL = url
+      return true
+    }
+    return false
   }
 
   func handleDiskIngestionBridgeResult(_ result: DiskIngestionBridgeResult) {
     guard let pending = pendingDiskIngestion, pending.revision == result.revision else { return }
     if result.ok {
-      text = result.markdown
       if let fileURL = document?.fileURL {
         do {
+          if let conflictOnFailure = pending.conflictOnFailure,
+             !refreshConflictIfDiskChanged(conflictOnFailure, sharedMarkdown: result.markdown) {
+            pendingDiskIngestion = nil
+            return
+          }
+          if var currentDocument = document {
+            let expectedDiskMarkdown = pending.conflictOnFailure?.localMarkdown ?? result.markdown
+            currentDocument.replaceText(result.markdown)
+            let saved = try currentDocument.saveIfCurrentMarkdownMatches(
+              expectedDiskMarkdown,
+              beforeReplace: beforeDiskIngestionReplace
+            )
+            guard saved else {
+              handleDiskChangedDuringIngestionCommit(pending: pending, result: result)
+              pendingDiskIngestion = nil
+              return
+            }
+            document = currentDocument
+          }
+          text = result.markdown
           try updateProjectionBaseline(result.markdown, fileURL: fileURL)
         } catch {
-          conflict = pending.conflictOnFailure
-          statusText = "Unable to persist projection baseline for local disk change."
+          if let conflictOnFailure = pending.conflictOnFailure {
+            setConflict(conflictOnFailure, status: "Unable to persist local disk change.")
+          }
+          statusText = "Unable to persist local disk change."
           return
         }
       } else {
+        text = result.markdown
         lastProjectedMarkdown = result.markdown
       }
       pendingDiskIngestion = nil
-      conflict = nil
+      clearConflictState()
       statusText = "Ingested local disk change into the shared editor."
       return
     }
     if result.reason == "provider_changed", let providerMarkdown = result.providerMarkdown {
-      conflict = MarkLabConflict(
-        localMarkdown: result.markdown,
-        sharedMarkdown: providerMarkdown,
-        baselineMarkdown: result.baselineMarkdown
+      setConflict(
+        MarkLabConflict(
+          localMarkdown: result.markdown,
+          sharedMarkdown: providerMarkdown,
+          baselineMarkdown: result.baselineMarkdown
+        ),
+        status: "Conflict: local file changed outside MarkLab while collaboration changed."
       )
       pendingDiskIngestion = nil
-      statusText = "Conflict: local file changed outside MarkLab while collaboration changed."
       return
     }
     if let conflictOnFailure = pending.conflictOnFailure {
-      conflict = conflictOnFailure
+      setConflict(conflictOnFailure, status: "Shared editor is not ready to accept the local conflict version.")
       pendingDiskIngestion = nil
-      statusText = "Shared editor is not ready to accept the local conflict version."
       return
     }
     statusText = "Waiting to ingest local disk change into the shared editor."
+  }
+
+  private func refreshConflictIfDiskChanged(_ conflict: MarkLabConflict, sharedMarkdown: String) -> Bool {
+    guard let currentDocument = document else { return true }
+    do {
+      let diskDocument = try LocalMarkdownDocument.open(fileURL: currentDocument.fileURL, shared: true)
+      let diskMarkdown = diskDocument.markdownForSave()
+      if diskMarkdown == conflict.localMarkdown { return true }
+      setConflict(
+        MarkLabConflict(
+          localMarkdown: diskMarkdown,
+          sharedMarkdown: sharedMarkdown,
+          baselineMarkdown: conflict.baselineMarkdown
+        ),
+        status: "Local file changed again. Review the updated conflict before resolving."
+      )
+      return false
+    } catch {
+      statusText = "Unable to verify local file before resolving conflict."
+      return false
+    }
+  }
+
+  private func handleDiskChangedDuringIngestionCommit(
+    pending: PendingDiskIngestion,
+    result: DiskIngestionBridgeResult
+  ) {
+    if let conflictOnFailure = pending.conflictOnFailure {
+      if refreshConflictIfDiskChanged(conflictOnFailure, sharedMarkdown: result.markdown) {
+        setConflict(conflictOnFailure, status: "Unable to persist local disk change.")
+      }
+      return
+    }
+    guard let currentDocument = document else {
+      statusText = "Unable to persist local disk change."
+      return
+    }
+    do {
+      let diskDocument = try LocalMarkdownDocument.open(fileURL: currentDocument.fileURL, shared: true)
+      setConflict(
+        MarkLabConflict(
+          localMarkdown: diskDocument.markdownForSave(),
+          sharedMarkdown: result.markdown,
+          baselineMarkdown: result.baselineMarkdown
+        ),
+        status: "Local file changed again. Review the updated conflict before resolving."
+      )
+    } catch {
+      statusText = "Unable to verify local file before resolving conflict."
+    }
   }
 
   private func ensureCLILocalDaemonBoundary(fileURL: URL) {
@@ -370,17 +531,30 @@ final class MarkLabAppModel: ObservableObject {
     }
   }
 
-  private func forceProjectSharedConflictVersion(_ markdown: String) throws {
-    guard var currentDocument = document else { return }
-    currentDocument.replaceText(markdown)
-    try currentDocument.save()
-    document = currentDocument
-    text = markdown
-    try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
-    pendingSharedMarkdown = nil
-    pendingDiskIngestion = nil
+  private func setConflict(_ nextConflict: MarkLabConflict, status: String) {
+    let persistedConflict = nextConflict.withSharedEditorURL(storableConflictSharedEditorURL(embeddedCollabURL))
+    conflict = persistedConflict
+    resolvedConflictMarkdown = ""
+    resolvedConflictConfirmation = ""
+    if let fileURL = document?.fileURL {
+      try? conflictStore.save(persistedConflict, fileURL: fileURL)
+    }
+    statusText = status
+  }
+
+  private func storableConflictSharedEditorURL(_ url: URL?) -> URL? {
+    guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+    components.percentEncodedFragment = nil
+    return components.url
+  }
+
+  private func clearConflictState() {
+    if let fileURL = document?.fileURL {
+      conflictStore.clear(fileURL: fileURL)
+    }
     conflict = nil
-    statusText = "Kept shared version in \(currentDocument.fileURL.lastPathComponent)."
+    resolvedConflictMarkdown = ""
+    resolvedConflictConfirmation = ""
   }
 
   private func updateProjectionBaseline(_ markdown: String, fileURL: URL) throws {
@@ -422,11 +596,15 @@ final class MarkLabAppModel: ObservableObject {
     await MainActor.run {
       do {
         let registry = try NativeDaemonRegistry(fileURL: registryURL).read()
-        guard let entry = registry.daemons.first(where: { $0.realpath == fileURL.path }) else { return }
+        let canonicalPath = NativeLocalDocumentIdentity.canonicalPath(fileURL: fileURL)
+        guard let entry = registry.daemons.first(where: { $0.realpath == canonicalPath }) else { return }
         let controller = NativeShareController(
           daemonClient: NativeDaemonClient(apiBaseURL: entry.apiUrl, bearerToken: entry.token)
         )
         nativeShareController = controller
+        if let hostedShareController {
+          embeddedCollabURL = try? hostedShareController.appEditorURL()
+        }
         Task {
           do {
             localDaemonContext = try await controller.loadContext()
@@ -489,7 +667,7 @@ struct MarkLabRootView: View {
       HStack {
         Button("Open") { model.openFile() }
         Button("Save") { model.saveFileFromUI() }
-          .disabled(model.filePath == nil)
+          .disabled(model.filePath == nil || model.conflict != nil)
         Button("Start Sharing") { model.startSharing() }
           .disabled(!model.actionsEnabled)
         Button("Create Edit Link") { model.createLink(role: .edit) }
@@ -512,13 +690,17 @@ struct MarkLabRootView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
           Button("Restore Latest Version") { model.restoreLatestVersion() }
-            .disabled(context.versions.isEmpty)
+            .disabled(context.versions.isEmpty || model.conflict != nil)
         }
       }
       if let conflict = model.conflict {
         VStack(alignment: .leading, spacing: 8) {
           Text("Conflict")
             .font(.headline)
+          Text("Status \(conflict.status) · local \(conflict.localHash.prefix(12)) · shared \(conflict.sharedHash.prefix(12)) · base \(conflict.baselineHash.prefix(12)) · rev \(conflict.sharedRevision.map(String.init) ?? "unknown")")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
           HStack(alignment: .top) {
             VStack(alignment: .leading) {
               Text("Local disk")
@@ -532,10 +714,42 @@ struct MarkLabRootView: View {
               TextEditor(text: .constant(conflict.sharedMarkdown))
                 .font(.system(.body, design: .monospaced))
             }
+            VStack(alignment: .leading) {
+              Text("Base")
+                .font(.caption)
+              TextEditor(text: .constant(conflict.baselineMarkdown))
+                .font(.system(.body, design: .monospaced))
+            }
+          }
+          VStack(alignment: .leading) {
+            Text("Conflict diff")
+              .font(.caption)
+            TextEditor(text: .constant(conflict.diffPreview))
+              .font(.system(.body, design: .monospaced))
+              .frame(minHeight: 72)
           }
           HStack {
             Button("Accept Local") { model.acceptLocalConflictVersion() }
+              .disabled(!model.canResolveConflictThroughSharedEditor)
             Button("Keep Shared") { model.keepSharedConflictVersion() }
+              .disabled(!model.canResolveConflictThroughSharedEditor)
+          }
+          VStack(alignment: .leading) {
+            Text("Resolved Markdown")
+              .font(.caption)
+            TextEditor(text: $model.resolvedConflictMarkdown)
+              .font(.system(.body, design: .monospaced))
+              .frame(minHeight: 96)
+            Text("Resolved preview")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            TextEditor(text: .constant(model.resolvedConflictMarkdown))
+              .font(.system(.body, design: .monospaced))
+              .frame(minHeight: 64)
+            TextField("Type APPLY RESOLVED to confirm", text: $model.resolvedConflictConfirmation)
+              .textFieldStyle(.roundedBorder)
+            Button("Apply Resolved Markdown") { model.resolveConflictWithMergedMarkdown() }
+              .disabled(!model.canApplyResolvedConflictMarkdown)
           }
         }
         .frame(minHeight: 160)
@@ -548,11 +762,14 @@ struct MarkLabRootView: View {
           onMarkdownSnapshot: { markdown in model.projectSharedMarkdownFromWebView(markdown) },
           onDiskIngestionResult: { result in model.handleDiskIngestionBridgeResult(result) }
         )
-        .frame(minHeight: 360)
+        .frame(minHeight: model.conflict == nil ? 360 : 1, maxHeight: model.conflict == nil ? .infinity : 1)
+        .opacity(model.conflict == nil ? 1 : 0)
+        .allowsHitTesting(model.conflict == nil)
+        .accessibilityHidden(model.conflict != nil)
       } else {
         TextEditor(text: $model.text)
           .font(.system(.body, design: .monospaced))
-          .disabled(model.filePath == nil)
+          .disabled(model.filePath == nil || model.conflict != nil)
           .overlay {
             if model.filePath == nil {
               Text("Open a Markdown file")
@@ -602,7 +819,7 @@ struct HostedCollabWebView: NSViewRepresentable {
   func updateNSView(_ webView: WKWebView, context: Context) {
     context.coordinator.expectedURL = url
     context.coordinator.expectedOrigin = NativeHostedWebViewOrigin(url: url)
-    if webView.url != url {
+    if !HostedCollabWebView.sameNavigationURL(webView.url, url) {
       webView.load(URLRequest(url: url))
     }
     if let diskIngestion,
@@ -647,6 +864,11 @@ struct HostedCollabWebView: NSViewRepresentable {
       };
     })();
     """
+  }
+
+  fileprivate static func sameNavigationURL(_ current: URL?, _ expected: URL) -> Bool {
+    guard let current else { return false }
+    return current == expected
   }
 
   final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {

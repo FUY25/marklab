@@ -64,7 +64,7 @@ export function printUsage() {
   marklab wait <file.md> --synced --timeout 10000 --json
   marklab save-version <file.md> --message "Before AI edit" --json
   marklab versions <file.md> --json
-  marklab conflict <file.md> --json
+  marklab conflict <file.md> [--use-shared|--use-local|--resolve-file <file.md>] --json
   marklab doctor [file.md] --json
   marklab agent instructions --target <codex|claude|cursor>
   marklab agent install --target codex --write AGENTS.md [--force]
@@ -227,8 +227,16 @@ export function parseCliArgs(argv) {
   }
 
   if (command === 'conflict') {
-    const file = positionalArgs(rest)[0] ?? null;
-    return { command, file, json };
+    const file = positionalArgs(rest, ['--resolve-file'])[0] ?? null;
+    return {
+      command,
+      file,
+      json,
+      resolveFile: parseFlagValue(rest, '--resolve-file'),
+      resolveFileFlagPresent: rest.includes('--resolve-file'),
+      useLocal: rest.includes('--use-local'),
+      useShared: rest.includes('--use-shared'),
+    };
   }
 
   if (command === 'agent') {
@@ -925,8 +933,22 @@ async function versionsCommand(input) {
   }
 }
 
+function conflictSharedStateGuard(conflictPackage) {
+  return {
+    expectedSharedRevision: conflictPackage.expectedSharedRevision ?? conflictPackage.sharedRevision,
+    expectedSharedHash: conflictPackage.expectedSharedHash ?? conflictPackage.sharedHash,
+  };
+}
+
 async function conflictCommand(input) {
   if (!input.file) throw new AgentCommandError('invalid_target', 'conflict requires a Markdown file path.');
+  if (input.resolveFileFlagPresent && !input.resolveFile) {
+    throw new AgentCommandError('invalid_conflict_action', 'Provide a Markdown file path after --resolve-file.');
+  }
+  const selectedActions = [input.useShared, input.useLocal, Boolean(input.resolveFile)].filter(Boolean).length;
+  if (selectedActions > 1) {
+    throw new AgentCommandError('invalid_conflict_action', 'Choose only one conflict resolution action.');
+  }
   const daemon = await requireRunningDaemon(input.file);
   const documentState = await readLocalDocument(daemon);
   const conflictState = await readLocalConflictState(daemon);
@@ -939,6 +961,91 @@ async function conflictCommand(input) {
     throw new AgentCommandError('conflict_unavailable', 'Conflict review state is not available for this file yet.', {
       path: daemon.realpath,
     });
+  }
+  if ((input.useShared || input.useLocal || input.resolveFile) && (!conflictPackage || conflictPackage.status !== 'open')) {
+    throw new AgentCommandError('conflict_unavailable', 'No open conflict package is available to resolve.', {
+      path: daemon.realpath,
+    });
+  }
+  if (input.useShared && conflictPackage) {
+    const sharedStateGuard = conflictSharedStateGuard(conflictPackage);
+    const resolved = await fetchLocalJson(daemon, `/api/local/conflicts/${encodeURIComponent(conflictPackage.conflictId)}/use-shared`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(sharedStateGuard),
+      errorCode: 'conflict_resolution_failed',
+      errorCodeByBody: { host_offline: 'host_offline' },
+      errorMessage: 'Unable to keep the shared conflict version.',
+      errorMessageByBody: { host_offline: 'The host is offline. Retry when the host returns.' },
+    });
+    const result = agentSuccess({
+      path: daemon.realpath,
+      syncState: 'synced',
+      conflict: null,
+      resolution: resolved,
+      nextStep: 'Shared version applied. Run marklab wait --synced before continuing.',
+    });
+    if (input.json) {
+      writeAgentJson(result);
+      return;
+    }
+    console.log(result.nextStep);
+    return;
+  }
+  if (input.useLocal && conflictPackage) {
+    const sharedStateGuard = conflictSharedStateGuard(conflictPackage);
+    const resolved = await fetchLocalJson(daemon, `/api/local/conflicts/${encodeURIComponent(conflictPackage.conflictId)}/use-local`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(sharedStateGuard),
+      errorCode: 'conflict_resolution_failed',
+      errorCodeByBody: { host_offline: 'host_offline' },
+      errorMessage: 'Unable to publish the local conflict version.',
+      errorMessageByBody: { host_offline: 'The host is offline. Retry when the host returns.' },
+    });
+    const result = agentSuccess({
+      path: daemon.realpath,
+      syncState: 'synced',
+      conflict: null,
+      resolution: resolved,
+      nextStep: 'Local version applied. Run marklab wait --synced before continuing.',
+    });
+    if (input.json) {
+      writeAgentJson(result);
+      return;
+    }
+    console.log(result.nextStep);
+    return;
+  }
+  if (input.resolveFile && conflictPackage) {
+    const { readFile } = await import('node:fs/promises');
+    const markdown = await readFile(resolve(input.resolveFile), 'utf8');
+    const sharedStateGuard = conflictSharedStateGuard(conflictPackage);
+    const resolved = await fetchLocalJson(daemon, `/api/local/conflicts/${encodeURIComponent(conflictPackage.conflictId)}/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        markdown,
+        ...sharedStateGuard,
+      }),
+      errorCode: 'conflict_resolution_failed',
+      errorCodeByBody: { host_offline: 'host_offline' },
+      errorMessage: 'Unable to apply the resolved conflict Markdown.',
+      errorMessageByBody: { host_offline: 'The host is offline. Retry when the host returns.' },
+    });
+    const result = agentSuccess({
+      path: daemon.realpath,
+      syncState: 'synced',
+      conflict: null,
+      resolution: resolved,
+      nextStep: 'Resolved Markdown applied. Run marklab wait --synced before continuing.',
+    });
+    if (input.json) {
+      writeAgentJson(result);
+      return;
+    }
+    console.log(result.nextStep);
+    return;
   }
   const result = agentSuccess({
     path: daemon.realpath,

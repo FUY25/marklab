@@ -33,6 +33,8 @@ interface PendingProposal {
   proposer: RelayConnection;
   updateBase64: string;
   replace: boolean;
+  expectedSharedRevision: number | null;
+  expectedSharedHash: string | null;
   timer: NodeJS.Timeout;
 }
 
@@ -65,11 +67,25 @@ type RelayClientMessage =
       hostToken?: string;
       asHost?: boolean;
     }
-  | { type: 'propose_update'; proposalId?: string; updateBase64: string; replace?: boolean }
+  | {
+      type: 'propose_update';
+      proposalId?: string;
+      updateBase64: string;
+      replace?: boolean;
+      expectedSharedRevision?: number | null;
+      expectedSharedHash?: string | null;
+    }
   | { type: 'awareness_update'; updateBase64: string }
   | { type: 'host_ack'; proposalId: string; yjsStateBase64: string; sharedHash: string }
   | { type: 'host_reject'; proposalId: string; reason?: string }
-  | { type: 'host_update'; yjsStateBase64: string; sharedHash: string }
+  | {
+      type: 'host_update';
+      yjsStateBase64: string;
+      sharedHash: string;
+      replace?: boolean;
+      expectedSharedRevision?: number | null;
+      expectedSharedHash?: string | null;
+    }
   | { type: 'ping' };
 
 function decodeJsonMessage(data: WebSocket.RawData): RelayClientMessage | null {
@@ -152,6 +168,35 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     });
   }
 
+  async function rejectPendingWithCurrentSharedState(pending: PendingProposal, reason: string): Promise<void> {
+    clearTimeout(pending.timer);
+    pendingByProposalId.delete(pending.proposalId);
+    observability.increment('write_rejected', {
+      relayRoomId: pending.relayRoomId,
+      grantId: pending.proposer.grantId,
+      sessionId: pending.proposer.sessionId,
+      role: pending.proposer.role,
+      reason,
+    });
+    try {
+      const room = await service.getRoom(pending.relayRoomId);
+      sendJson(pending.proposer.socket, {
+        type: 'rejected',
+        proposalId: pending.proposalId,
+        reason,
+        sharedRevision: room.sharedRevision,
+        sharedHash: room.lastSharedHash,
+        yjsStateBase64: room.lastEphemeralYjsState ? Buffer.from(room.lastEphemeralYjsState).toString('base64') : null,
+      });
+    } catch {
+      sendJson(pending.proposer.socket, {
+        type: 'rejected',
+        proposalId: pending.proposalId,
+        reason,
+      });
+    }
+  }
+
   function rejectPendingForHost(relayRoomId: string, reason: string): void {
     for (const pending of [...pendingByProposalId.values()]) {
       if (pending.relayRoomId === relayRoomId) rejectPending(pending, reason);
@@ -203,7 +248,14 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
         lastSharedHash: room.lastSharedHash,
         yjsStateBase64: room.lastEphemeralYjsState ? Buffer.from(room.lastEphemeralYjsState).toString('base64') : null,
       });
-      broadcast(relayRoomId, { type: 'host_status', hostOnline: true });
+      broadcast(relayRoomId, {
+        type: 'host_status',
+        hostOnline: true,
+        hostSessionId,
+        sharedRevision: room.sharedRevision,
+        lastSharedHash: room.lastSharedHash,
+        yjsStateBase64: room.lastEphemeralYjsState ? Buffer.from(room.lastEphemeralYjsState).toString('base64') : null,
+      });
       return;
     }
 
@@ -286,6 +338,29 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     }
 
     const proposalId = message.proposalId || randomUUID();
+    const expectedSharedRevision = message.expectedSharedRevision ?? null;
+    const expectedSharedHash = message.expectedSharedHash ?? null;
+    if (
+      (expectedSharedRevision !== null && room.sharedRevision !== expectedSharedRevision)
+      || (expectedSharedHash !== null && (room.lastSharedHash ?? '') !== expectedSharedHash)
+    ) {
+      observability.increment('write_rejected', {
+        relayRoomId: connection.relayRoomId,
+        grantId: connection.grantId,
+        sessionId: connection.sessionId,
+        role: connection.role,
+        reason: 'relay_shared_state_not_accepted',
+      });
+      sendJson(connection.socket, {
+        type: 'rejected',
+        proposalId,
+        reason: 'relay_shared_state_not_accepted',
+        sharedRevision: room.sharedRevision,
+        sharedHash: room.lastSharedHash,
+        yjsStateBase64: room.lastEphemeralYjsState ? Buffer.from(room.lastEphemeralYjsState).toString('base64') : null,
+      });
+      return;
+    }
     if (pendingForRoom(connection.relayRoomId)) {
       observability.increment('write_rejected', {
         relayRoomId: connection.relayRoomId,
@@ -303,6 +378,8 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       proposer: connection,
       updateBase64: message.updateBase64,
       replace: Boolean(message.replace),
+      expectedSharedRevision,
+      expectedSharedHash,
       timer: setTimeout(() => {
         const current = pendingByProposalId.get(proposalId);
         if (current) rejectPending(current, 'host_offline');
@@ -316,6 +393,10 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       fromSessionId: connection.sessionId,
       updateBase64: message.updateBase64,
       replace: pending.replace,
+      sharedRevision: room.sharedRevision,
+      sharedHash: room.lastSharedHash,
+      expectedSharedRevision,
+      expectedSharedHash,
     });
   }
 
@@ -324,6 +405,9 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
     yjsStateBase64: string,
     sharedHash: string,
     proposalId: string | null,
+    replace: boolean,
+    expectedSharedRevision?: number | null,
+    expectedSharedHash?: string | null,
   ): Promise<void> {
     if (connection.role !== 'host') {
       observability.increment('write_rejected', {
@@ -340,12 +424,38 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       sendJson(connection.socket, { type: 'error', error: 'unknown_proposal' });
       return;
     }
-    const yjsState = new Uint8Array(Buffer.from(yjsStateBase64, 'base64'));
-    const room = await service.acceptSharedState({
-      relayRoomId: connection.relayRoomId,
-      yjsState,
-      sharedHash,
-    });
+    const expectedRevision = expectedSharedRevision ?? pending?.expectedSharedRevision ?? null;
+    const expectedHash = expectedSharedHash ?? pending?.expectedSharedHash ?? null;
+    let room;
+    try {
+      if (expectedRevision !== null || expectedHash !== null) {
+        const current = await service.getRoom(connection.relayRoomId);
+        if (expectedRevision !== null && current.sharedRevision !== expectedRevision) {
+          throw new Error('relay_shared_state_not_accepted');
+        }
+        if (expectedHash !== null && (current.lastSharedHash ?? '') !== expectedHash) {
+          throw new Error('relay_shared_state_not_accepted');
+        }
+      }
+      const yjsState = new Uint8Array(Buffer.from(yjsStateBase64, 'base64'));
+      room = await service.acceptSharedState({
+        relayRoomId: connection.relayRoomId,
+        yjsState,
+        sharedHash,
+        expectedRevision,
+        expectedSharedHash: expectedHash,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'relay_shared_state_not_accepted';
+      if (pending) {
+        if (reason === 'relay_shared_state_not_accepted') {
+          await rejectPendingWithCurrentSharedState(pending, reason);
+        } else {
+          rejectPending(pending, reason);
+        }
+      }
+      throw error;
+    }
     if (pending) {
       clearTimeout(pending.timer);
       pendingByProposalId.delete(pending.proposalId);
@@ -354,7 +464,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
       type: 'accepted_update',
       proposalId,
       updateBase64: yjsStateBase64,
-      replace: pending?.replace ?? false,
+      replace: pending?.replace ?? replace,
       sharedRevision: room.sharedRevision,
       sharedHash: room.lastSharedHash,
       hostSessionId: connection.hostSessionId,
@@ -431,7 +541,7 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
         return;
       }
       if (message.type === 'host_ack') {
-        await acceptHostUpdate(connection, message.yjsStateBase64, message.sharedHash, message.proposalId);
+        await acceptHostUpdate(connection, message.yjsStateBase64, message.sharedHash, message.proposalId, false);
         return;
       }
       if (message.type === 'host_reject') {
@@ -439,7 +549,15 @@ export function createRelayServer(service: RelayRoomService, options: CreateRela
         return;
       }
       if (message.type === 'host_update') {
-        await acceptHostUpdate(connection, message.yjsStateBase64, message.sharedHash, null);
+        await acceptHostUpdate(
+          connection,
+          message.yjsStateBase64,
+          message.sharedHash,
+          null,
+          Boolean(message.replace),
+          message.expectedSharedRevision,
+          message.expectedSharedHash,
+        );
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'relay_error';

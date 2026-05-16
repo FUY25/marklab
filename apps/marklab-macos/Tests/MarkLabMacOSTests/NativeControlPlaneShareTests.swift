@@ -25,13 +25,15 @@ struct NativeControlPlaneShareTests {
 
     let document = try await controller.startSharing(fileURL: fileURL)
     let appEditorURL = try controller.appEditorURL()
+    let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
     let editLink = try await controller.createLink(role: .edit)
     let viewLink = try await controller.createLink(role: .view)
     try await controller.revokeLink(grantId: editLink.grantId)
 
     #expect(document.docId == "doc_hosted")
-    #expect(appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&mode=edit&clientKind=app")
+    #expect(appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&mode=edit&clientKind=app&localDocId=\(localDocId)")
     #expect(!appEditorURL.absoluteString.contains("token="))
+    #expect(appEditorURL.fragment == nil)
     #expect(editLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_edit&mode=edit")
     #expect(viewLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_view&mode=view")
     #expect(transport.requests.map(\.percentEncodedPath) == [

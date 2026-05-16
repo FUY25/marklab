@@ -78,14 +78,18 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
     )
   }
 
-  public func appEditorURL(document: NativeHostedDocument) -> URL {
+  public func appEditorURL(document: NativeHostedDocument, localDocId: String? = nil) -> URL {
     var components = URLComponents(url: appendPath("/collab", to: webBaseURL), resolvingAgainstBaseURL: false)!
-    components.queryItems = [
+    var queryItems = [
       URLQueryItem(name: "docId", value: document.docId),
       URLQueryItem(name: "branchId", value: document.branchId),
       URLQueryItem(name: "mode", value: "edit"),
       URLQueryItem(name: "clientKind", value: "app"),
     ]
+    if let localDocId, !localDocId.isEmpty {
+      queryItems.append(URLQueryItem(name: "localDocId", value: localDocId))
+    }
+    components.queryItems = queryItems
     return components.url!
   }
 

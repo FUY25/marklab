@@ -1,10 +1,11 @@
 import http from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import { createLocalFileServiceWithOptions, type LocalFileService } from '../local/local-file-service';
 import { createLocalRelayHostController, createLocalRelayMirrorController, type LocalRelayHostController, type LocalRelayMirrorController } from '../local/local-relay-client';
@@ -352,18 +353,18 @@ describe('relay websocket authority bridge', () => {
         type: 'host_ack',
         proposalId: 'p2',
         yjsStateBase64: Buffer.from(createState('accepted')).toString('base64'),
-        sharedHash: 'sha256:accepted',
+        sharedHash: sha256Hex('accepted'),
       }),
     );
     await expect(accepted).resolves.toMatchObject({
       type: 'accepted_update',
       proposalId: 'p2',
       sharedRevision: 1,
-      sharedHash: 'sha256:accepted',
+      sharedHash: sha256Hex('accepted'),
     });
     await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({
       sharedRevision: 1,
-      lastSharedHash: 'sha256:accepted',
+      lastSharedHash: sha256Hex('accepted'),
     });
   });
 
@@ -399,7 +400,7 @@ describe('relay websocket authority bridge', () => {
         type: 'host_ack',
         proposalId: 'replace-resolution',
         yjsStateBase64: Buffer.from(createState('resolved')).toString('base64'),
-        sharedHash: 'sha256:resolved',
+        sharedHash: sha256Hex('resolved'),
       }),
     );
     await expect(accepted).resolves.toMatchObject({
@@ -407,7 +408,7 @@ describe('relay websocket authority bridge', () => {
       proposalId: 'replace-resolution',
       replace: true,
       sharedRevision: 1,
-      sharedHash: 'sha256:resolved',
+      sharedHash: sha256Hex('resolved'),
     });
   });
 
@@ -444,7 +445,7 @@ describe('relay websocket authority bridge', () => {
         type: 'host_ack',
         proposalId: 'missing-proposal',
         yjsStateBase64: Buffer.from(createState('unmatched')).toString('base64'),
-        sharedHash: 'sha256:unmatched',
+        sharedHash: sha256Hex('unmatched'),
       }),
     );
 
@@ -574,6 +575,362 @@ describe('relay websocket authority bridge', () => {
     });
   });
 
+  it('rejects browser relay proposals with host_file_missing before pausing a host with no backing file', async () => {
+    const stack = await startRelayStack({ proposalTimeoutMs: 2000 });
+    const hostLocal = await createTempLocalService('# Local before missing file\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 10_000,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+    await rm(hostLocal.file, { force: true });
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      clientId: 'browser_missing_host_file',
+    });
+
+    const proposedState = await localServiceState('# Browser write while host file is missing\n');
+    editor.send(
+      JSON.stringify({
+        type: 'propose_update',
+        proposalId: 'browser-write-missing-host-file',
+        updateBase64: Buffer.from(proposedState).toString('base64'),
+      }),
+    );
+
+    await expect(nextMessage(editor, 'missing host file rejection')).resolves.toMatchObject({
+      type: 'rejected',
+      proposalId: 'browser-write-missing-host-file',
+      reason: 'host_file_missing',
+    });
+    await waitForCondition(async () => {
+      await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({ state: 'host_offline' });
+      expect(hostLocal.service.getSummary().conflict).toBe('host_file_missing');
+    });
+  });
+
+  it('opens host-side proposal conflicts against the current relay revision after earlier accepted edits', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Base\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      clientId: 'browser_host_conflict',
+    });
+
+    const acceptedState = await localServiceState('# Browser accepted\n');
+    editor.send(
+      JSON.stringify({
+        type: 'propose_update',
+        proposalId: 'browser-accepted-before-conflict',
+        updateBase64: Buffer.from(acceptedState).toString('base64'),
+        replace: true,
+      }),
+    );
+
+    await expect(nextMessage(editor, 'accepted browser write before conflict')).resolves.toMatchObject({
+      type: 'accepted_update',
+      proposalId: 'browser-accepted-before-conflict',
+      sharedRevision: 1,
+      sharedHash: sha256Hex('# Browser accepted\n'),
+    });
+    await writeFile(hostLocal.file, '# Local disk conflict\n', 'utf8');
+
+    const proposedState = await localServiceState('# Browser proposed during conflict\n');
+    editor.send(
+      JSON.stringify({
+        type: 'propose_update',
+        proposalId: 'browser-conflicting-proposal',
+        updateBase64: Buffer.from(proposedState).toString('base64'),
+        replace: true,
+      }),
+    );
+
+    await expect(nextMessage(editor, 'conflicting browser write rejection')).resolves.toMatchObject({
+      type: 'rejected',
+      proposalId: 'browser-conflicting-proposal',
+      reason: 'host_write_failed',
+    });
+    await waitForCondition(() => {
+      expect(hostLocal.service.getCurrentConflict()).toMatchObject({
+        sharedRevision: 1,
+        sharedHash: sha256Hex('# Browser proposed during conflict\n'),
+        expectedSharedRevision: 1,
+        expectedSharedHash: sha256Hex('# Browser accepted\n'),
+      });
+    });
+    const conflict = hostLocal.service.getCurrentConflict();
+    if (!conflict) throw new Error('missing_host_conflict');
+
+    await expect(hostController.verifySharedState({
+      expectedSharedRevision: conflict.expectedSharedRevision,
+      expectedSharedHash: conflict.expectedSharedHash,
+    })).resolves.toBeUndefined();
+    const prepared = await hostLocal.service.prepareUseLocalConflict(
+      conflict.conflictId,
+      conflict.expectedSharedRevision,
+      conflict.expectedSharedHash,
+    );
+    const publish = hostController.publishResolvedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: prepared.yjsState,
+      sharedHash: prepared.hash,
+      expectedSharedRevision: conflict.expectedSharedRevision,
+      expectedSharedHash: conflict.expectedSharedHash,
+    });
+
+    await expect(nextMessage(editor, 'accepted host conflict resolution')).resolves.toMatchObject({
+      type: 'accepted_update',
+      replace: true,
+      sharedRevision: 2,
+      sharedHash: sha256Hex('# Local disk conflict\n'),
+    });
+    await expect(publish).resolves.toMatchObject({
+      sharedRevision: 2,
+      sharedHash: sha256Hex('# Local disk conflict\n'),
+    });
+  });
+
+  it('broadcasts host conflict-resolution replacements to connected relay clients', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Base\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      clientId: 'browser_conflict_resolution',
+    });
+
+    const resolvedState = await localServiceState('# Resolved by host\n');
+    const publish = hostController.publishResolvedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: resolvedState,
+      sharedHash: sha256Hex('# Resolved by host\n'),
+      expectedSharedRevision: 0,
+      expectedSharedHash: hostLocal.service.getSummary().hash,
+    });
+
+    await expect(nextMessage(editor, 'host conflict resolution')).resolves.toMatchObject({
+      type: 'accepted_update',
+      replace: true,
+      sharedRevision: 1,
+      sharedHash: sha256Hex('# Resolved by host\n'),
+    });
+    await expect(publish).resolves.toMatchObject({
+      sharedRevision: 1,
+      sharedHash: sha256Hex('# Resolved by host\n'),
+    });
+  });
+
+  it('rejects stale host conflict-resolution replacements without advancing relay state', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom({ hostAuthToken: 'host-secret' });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const host = await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const editor = await connectParticipant(stack.url, {
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      clientId: 'browser_stale_conflict_resolution',
+    });
+    await stack.service.acceptSharedState({
+      relayRoomId: room.relayRoomId,
+      yjsState: createState('intervening shared state'),
+      sharedHash: sha256Hex('intervening shared state'),
+      expectedRevision: 0,
+    });
+
+    host.send(
+      JSON.stringify({
+        type: 'host_update',
+        yjsStateBase64: Buffer.from(createState('stale resolution')).toString('base64'),
+        sharedHash: sha256Hex('stale resolution'),
+        expectedSharedRevision: 0,
+        replace: true,
+      }),
+    );
+
+    await expect(nextMessageOfType(host, 'error', 'stale host conflict resolution rejection')).resolves.toMatchObject({
+      type: 'error',
+      error: 'relay_shared_state_not_accepted',
+    });
+    await expectNoMessage(editor, 'stale_host_conflict_resolution_broadcast');
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({
+      sharedRevision: 1,
+      lastSharedHash: sha256Hex('intervening shared state'),
+    });
+  });
+
+  it('rejects mirror conflict resolution when the host acknowledges a different shared state', async () => {
+    const stack = await startRelayStack();
+    const baseState = createState('# Base\n');
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      lastEphemeralYjsState: baseState,
+      lastSharedHash: sha256Hex('# Base\n'),
+    });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const host = await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const mirrorLocal = await createTempLocalService('# Local resolution\n');
+    const mirror = createLocalRelayMirrorController({
+      localFileService: mirrorLocal.service,
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'mirror_conflict_resolution',
+      pollIntervalMs: 50,
+    });
+    const localResolutionState = createState('# Local resolution\n');
+    const publish = mirror.publishResolvedState({
+      yjsState: localResolutionState,
+      sharedHash: sha256Hex('# Local resolution\n'),
+      expectedSharedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    });
+
+    const proposal = await nextMessageOfType(host, 'proposal', 'mirror conflict resolution proposal');
+    expect(proposal).toMatchObject({ type: 'proposal', replace: true });
+    host.send(
+      JSON.stringify({
+        type: 'host_ack',
+        proposalId: proposal.proposalId,
+        yjsStateBase64: Buffer.from(createState('# Different host state\n')).toString('base64'),
+        sharedHash: sha256Hex('# Different host state\n'),
+      }),
+    );
+
+    await expect(publish).rejects.toThrow('relay_shared_state_not_accepted');
+  });
+
+  it('rejects mirror conflict resolution when shared state advances before host acknowledgement', async () => {
+    const stack = await startRelayStack({ proposalTimeoutMs: 2000 });
+    const baseState = createState('# Base\n');
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      lastEphemeralYjsState: baseState,
+      lastSharedHash: sha256Hex('# Base\n'),
+    });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const host = await connectHost(stack.url, room.relayRoomId, 'host-secret');
+    const mirrorLocal = await createTempLocalService('# Local stale resolution\n');
+    const mirror = createLocalRelayMirrorController({
+      localFileService: mirrorLocal.service,
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'mirror_stale_resolution',
+      pollIntervalMs: 50,
+    });
+    const publish = mirror.publishResolvedState({
+      yjsState: createState('# Local stale resolution\n'),
+      sharedHash: sha256Hex('# Local stale resolution\n'),
+      expectedSharedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    });
+
+    const proposal = await nextMessageOfType(host, 'proposal', 'stale mirror resolution proposal');
+    expect(proposal).toMatchObject({
+      type: 'proposal',
+      replace: true,
+      expectedSharedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    });
+    await stack.service.acceptSharedState({
+      relayRoomId: room.relayRoomId,
+      yjsState: createState('# Intervening shared edit\n'),
+      sharedHash: sha256Hex('# Intervening shared edit\n'),
+      expectedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    });
+    host.send(
+      JSON.stringify({
+        type: 'host_ack',
+        proposalId: proposal.proposalId,
+        yjsStateBase64: Buffer.from(createState('# Local stale resolution\n')).toString('base64'),
+        sharedHash: sha256Hex('# Local stale resolution\n'),
+      }),
+    );
+
+    await expect(publish).rejects.toThrow('relay_shared_state_not_accepted');
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({
+      sharedRevision: 1,
+      lastSharedHash: sha256Hex('# Intervening shared edit\n'),
+    });
+  });
+
+  it('fails mirror shared-state verification with the relay denial when the grant is revoked', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      hostSessionId: 'host_1',
+      lastSharedHash: sha256Hex('# Base\n'),
+    });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    await stack.service.revokeAccessGrant(grant.grantId);
+    const mirrorLocal = await createTempLocalService('# Base\n');
+    const mirror = createLocalRelayMirrorController({
+      localFileService: mirrorLocal.service,
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'revoked_verify_mirror',
+      pollIntervalMs: 50,
+    });
+
+    await expect(mirror.verifySharedState({
+      expectedSharedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    })).rejects.toThrow('forbidden');
+  });
+
+  it('fails mirror conflict publish with the relay denial when the grant is revoked', async () => {
+    const stack = await startRelayStack();
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      hostSessionId: 'host_1',
+      lastSharedHash: sha256Hex('# Base\n'),
+    });
+    const grant = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    await stack.service.revokeAccessGrant(grant.grantId);
+    const mirrorLocal = await createTempLocalService('# Local resolution\n');
+    const mirror = createLocalRelayMirrorController({
+      localFileService: mirrorLocal.service,
+      relayRoomId: room.relayRoomId,
+      token: grant.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'revoked_publish_mirror',
+      pollIntervalMs: 50,
+    });
+
+    await expect(mirror.publishResolvedState({
+      yjsState: createState('# Local resolution\n'),
+      sharedHash: sha256Hex('# Local resolution\n'),
+      expectedSharedRevision: 0,
+      expectedSharedHash: sha256Hex('# Base\n'),
+    })).rejects.toThrow('forbidden');
+  });
+
   it('reconnects a restarted host daemon to the same relay room so existing edit links resume', async () => {
     const stack = await startRelayStack();
     const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
@@ -635,6 +992,88 @@ describe('relay websocket authority bridge', () => {
     });
   });
 
+  it('opens a host reconnect conflict instead of overwriting relay state advanced while stopped', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+
+    hostController.stop();
+    await waitForCondition(async () => {
+      await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({ state: 'host_offline' });
+    });
+    await writeFile(hostLocal.file, '# Shared\n\nHost local edit while stopped.\n', 'utf8');
+    await stack.service.markHostOnline(editLink.relayRoomId, 'external_host');
+    const remoteMarkdown = '# Shared\n\nRelay update while host stopped.\n';
+    const remoteState = await localServiceState(remoteMarkdown);
+    await stack.service.acceptSharedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: remoteState,
+      sharedHash: sha256Hex(remoteMarkdown),
+      expectedRevision: 0,
+      expectedSharedHash: sha256Hex('# Shared\n\nInitial.\n'),
+    });
+    await stack.service.markHostOffline(editLink.relayRoomId, 'external_host');
+
+    const restartedService = await createLocalFileServiceWithOptions(hostLocal.file, {
+      metadataPath: hostLocal.metadataPath,
+    });
+    restartedService.startWatcher({
+      flushRoom: async () => undefined,
+      applyRoomState: async () => undefined,
+    });
+    localServices.push(restartedService);
+    const restartedHost = createLocalRelayHostController({
+      localFileService: restartedService,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(restartedHost);
+
+    await expect(restartedHost.resumeHosted()).resolves.toBe(true);
+    await waitForCondition(() => {
+      expect(restartedService.getCurrentConflict()).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        localMarkdown: '# Shared\n\nHost local edit while stopped.\n',
+        sharedMarkdown: remoteMarkdown,
+        expectedSharedRevision: 1,
+        expectedSharedHash: sha256Hex(remoteMarkdown),
+        status: 'open',
+      });
+    });
+    const conflict = restartedService.getCurrentConflict();
+    if (!conflict) throw new Error('missing_restarted_host_conflict');
+    const prepared = await restartedService.prepareUseLocalConflict(
+      conflict.conflictId,
+      conflict.expectedSharedRevision,
+      conflict.expectedSharedHash,
+    );
+    await expect(restartedHost.publishResolvedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: prepared.yjsState,
+      sharedHash: prepared.hash,
+      expectedSharedRevision: conflict.expectedSharedRevision,
+      expectedSharedHash: conflict.expectedSharedHash,
+    })).resolves.toMatchObject({
+      sharedRevision: 2,
+      sharedHash: sha256Hex('# Shared\n\nHost local edit while stopped.\n'),
+    });
+    await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({
+      state: 'host_online',
+      lastSharedHash: sha256Hex('# Shared\n\nHost local edit while stopped.\n'),
+      sharedRevision: 2,
+    });
+  });
+
   it('keeps two daemon local files mirrored for online edits in both directions', async () => {
     const stack = await startRelayStack();
     const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
@@ -668,15 +1107,151 @@ describe('relay websocket authority bridge', () => {
     await writeFile(hostLocal.file, '# Shared\n\nHost online edit.\n', 'utf8');
     await waitForCondition(async () => {
       await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Host online edit.');
-    });
+    }, 6000);
 
     await writeFile(bobLocal.file, '# Shared\n\nBob online edit.\n', 'utf8');
     await waitForCondition(async () => {
       await expect(readFile(hostLocal.file, 'utf8')).resolves.toContain('Bob online edit.');
+    }, 6000);
+  });
+
+  it('retries host local publishes when the relay rejects before accepting the update', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+    const targetMarkdown = '# Shared\n\nHost edit after transient rejection.\n';
+    const targetHash = sha256Hex(targetMarkdown);
+    const acceptSharedState = stack.service.acceptSharedState.bind(stack.service);
+    let attempts = 0;
+    stack.service.acceptSharedState = async (input) => {
+      if (input.sharedHash === targetHash) {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient_relay_write_failed');
+      }
+      return acceptSharedState(input);
+    };
+
+    await writeFile(hostLocal.file, targetMarkdown, 'utf8');
+
+    await waitForCondition(async () => {
+      await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({
+        lastSharedHash: targetHash,
+      });
+    }, 6000);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not open a reconnect conflict when a mirror write is rejected for authorization', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const viewLink = await hostController.createLink('view');
+
+    const viewerLocal = await createTempLocalService('');
+    const viewerMirror = createLocalRelayMirrorController({
+      localFileService: viewerLocal.service,
+      relayRoomId: viewLink.relayRoomId,
+      token: viewLink.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'viewer_daemon',
+      displayName: 'Viewer daemon',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(viewerMirror);
+    await viewerMirror.start();
+    await waitForCondition(async () => {
+      await expect(readFile(viewerLocal.file, 'utf8')).resolves.toContain('Initial.');
+    });
+    const acceptedViewerHash = viewerLocal.service.getSummary().hash;
+
+    await writeFile(viewerLocal.file, '# Shared\n\nViewer unauthorized local edit.\n', 'utf8');
+    await waitForCondition(() => {
+      expect(viewerLocal.service.getSummary().hash).not.toBe(acceptedViewerHash);
+    });
+    await waitForCondition(async () => {
+      await expect(viewerMirror.shareState()).resolves.toMatchObject({ hostOnline: false });
+    });
+
+    expect(viewerLocal.service.getSummary().conflict).toBeNull();
+    expect(viewerLocal.service.getCurrentConflict()).toBeNull();
+    await expect(readFile(hostLocal.file, 'utf8')).resolves.not.toContain('Viewer unauthorized local edit.');
+  });
+
+  it('keeps mirror conflict packages on the latest shared state while collaborators continue editing', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+
+    const bobLocal = await createTempLocalService('');
+    const bobMirror = createLocalRelayMirrorController({
+      localFileService: bobLocal.service,
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'bob_conflict_refresh',
+      displayName: 'Bob conflict refresh',
+      pollIntervalMs: 20000,
+    });
+    localControllers.push(bobMirror);
+    await bobMirror.start();
+    await waitForCondition(async () => {
+      await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Initial.');
+    });
+    bobLocal.service.stopWatcher();
+
+    await writeFile(bobLocal.file, '# Shared\n\nBob local-only edit.\n', 'utf8');
+    await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Bob local-only edit.');
+    await writeFile(hostLocal.file, '# Shared\n\nHost update one.\n', 'utf8');
+
+    await waitForCondition(async () => {
+      const room = await stack.service.getRoom(editLink.relayRoomId);
+      const conflict = bobLocal.service.getCurrentConflict();
+      expect(conflict).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        sharedRevision: room.sharedRevision,
+        sharedMarkdown: '# Shared\n\nHost update one.\n',
+        status: 'open',
+      });
+    });
+
+    await writeFile(hostLocal.file, '# Shared\n\nHost update two.\n', 'utf8');
+
+    await waitForCondition(async () => {
+      const room = await stack.service.getRoom(editLink.relayRoomId);
+      const conflict = bobLocal.service.getCurrentConflict();
+      expect(conflict).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        sharedRevision: room.sharedRevision,
+        sharedMarkdown: '# Shared\n\nHost update two.\n',
+        status: 'open',
+      });
     });
   });
 
-  it('does not replay local mirror edits made while host authority is offline', async () => {
+  it('replays local mirror edits after host authority returns when shared state did not change', async () => {
     const stack = await startRelayStack();
     const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
     const hostController = createLocalRelayHostController({
@@ -718,9 +1293,199 @@ describe('relay websocket authority bridge', () => {
 
     await hostController.start();
     await waitForCondition(() => {
-      expect(bobLocal.service.getSummary().conflict).toBe('Relay reconnect conflict. Review needed before syncing resumes.');
+      expect(bobLocal.service.getSummary().conflict).toBeNull();
     });
-    await expect(readFile(hostLocal.file, 'utf8')).resolves.not.toContain('Bob edit while host offline.');
+    await waitForCondition(async () => {
+      await expect(readFile(hostLocal.file, 'utf8')).resolves.toContain('Bob edit while host offline.');
+    });
+    expect(bobLocal.service.getCurrentConflict()).toBeNull();
+  });
+
+  it('guards ordinary mirror local-change proposals and opens a conflict when host acknowledgement is stale', async () => {
+    const stack = await startRelayStack({ proposalTimeoutMs: 2000 });
+    const initialMarkdown = '# Shared\n\nInitial.\n';
+    const initialHash = sha256Hex(initialMarkdown);
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      lastEphemeralYjsState: await localServiceState(initialMarkdown),
+      lastSharedHash: initialHash,
+    });
+    const editLink = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const host = await connectHost(stack.url, room.relayRoomId, 'host-secret', 'manual_host');
+    const bobLocal = await createTempLocalService('');
+    const bobMirror = createLocalRelayMirrorController({
+      localFileService: bobLocal.service,
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'bob_guarded_ordinary_proposal',
+      displayName: 'Bob guarded proposal',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(bobMirror);
+    await bobMirror.start();
+    await waitForCondition(async () => {
+      await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Initial.');
+    });
+
+    const bobMarkdown = '# Shared\n\nBob ordinary edit.\n';
+    await writeFile(bobLocal.file, bobMarkdown, 'utf8');
+    const proposal = await nextMessageOfType(host, 'proposal', 'ordinary mirror proposal');
+    expect(proposal).toMatchObject({
+      type: 'proposal',
+      replace: false,
+      expectedSharedRevision: 0,
+      expectedSharedHash: initialHash,
+    });
+
+    const remoteMarkdown = '# Shared\n\nRemote wins first.\n';
+    await stack.service.acceptSharedState({
+      relayRoomId: room.relayRoomId,
+      yjsState: await localServiceState(remoteMarkdown),
+      sharedHash: sha256Hex(remoteMarkdown),
+      expectedRevision: 0,
+      expectedSharedHash: initialHash,
+    });
+    host.send(
+      JSON.stringify({
+        type: 'host_ack',
+        proposalId: proposal.proposalId,
+        yjsStateBase64: proposal.updateBase64,
+        sharedHash: sha256Hex(bobMarkdown),
+      }),
+    );
+
+    await waitForCondition(() => {
+      expect(bobLocal.service.getCurrentConflict()).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        localMarkdown: bobMarkdown,
+        sharedMarkdown: remoteMarkdown,
+        expectedSharedRevision: 1,
+        expectedSharedHash: sha256Hex(remoteMarkdown),
+        status: 'open',
+      });
+    });
+    await expect(stack.service.getRoom(room.relayRoomId)).resolves.toMatchObject({
+      sharedRevision: 1,
+      lastSharedHash: sha256Hex(remoteMarkdown),
+    });
+  });
+
+  it('opens a mirror reconnect conflict package when host returns after local and shared changed', async () => {
+    const stack = await startRelayStack();
+    const hostLocal = await createTempLocalService('# Shared\n\nInitial.\n');
+    const hostController = createLocalRelayHostController({
+      localFileService: hostLocal.service,
+      relayService: stack.service,
+      relayWebSocketUrl: stack.url,
+      publicWebUrl: 'http://127.0.0.1:5175',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(hostController);
+    const editLink = await hostController.createLink('edit');
+
+    const bobLocal = await createTempLocalService('');
+    const bobMirror = createLocalRelayMirrorController({
+      localFileService: bobLocal.service,
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'bob_daemon_conflict_package',
+      displayName: 'Bob daemon',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(bobMirror);
+    await bobMirror.start();
+    await waitForCondition(async () => {
+      await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Initial.');
+    });
+
+    hostController.stop();
+    await waitForCondition(async () => {
+      await expect(stack.service.getRoom(editLink.relayRoomId)).resolves.toMatchObject({ state: 'host_offline' });
+    });
+    await writeFile(bobLocal.file, '# Shared\n\nBob edit while host offline.\n', 'utf8');
+    await stack.service.markHostOnline(editLink.relayRoomId, 'external_host');
+    const remoteMarkdown = '# Shared\n\nRelay changed too.\n';
+    const remoteState = await localServiceState(remoteMarkdown);
+    await stack.service.acceptSharedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: remoteState,
+      sharedHash: sha256Hex(remoteMarkdown),
+      expectedRevision: 0,
+      expectedSharedHash: sha256Hex('# Shared\n\nInitial.\n'),
+    });
+    await stack.service.markHostOffline(editLink.relayRoomId, 'external_host');
+
+    await hostController.start();
+    await waitForCondition(() => {
+      expect(bobLocal.service.getCurrentConflict()).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        localMarkdown: '# Shared\n\nBob edit while host offline.\n',
+        sharedMarkdown: remoteMarkdown,
+        expectedSharedRevision: 1,
+        expectedSharedHash: sha256Hex(remoteMarkdown),
+        status: 'open',
+      });
+    });
+    await expect(readFile(hostLocal.file, 'utf8')).resolves.toContain('Relay changed too.');
+  });
+
+  it('opens a mirror reconnect conflict package after a host-lease rejection and later shared change', async () => {
+    const stack = await startRelayStack({ hostLeaseMs: 100 });
+    const initialMarkdown = '# Shared\n\nInitial.\n';
+    const initialState = await localServiceState(initialMarkdown);
+    const room = await stack.service.createRoom({
+      hostAuthToken: 'host-secret',
+      lastEphemeralYjsState: initialState,
+      lastSharedHash: sha256Hex(initialMarkdown),
+    });
+    const editLink = await stack.service.createAccessGrant({ relayRoomId: room.relayRoomId, role: 'edit' });
+    const staleHost = await connectHost(stack.url, room.relayRoomId, 'host-secret', 'stale_host');
+    const bobLocal = await createTempLocalService('');
+    const bobMirror = createLocalRelayMirrorController({
+      localFileService: bobLocal.service,
+      relayRoomId: editLink.relayRoomId,
+      token: editLink.token,
+      relayWebSocketUrl: stack.url,
+      clientId: 'bob_lease_reject',
+      displayName: 'Bob lease reject',
+      pollIntervalMs: 50,
+    });
+    localControllers.push(bobMirror);
+    await bobMirror.start();
+    await waitForCondition(async () => {
+      await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Initial.');
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await writeFile(bobLocal.file, '# Shared\n\nBob edit after stale lease.\n', 'utf8');
+    await waitForCondition(async () => {
+      await expect(bobMirror.shareState()).resolves.toMatchObject({ hostOnline: false });
+    });
+    expect(bobLocal.service.getCurrentConflict()).toBeNull();
+
+    const remoteMarkdown = '# Shared\n\nRelay changed after lease rejection.\n';
+    await stack.service.acceptSharedState({
+      relayRoomId: editLink.relayRoomId,
+      yjsState: await localServiceState(remoteMarkdown),
+      sharedHash: sha256Hex(remoteMarkdown),
+      expectedRevision: 0,
+      expectedSharedHash: sha256Hex(initialMarkdown),
+    });
+    staleHost.close();
+    await connectHost(stack.url, room.relayRoomId, 'host-secret', 'fresh_host');
+
+    await waitForCondition(() => {
+      expect(bobLocal.service.getCurrentConflict()).toMatchObject({
+        relayRoomId: editLink.relayRoomId,
+        localMarkdown: '# Shared\n\nBob edit after stale lease.\n',
+        sharedMarkdown: remoteMarkdown,
+        expectedSharedRevision: 1,
+        expectedSharedHash: sha256Hex(remoteMarkdown),
+        status: 'open',
+      });
+    });
   });
 
   it('pauses a reconnecting mirror instead of merging when local and shared states both changed offline', async () => {
@@ -775,8 +1540,17 @@ describe('relay websocket authority bridge', () => {
       pollIntervalMs: 50,
     });
 
-    await expect(reconnectingMirror.start()).rejects.toThrow('relay_reconnect_conflict_plan3_required');
-    expect(restartedBobService.getSummary().conflict).toBe('Relay reconnect conflict. Review needed before syncing resumes.');
+    await reconnectingMirror.start().catch((error: unknown) => {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('relay_reconnect_conflict_plan3_required');
+    });
+    await waitForCondition(() => {
+      expect(restartedBobService.getSummary().conflict).toBe('Relay reconnect conflict. Review needed before syncing resumes.');
+    });
+    expect(restartedBobService.getCurrentConflict()).toMatchObject({
+      relayRoomId: editLink.relayRoomId,
+      status: 'open',
+    });
     await expect(readFile(bobLocal.file, 'utf8')).resolves.toContain('Bob offline edit.');
     await expect(readFile(bobLocal.file, 'utf8')).resolves.not.toContain('Host while Bob offline.');
   });

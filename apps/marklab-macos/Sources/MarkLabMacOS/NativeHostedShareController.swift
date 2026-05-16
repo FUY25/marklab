@@ -7,6 +7,7 @@ public enum NativeHostedShareError: Error, Equatable {
 public final class NativeHostedShareController: @unchecked Sendable {
   private let client: NativeControlPlaneShareClient
   private var document: NativeHostedDocument?
+  private var localDocId: String?
 
   public init(client: NativeControlPlaneShareClient) {
     self.client = client
@@ -16,6 +17,7 @@ public final class NativeHostedShareController: @unchecked Sendable {
     let localDocument = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true)
     let imported = try await client.importMarkdown(fileURL: fileURL, markdown: localDocument.markdownForSave())
     document = imported
+    localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
     return imported
   }
 
@@ -26,7 +28,10 @@ public final class NativeHostedShareController: @unchecked Sendable {
 
   public func appEditorURL() throws -> URL {
     guard let document else { throw NativeHostedShareError.documentNotShared }
-    return client.appEditorURL(document: document)
+    return client.appEditorURL(
+      document: document,
+      localDocId: localDocId
+    )
   }
 
   public func revokeLink(grantId: String) async throws {

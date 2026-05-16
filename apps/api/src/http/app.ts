@@ -32,7 +32,12 @@ import type { OidcAuthConfig, OidcExchange } from '../services/oidc-service';
 
 export interface HttpAppOptions {
   flushCollabDocument?: (roomName: string) => Promise<void>;
-  applyCollabDocumentState?: (roomName: string, yjsState: Uint8Array) => Promise<void>;
+  applyCollabDocumentState?: (
+    roomName: string,
+    yjsState: Uint8Array,
+    options?: { expectedCurrentHash?: string },
+  ) => Promise<Uint8Array | void>;
+  verifyCollabDocumentState?: (roomName: string, options?: { expectedCurrentHash?: string }) => Promise<void>;
   closeCollabDocumentConnections?: (roomName: string) => void;
   collabSnapshotService?: CollabSnapshotService;
   auth?: HttpRequestAuth;
@@ -505,6 +510,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'invalid_relay_yjs_state') {
+    res.status(400).json({ error: 'invalid_relay_yjs_state' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'live_writer_missing_previous_hash') {
     res.status(503).json({ error: 'live_writer_missing_previous_hash' });
     return;
@@ -627,6 +637,31 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   if (error instanceof Error && error.message === 'stale_conflict_shared_state') {
     res.status(409).json({ error: 'stale_conflict_shared_state' });
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'host_offline') {
+    res.status(409).json({ error: 'host_offline' });
+    return;
+  }
+
+  if (
+    error instanceof Error &&
+    [
+      'relay_host_publish_timeout',
+      'relay_host_publish_closed',
+      'relay_mirror_publish_timeout',
+      'relay_mirror_publish_closed',
+      'relay_mirror_verify_timeout',
+      'relay_mirror_verify_closed',
+    ].includes(error.message)
+  ) {
+    res.status(409).json({ error: 'host_offline' });
+    return;
+  }
+
+  if (error instanceof Error && ['host_file_missing', 'mirror_file_missing'].includes(error.message)) {
+    res.status(409).json({ error: error.message });
     return;
   }
 

@@ -268,15 +268,20 @@ async function waitUntil(label: string, predicate: () => Promise<boolean> | bool
   throw new Error(`timeout:${label}`);
 }
 
-function projectHostedNativeWebViewToDisk(ytext: Y.Text, filePath: string): () => Promise<void> {
+function projectHostedNativeWebViewToDisk(ytext: Y.Text, filePath: string): {
+  stop(): Promise<void>;
+  conflictDetected(): boolean;
+} {
   let queued = Promise.resolve();
   let lastProjectedMarkdown = '';
+  let detectedConflict = false;
   const writeCurrent = () => {
     const markdown = ytext.toString();
     queued = queued.then(async () => {
       const diskMarkdown = await readFile(filePath, 'utf8');
       if (diskMarkdown !== lastProjectedMarkdown && diskMarkdown !== markdown) {
-        throw new Error('native_webview_projection_conflict');
+        detectedConflict = true;
+        return;
       }
       await writeFile(filePath, markdown, 'utf8');
       lastProjectedMarkdown = markdown;
@@ -284,9 +289,14 @@ function projectHostedNativeWebViewToDisk(ytext: Y.Text, filePath: string): () =
   };
   ytext.observe(writeCurrent);
   writeCurrent();
-  return async () => {
-    ytext.unobserve(writeCurrent);
-    await queued;
+  return {
+    async stop() {
+      ytext.unobserve(writeCurrent);
+      await queued;
+    },
+    conflictDetected() {
+      return detectedConflict;
+    },
   };
 }
 
@@ -339,7 +349,7 @@ async function main(): Promise<void> {
 
   let nativeProvider: YSweetProvider | null = null;
   let browserProvider: YSweetProvider | null = null;
-  let stopDiskProjection: (() => Promise<void>) | null = null;
+  let diskProjection: ReturnType<typeof projectHostedNativeWebViewToDisk> | null = null;
 
   try {
     await runNativeRuntimeGate();
@@ -360,7 +370,7 @@ async function main(): Promise<void> {
 
     const nativeText = nativeDoc.getText('contents');
     const browserText = browserDoc.getText('contents');
-    stopDiskProjection = projectHostedNativeWebViewToDisk(nativeText, diskPath);
+    diskProjection = projectHostedNativeWebViewToDisk(nativeText, diskPath);
 
     nativeText.insert(0, 'Native first\n');
     await waitForNoLocalChanges(nativeProvider);
@@ -393,6 +403,15 @@ async function main(): Promise<void> {
       return false;
     });
 
+    await writeFile(diskPath, 'Native first\nBrowser second\nLocal conflict\n', 'utf8');
+    browserText.insert(browserText.length, 'Remote conflict\n');
+    await waitForNoLocalChanges(browserProvider);
+    await waitUntil('native projection detects local/shared conflict', () => diskProjection?.conflictDetected() === true);
+    const diskAfterConflict = await readFile(diskPath, 'utf8');
+    if (diskAfterConflict !== 'Native first\nBrowser second\nLocal conflict\n') {
+      throw new Error(`native_conflict_overwrote_disk:${JSON.stringify(diskAfterConflict)}`);
+    }
+
     console.log(JSON.stringify({
       ok: true,
       providerDocId,
@@ -401,11 +420,12 @@ async function main(): Promise<void> {
       nativeRuntimeGate: true,
       nativeAppBuildGate: true,
       nativeProjectionHelperGate: true,
+      nativeConflictGate: true,
       nativeSawBrowserCursor: true,
       browserSawNativeCursor: true,
     }));
   } finally {
-    if (stopDiskProjection) await stopDiskProjection().catch(() => undefined);
+    if (diskProjection) await diskProjection.stop().catch(() => undefined);
     nativeProvider?.disconnect();
     browserProvider?.disconnect();
     nativeProvider?.destroy();

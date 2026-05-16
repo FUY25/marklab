@@ -77,6 +77,8 @@ export interface StoredLocalRelayHostState {
   absolutePath: string;
   lastHostSessionId: string | null;
   lastPublishedHash: string | null;
+  lastSharedRevision?: number | null;
+  lastSharedHash?: string | null;
   updatedAt: string;
 }
 

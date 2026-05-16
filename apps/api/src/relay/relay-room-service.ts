@@ -1,7 +1,9 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { sha256Hex } from '@marklab/shared/src/hash';
+import * as Y from 'yjs';
 import type { DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
+import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
 
 export type RelayHostState = 'host_online' | 'host_offline';
 export type RelayRoomState = RelayHostState | 'starting' | 'ended';
@@ -85,6 +87,14 @@ export interface RelayCleanupResult {
 
 export interface RelayRoomHostService {
   rememberHostToken?(relayRoomId: string, hostAuthToken: string): void;
+  getRoom?(relayRoomId: string): Promise<RelayRoom>;
+  acceptSharedState?(input: {
+    relayRoomId: string;
+    yjsState: Uint8Array;
+    sharedHash: string;
+    expectedRevision?: number | null;
+    expectedSharedHash?: string | null;
+  }): Promise<RelayRoom>;
   createRoom(input?: {
     hostSessionId?: string | null;
     hostAuthToken?: string | null;
@@ -194,6 +204,30 @@ function relayRoomFromRow(row: RelayRoomRow): RelayRoom {
   };
 }
 
+const relayMarkdownRuntime = createHeadlessMilkdownRuntime();
+
+async function hashRelayYjsMarkdownState(yjsState: Uint8Array): Promise<string> {
+  try {
+    return (await relayMarkdownRuntime.serializeYjsState(yjsState)).hash;
+  } catch {
+    const validationDocument = new Y.Doc();
+    try {
+      Y.applyUpdate(validationDocument, yjsState);
+      if (validationDocument.share.has('contents')) {
+        return sha256Hex(validationDocument.getText('contents').toString());
+      }
+      if (validationDocument.share.has('prosemirror')) {
+        return sha256Hex(validationDocument.getText('prosemirror').toString());
+      }
+    } catch {
+      throw new Error('invalid_relay_yjs_state');
+    } finally {
+      validationDocument.destroy();
+    }
+    throw new Error('invalid_relay_yjs_state');
+  }
+}
+
 function grantSummaryFromRow(row: RelayGrantRow): RelayAccessGrantSummary {
   return {
     grantId: row.id,
@@ -292,6 +326,9 @@ export class RelayRoomService {
     lastEphemeralYjsState?: Uint8Array | null;
     lastSharedHash?: string | null;
   } = {}): Promise<RelayRoom> {
+    const lastSharedHash = input.lastEphemeralYjsState
+      ? await hashRelayYjsMarkdownState(input.lastEphemeralYjsState)
+      : (input.lastSharedHash ?? null);
     const result = await this.pool.query<RelayRoomRow>(
       `insert into relay_rooms
          (host_session_id, host_auth_token_hash, state, last_ephemeral_yjs_state, last_shared_hash, shared_revision)
@@ -302,7 +339,7 @@ export class RelayRoomService {
         input.hostAuthToken ? hashRelayToken(input.hostAuthToken) : null,
         input.hostSessionId ? 'host_online' : 'host_offline',
         input.lastEphemeralYjsState ? Buffer.from(input.lastEphemeralYjsState) : null,
-        input.lastSharedHash ?? null,
+        lastSharedHash,
       ],
     );
     const row = result.rows[0];
@@ -385,12 +422,15 @@ export class RelayRoomService {
     yjsState: Uint8Array;
     sharedHash: string;
     expectedRevision?: number | null;
+    expectedSharedHash?: string | null;
   }): Promise<RelayRoom> {
+    const sharedHash = await hashRelayYjsMarkdownState(input.yjsState);
     const params = [
       input.relayRoomId,
       Buffer.from(input.yjsState),
-      input.sharedHash,
+      sharedHash,
       input.expectedRevision ?? null,
+      input.expectedSharedHash ?? null,
       relayEphemeralCacheTtlMs() / 1000,
     ];
     const result = await this.pool.query<RelayRoomRow>(
@@ -400,12 +440,13 @@ export class RelayRoomService {
               accepted_shared_revision = shared_revision + 1,
               accepted_shared_hash = $3,
               ephemeral_last_updated_at = now(),
-              ephemeral_cache_expires_at = now() + ($5::double precision * interval '1 second'),
+              ephemeral_cache_expires_at = now() + ($6::double precision * interval '1 second'),
               shared_revision = shared_revision + 1,
               updated_at = now()
         where id = $1
           and state = 'host_online'
           and ($4::integer is null or shared_revision = $4)
+          and ($5::text is null or coalesce(last_shared_hash, '') = $5)
         returning id, host_session_id, state, last_ephemeral_yjs_state, last_shared_hash, shared_revision, created_at, updated_at`,
       params,
     );
@@ -721,12 +762,15 @@ export function createInMemoryRelayRoomService(): RelayRoomService {
       lastSharedHash?: string | null;
     } = {}): Promise<RelayRoom> {
       const timestamp = now();
+      const lastSharedHash = input.lastEphemeralYjsState
+        ? await hashRelayYjsMarkdownState(input.lastEphemeralYjsState)
+        : (input.lastSharedHash ?? null);
       const room: RelayRoom = {
         relayRoomId: `relay_${nextRoomId++}`,
         hostSessionId: input.hostSessionId ?? null,
         state: input.hostSessionId ? 'host_online' : 'host_offline',
         lastEphemeralYjsState: input.lastEphemeralYjsState ? new Uint8Array(input.lastEphemeralYjsState) : null,
-        lastSharedHash: input.lastSharedHash ?? null,
+        lastSharedHash,
         sharedRevision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -767,13 +811,22 @@ export function createInMemoryRelayRoomService(): RelayRoomService {
       relayRoomId: string;
       yjsState: Uint8Array;
       sharedHash: string;
+      expectedRevision?: number | null;
+      expectedSharedHash?: string | null;
     }): Promise<RelayRoom> {
+      const sharedHash = await hashRelayYjsMarkdownState(input.yjsState);
       const room = await this.getRoom(input.relayRoomId);
       if (!isHostOnline(room.state)) throw new Error('relay_shared_state_not_accepted');
+      if (input.expectedRevision !== undefined && input.expectedRevision !== null && input.expectedRevision !== room.sharedRevision) {
+        throw new Error('relay_shared_state_not_accepted');
+      }
+      if (input.expectedSharedHash !== undefined && input.expectedSharedHash !== null && input.expectedSharedHash !== (room.lastSharedHash ?? '')) {
+        throw new Error('relay_shared_state_not_accepted');
+      }
       const next = {
         ...room,
         lastEphemeralYjsState: new Uint8Array(input.yjsState),
-        lastSharedHash: input.sharedHash,
+        lastSharedHash: sharedHash,
         sharedRevision: room.sharedRevision + 1,
         updatedAt: now(),
       };

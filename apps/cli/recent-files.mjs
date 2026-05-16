@@ -47,7 +47,15 @@ export async function fetchLocalJson(daemon, path, options = {}) {
 
   const body = await readResponseText(response);
   if (!response.ok) {
-    throw new AgentCommandError(options.errorCode ?? 'daemon_not_running', options.errorMessage ?? 'MarkLab daemon request failed.', {
+    let responseError = null;
+    try {
+      responseError = body ? JSON.parse(body)?.error : null;
+    } catch {
+      responseError = null;
+    }
+    const mappedCode = typeof responseError === 'string' ? options.errorCodeByBody?.[responseError] : null;
+    const mappedMessage = typeof responseError === 'string' ? options.errorMessageByBody?.[responseError] : null;
+    throw new AgentCommandError(mappedCode ?? options.errorCode ?? 'daemon_not_running', mappedMessage ?? options.errorMessage ?? 'MarkLab daemon request failed.', {
       path: daemon.realpath,
       status: response.status,
       body,

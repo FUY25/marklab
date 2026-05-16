@@ -240,6 +240,72 @@ This file records correctness/security bugs found by plan-level review passes.
    - Impact: document ids, branch ids, or grant ids containing `/` could be emitted as multiple path segments and target the wrong route.
    - Resolution: fixed by adding strict RFC 3986 segment encoding and tests for slash-containing ids.
 
+## Plan 5 Reconnect Conflict Hardening Review Findings
+
+1. Host relay resume could overwrite newer shared state without conflict review.
+   - Impact: a restarted host daemon could publish a stale local file over relay state that advanced while the host was offline, because ordinary `host_update` did not carry expected shared revision/hash and host hello did not reconcile remote state before publishing.
+   - Resolution: host startup now reconciles relay hello state before starting the publish loop, applies remote-only changes locally, opens a structured reconnect conflict when local and shared both changed, and sends expected shared revision/hash on ordinary host publishes. Regression coverage asserts relay state is not overwritten after host resume.
+
+2. Mirror reconnect after host return created only a generic paused state.
+   - Impact: CLI/browser conflict inspection could see a paused message with no conflict id, local/shared/base Markdown, expected shared revision/hash, or resolvable conflict route. It also paused even when only the local side changed.
+   - Resolution: relay host-online status now includes current shared revision/hash/state, and mirror reconnect opens a structured conflict package only when both local and shared changed. Local-only mirror edits replay when host authority returns. Regression coverage covers both paths.
+
+3. Native conflict resolution had a check-then-write race.
+   - Impact: an external file write between the native conflict refresh check and the local save could be overwritten after the shared editor accepted the resolution.
+   - Resolution: native conflict commit now uses a guarded local save that verifies the current on-disk Markdown and file identity immediately before replacing the file; disk races refresh the conflict instead of overwriting. Regression coverage mutates disk during the native ingestion commit hook.
+
+4. Mirror conflict-resolution publish could overwrite newer shared state after its initial verify.
+   - Impact: `publishResolvedState()` checked expected shared revision/hash during hello, then sent a replacement proposal without carrying that guard through relay acceptance. A later shared update before host ack could be silently replaced.
+   - Resolution: mirror proposals now carry expected shared revision/hash, the relay stores those guards on the pending proposal, forwards them to the host, and rejects stale host acknowledgements back to the proposer without advancing shared state. Regression coverage advances relay state between proposal and host ack.
+
+5. Mirror rejected-proposal reconnect path still produced an unresolvable paused string.
+   - Impact: `host_offline` / `host_lease_expired` proposal rejections closed the mirror socket and never produced a conflict id or structured local/shared/base payload for CLI/browser resolution.
+   - Resolution: mirror host-offline/lease rejections now mark the mirror disconnected but keep the socket alive so the host-online payload can replay local-only changes or open a structured reconnect conflict. Regression coverage uses a host-lease rejection followed by a shared change.
+
+6. Native guarded save still had a final same-inode write window before rename.
+   - Impact: an external writer that wrote the same inode after the final content check but before rename could still be overwritten.
+   - Resolution: native guarded save now hard-links the original file before replacement, restores that backup if the original inode changes after the final check, and leaves the conflict open. Regression coverage writes during the final replacement hook and verifies the external write remains on disk.
+
+7. Use-shared conflict resolution skipped active-provider verification when no relay publish was needed.
+   - Impact: an active collaborator edit could race with a keep-shared local disk commit and leave the conflict marked resolved against stale shared Markdown.
+   - Resolution: use-shared now verifies and closes active provider state before applying/committing the local resolution even when no relay publish is needed. Regression coverage forces active-provider verification to report stale state and confirms disk/conflict remain unchanged.
+
+8. Use-local and manual conflict resolve published to Relay before active-provider application.
+   - Impact: if the active provider changed after verification but before application, Relay could advance to a resolution the live provider never accepted, leaving shared state ahead of the local conflict.
+   - Resolution: use-local and resolve now apply the prepared resolution to the active provider before publishing to Relay, and failures refresh the conflict without publishing. Regression coverage asserts provider-apply failure leaves Relay unchanged.
+
+9. Ordinary mirror local-change proposals lacked expected shared-state guards.
+   - Impact: a mirror replaying local-only edits after reconnect could race with a shared update and overwrite newer shared state through the host acknowledgement path.
+   - Resolution: ordinary mirror proposals now include the last accepted shared revision/hash, Relay rejects stale proposals with the current shared state package, and the mirror opens a structured reconnect conflict instead of continuing blind.
+
+10. Malformed conflict-resolution and Relay shared-state bodies needed explicit failure-path coverage.
+    - Impact: invalid route bodies could regress to 500s or mutate state before validation without a focused test catching it.
+    - Resolution: added route tests proving malformed conflict resolution and host-published shared-state bodies return `400 invalid_request` and leave local/relay state unchanged.
+
+11. Old direct conflict-resolution service APIs remained in local route test doubles.
+    - Impact: stale `useSharedConflict`, `useLocalConflict`, and `resolveConflict` stubs obscured that the guarded route-only resolution path is now the supported API.
+    - Resolution: removed the stale methods from the local route test double and verified no production call sites use them.
+
+12. Native guarded conflict save still overwrote external atomic replacements.
+    - Impact: an external editor that saved by atomic rename after MarkLab's final check could be overwritten by native conflict resolution.
+    - Resolution: native guarded save now rechecks file identity and Markdown after the replacement hook and before renaming MarkLab's temp file. Regression coverage uses `FileManager.replaceItemAt`.
+
+13. API guarded conflict save had the same atomic replacement race.
+    - Impact: local daemon conflict resolution could overwrite an external atomic save between the final disk check and MarkLab's replace.
+    - Resolution: the guarded write helper now has a final pre-replace hook/check path for conflict resolution and verifies/restores the backup after replacement. Regression coverage atomically renames an external replacement during conflict commit.
+
+14. Initial reconnect conflict creation failed raw when the backing file disappeared.
+    - Impact: if the local file was deleted between the reconnect decision and conflict package creation, the caller saw a raw `ENOENT` instead of a paused missing-file state.
+    - Resolution: initial conflict opening now pauses the document as `host_file_missing` or `mirror_file_missing` and throws `local_file_missing`. Regression coverage removes the backing file before opening a reconnect conflict.
+
+15. Keep-shared was blocked by host-offline verification even when no relay publish was required.
+    - Impact: users could be unable to recover by accepting the already-stored shared snapshot during host-offline reconnect, even though no shared-state write was needed.
+    - Resolution: `use-shared` now checks the conflict's stored expected state first, prepares/applies the shared snapshot locally, and only treats host-offline as blocking when a relay publish is required. Regression coverage keeps shared locally with an offline mirror.
+
+16. Empty expected shared hashes made conflicts unresolvable through route validation.
+    - Impact: relay rooms without a published shared hash could create conflicts with `expectedSharedHash: ""`, but the route schema rejected that guard with `400 invalid_request`.
+    - Resolution: conflict resolution routes now allow an empty expected shared hash while still requiring the revision guard. Regression coverage resolves a conflict whose relay room starts with a null shared hash.
+
 48. Protocol-relative Markdown links were treated as internal links.
     - Impact: `[x](//attacker.example/path)` could navigate to a third-party URL without `noreferrer`, leaking the collab URL and query token on click.
     - Resolution: protocol-relative links are treated as external and receive `rel="noreferrer noopener"` plus `_blank`. Renderer tests cover this case.
@@ -427,3 +493,55 @@ This file records correctness/security bugs found by plan-level review passes.
 94. Hosted native editor did not verify server-preserved app client kind.
     - Impact: if native bearer injection failed and the server downgraded `clientKind=app` to `browser`, the embedded editor could continue as a browser session inside MarkLab.app.
     - Resolution: `CollaborativeMarkdownEditor` now treats app-client downgrade as `invalid_edit_session_client_kind` and does not connect to the provider. App routing tests cover a downgraded native edit response.
+
+95. API guarded conflict resolution still had a final atomic overwrite window.
+    - Impact: an external editor could atomically replace the Markdown file after MarkLab's final identity/hash check but before the guarded commit rename, and MarkLab could overwrite that newer file.
+    - Resolution: the API guarded writer now moves the expected file aside, validates the moved-aside inode/content, and commits by hard-linking the prepared temp file into the now-empty destination. If any external file appears first, the operation returns conflict instead of overwriting it. Local-file tests cover the external atomic replacement race.
+
+96. Native guarded conflict resolution had the same final overwrite window.
+    - Impact: MarkLab.app could overwrite a newer external atomic replacement during `saveIfCurrentMarkdownMatches`, even though earlier checks proved only the pre-window file identity.
+    - Resolution: Swift now uses the same move-aside plus exclusive-link guarded commit pattern and rejects external atomic replacements without overwriting them. Swift tests cover the race.
+
+97. Hosted `/shared-state` rejected an empty expected shared hash.
+    - Impact: publishing the first shared state for a room with no prior shared hash could fail validation even though the relay service treats the empty hash as the correct initial guard.
+    - Resolution: the hosted relay route now accepts an empty `expectedSharedHash`, and route coverage publishes initial shared state with `expectedSharedHash: ""`.
+
+98. Missing host backing files closed the host socket before sending proposal rejection.
+    - Impact: browser collaborators could time out or see a generic host-offline failure when the host Markdown file disappeared because the daemon nulled the socket before sending `host_file_missing`.
+    - Resolution: the host controller now sends `host_reject` with `host_file_missing` on the active socket before pausing/closing the host. Relay tests verify the collaborator receives the structured reason and the host transitions offline.
+
+99. Conflict resolution left the active provider mutated when relay publish failed.
+    - Impact: `use-local` and pasted conflict resolution could update the active provider Y.Doc before relay publish succeeded. If publish then failed, disk and relay stayed unresolved but connected/new provider clients could see an unpublished resolution.
+    - Resolution: relay-publish failure now restores the active provider to the conflict's shared Yjs state under an expected-current-hash guard before refreshing the open conflict. Route tests simulate the active provider hash and verify rollback after `host_offline`.
+
+100. Browser pasted conflict resolution allowed accidental empty-document commits.
+    - Impact: the resolved Markdown field started empty and the apply button was enabled, so one click could publish an empty document without confirmation.
+    - Resolution: browser conflict review now requires non-empty resolved Markdown, shows a resolved preview, and requires typing `APPLY RESOLVED` before the custom resolution can submit.
+
+101. Native pasted conflict resolution allowed accidental empty-document commits.
+    - Impact: MarkLab.app queued the default empty resolved buffer when the shared editor was available, making the native custom resolution path more destructive than the explicit local/shared choices.
+    - Resolution: native conflict resolution now requires non-empty resolved Markdown plus `APPLY RESOLVED` confirmation before queueing the shared-editor resolution. Swift tests cover the guard and successful confirmed queueing.
+
+102. Postgres relay shared-state acceptance rejected the initial empty hash guard.
+     - Impact: the in-memory relay accepted `expectedSharedHash: ""` when a room had no prior shared hash, but the Postgres path compared `last_shared_hash = ''` and rejected `NULL`, breaking first publish acceptance for database-backed relays.
+     - Resolution: the Postgres guard now coalesces `last_shared_hash` to the empty string for guarded comparison, and relay service tests cover a null stored hash with an empty expected hash.
+
+103. Guarded conflict rollback could discard the moved-aside original after destination corruption.
+     - Impact: if the new destination was corrupted after MarkLab linked the prepared file but before the committed-content verification, rollback saw the destination already existed, deleted the moved-aside original, and left the bad destination on disk.
+     - Resolution: API and native guarded writers now restore the moved-aside original over a bad destination for post-commit verification mismatches while still preserving external destinations for pre-link conflicts. Regression tests cover both paths.
+
+104. Host-side reconnect conflict resolution could deadlock after the host marked itself offline.
+     - Impact: the host conflict opener closed the relay socket and marked the room offline, so `accept local` and pasted resolution could fail forever with `host_offline`, and `keep shared` could appear resolved while the relay host stayed offline.
+     - Resolution: host conflict publishing now reopens the host socket before verifying/publishing, and keep-shared resolution resumes the host relay before committing the local resolution. Relay and route regressions cover both paths.
+
+105. Mirror reconnect conflicts could use the wrong shared-state guard when the relay hash was null.
+     - Impact: a room with no stored relay hash compared as the empty hash at verification time, but conflict packages could fall back to the computed shared content hash and make every resolution fail as stale.
+     - Resolution: reconnect conflict creation now stores the actual shared content hash separately from the expected relay guard and defaults the expected hash to `""` when the relay reports `null`. Mirror conflict open paths now pass the normalized expected hash explicitly.
+
+106. Conflict review showed raw versions but no diff before destructive choices.
+     - Impact: browser and native users could be asked to choose local/shared/resolved without seeing an explicit diff, violating the preview-first conflict UX contract.
+     - Resolution: browser conflict review and native conflict panels now render an explicit local/shared diff before the resolution controls. Component and Swift tests cover the diff preview.
+
+107. Conflict packages did not expose the required `lastProjectedMarkdown` and `lastProjectedHash` fields.
+     - Impact: clients and agents could inspect a conflict without the baseline required by the spec, especially when optional base fields were null.
+     - Resolution: conflict packages now persist and expose `lastProjectedMarkdown` and `lastProjectedHash`; older stored conflicts are normalized on load with base-field fallbacks. Route coverage asserts both fields are returned.

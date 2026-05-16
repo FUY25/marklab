@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import * as Y from 'yjs';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import {
+  createRelayRoomService,
   createOrUpdateRelaySession,
   createRelayGrant,
   createRelayRoom,
@@ -56,6 +59,14 @@ interface RelaySessionRecord {
 const createdAt = new Date('2026-05-01T12:00:00Z');
 const updatedAt = new Date('2026-05-01T12:05:00Z');
 
+function createTextState(markdown: string): Uint8Array {
+  const doc = new Y.Doc();
+  doc.getText('contents').insert(0, markdown);
+  const state = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return state;
+}
+
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -107,6 +118,25 @@ function createRelayPool(seed: {
       const room = rooms.find((candidate) => candidate.id === params?.[0]);
       if (!room) return { rows: [], rowCount: 0 };
       room.state = 'host_offline';
+      room.updated_at = updatedAt;
+      return { rows: [room as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('update relay_rooms') && sql.includes('accepted_shared_revision')) {
+      const room = rooms.find((candidate) => candidate.id === params?.[0]);
+      if (!room) return { rows: [], rowCount: 0 };
+      const expectedRevision = params?.[3] as number | null | undefined;
+      const expectedHash = params?.[4] as string | null | undefined;
+      if (room.state !== 'host_online') return { rows: [], rowCount: 0 };
+      if (expectedRevision !== undefined && expectedRevision !== null && room.shared_revision !== expectedRevision) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (expectedHash !== undefined && expectedHash !== null && (room.last_shared_hash ?? '') !== expectedHash) {
+        return { rows: [], rowCount: 0 };
+      }
+      room.last_ephemeral_yjs_state = (params?.[1] as Uint8Array | null | undefined) ?? null;
+      room.last_shared_hash = String(params?.[2]);
+      room.shared_revision += 1;
       room.updated_at = updatedAt;
       return { rows: [room as Row], rowCount: 1 };
     }
@@ -524,6 +554,41 @@ describe('relay-room service', () => {
       sharedRevision: 2,
       lastSharedHash: 'sha256:new',
     });
+  });
+
+  it('accepts an empty expected shared hash against a null postgres room hash', async () => {
+    const { pool, queries, rooms } = createRelayPool({
+      rooms: [
+        {
+          id: 'room_1',
+          host_session_id: 'session_host',
+          state: 'host_online',
+          last_ephemeral_yjs_state: null,
+          last_shared_hash: null,
+          shared_revision: 0,
+          created_at: createdAt,
+          updated_at: createdAt,
+        },
+      ],
+    });
+    const service = createRelayRoomService(pool);
+    const yjsState = createTextState('# First\n');
+
+    const room = await service.acceptSharedState({
+      relayRoomId: 'room_1',
+      yjsState,
+      sharedHash: 'sha256:caller-placeholder',
+      expectedRevision: 0,
+      expectedSharedHash: '',
+    });
+
+    expect(room).toMatchObject({
+      relayRoomId: 'room_1',
+      sharedRevision: 1,
+      lastSharedHash: sha256Hex('# First\n'),
+    });
+    expect(rooms[0]?.last_shared_hash).toBe(sha256Hex('# First\n'));
+    expect(queries.map((query) => query.sql).join('\n')).toContain("coalesce(last_shared_hash, '') = $5");
   });
 
   it('share-state hides raw token material and revoking one grant leaves unrelated grant and host metadata intact', async () => {

@@ -24,6 +24,8 @@ describe('agent JSON contract', () => {
     expect(exitCodeForAgentError('sync_timeout')).toBe(agentExitCodes.timeout);
     expect(exitCodeForAgentError('doctor_failed')).toBe(agentExitCodes.doctorFailure);
     expect(exitCodeForAgentError('relay_unavailable')).toBe(agentExitCodes.featureUnavailable);
+    expect(exitCodeForAgentError('invalid_conflict_action')).toBe(agentExitCodes.invalidCommandOrTarget);
+    expect(exitCodeForAgentError('conflict_resolution_failed')).toBe(agentExitCodes.featureUnavailable);
   });
 
   it('rejects unknown error codes instead of inventing unstable codes', () => {

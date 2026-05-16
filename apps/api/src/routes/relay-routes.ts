@@ -28,6 +28,13 @@ const createRelaySessionSchema = z.object({
   displayName: z.string().default(''),
 });
 
+const acceptRelaySharedStateSchema = z.object({
+  yjsStateBase64: z.string().min(1),
+  sharedHash: z.string().min(1),
+  expectedSharedRevision: z.number().int().nonnegative().nullable().optional(),
+  expectedSharedHash: z.string().nullable().optional(),
+});
+
 function requiredParam(req: Request, name: string): string {
   const value = req.params[name];
   if (typeof value !== 'string' || !value) throw new Error(`missing_route_param:${name}`);
@@ -197,6 +204,32 @@ export function createRelayRoutes(options: RelayRoutesOptions = {}) {
       const relayRoomId = requiredParam(req, 'relayRoomId');
       await requireRelayManagementOrRoomHost(req, service, relayRoomId);
       res.json(await service.listShareState(relayRoomId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/relay/rooms/:relayRoomId/shared-state', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const service = requireRelayService(options.relayService);
+      if (!service.acceptSharedState) throw new Error('relay_service_not_configured');
+      const relayRoomId = requiredParam(req, 'relayRoomId');
+      await requireRelayManagementOrRoomHost(req, service, relayRoomId);
+      const body = acceptRelaySharedStateSchema.parse(req.body);
+      const room = await service.acceptSharedState({
+        relayRoomId,
+        yjsState: decodeBase64(body.yjsStateBase64) ?? new Uint8Array(),
+        sharedHash: body.sharedHash,
+        expectedRevision: body.expectedSharedRevision ?? null,
+        expectedSharedHash: body.expectedSharedHash ?? null,
+      });
+      res.json({
+        relayRoomId: room.relayRoomId,
+        hostSessionId: room.hostSessionId,
+        state: room.state,
+        sharedRevision: room.sharedRevision,
+        lastSharedHash: room.lastSharedHash,
+      });
     } catch (error) {
       next(error);
     }

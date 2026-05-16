@@ -135,6 +135,7 @@ async function main() {
   const app = createHttpApp(pool, liveWriter, {
     flushCollabDocument: collab.flushDocument,
     applyCollabDocumentState: collab.applyDocumentState,
+    verifyCollabDocumentState: collab.verifyDocumentState,
     closeCollabDocumentConnections: collab.closeDocumentConnections,
     ...(providerTokenService ? { providerTokenService } : {}),
     ...(ysweetProvider

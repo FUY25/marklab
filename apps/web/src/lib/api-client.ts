@@ -114,12 +114,16 @@ export interface ReconnectConflict {
   baseMarkdown: string | null;
   baseYjsStateBase64: string | null;
   baseHash: string | null;
+  lastProjectedMarkdown: string;
+  lastProjectedHash: string;
   localMarkdown: string;
   localYjsStateBase64: string;
   localHash: string;
   sharedMarkdown: string;
   sharedYjsStateBase64: string;
   sharedHash: string;
+  expectedSharedRevision?: number;
+  expectedSharedHash?: string;
   sharedStateFingerprint: string;
   sharedRevision: number;
   createdAt: string;
@@ -142,10 +146,6 @@ export interface ConflictResolutionResponse {
   status: 'resolved';
   hash: string;
   sharedRevision: number | null;
-}
-
-export interface ConflictAiPromptResponse {
-  prompt: string;
 }
 
 export interface ReadDocumentResponse {
@@ -619,10 +619,11 @@ export class MarklabWebApi {
     return requireJsonResponse<CurrentConflictResponse>(response, 'local_conflict');
   }
 
-  async useSharedLocalConflict(conflictId: string): Promise<ConflictResolutionResponse> {
+  async useSharedLocalConflict(conflictId: string, input: Pick<ResolveConflictRequest, 'expectedSharedRevision' | 'expectedSharedHash'>): Promise<ConflictResolutionResponse> {
     const response = await fetch(`${this.apiUrl}/api/local/conflicts/${encodeURIComponent(conflictId)}/use-shared`, {
       method: 'POST',
-      headers: this.localHeaders(),
+      headers: this.localHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(input),
     });
     return requireJsonResponse<ConflictResolutionResponse>(response, 'local_conflict_use_shared');
   }
@@ -643,23 +644,6 @@ export class MarklabWebApi {
       body: JSON.stringify(input),
     });
     return requireJsonResponse<ConflictResolutionResponse>(response, 'local_conflict_resolve');
-  }
-
-  async getLocalConflictAiPrompt(conflictId: string): Promise<string> {
-    const response = await fetch(`${this.apiUrl}/api/local/conflicts/${encodeURIComponent(conflictId)}/ai-prompt`, {
-      headers: this.localHeaders(),
-    });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`local_conflict_ai_prompt_failed:${response.status}:${body}`);
-    }
-
-    const contentType = response.headers.get('Content-Type') ?? '';
-    if (contentType.includes('application/json')) {
-      const body = (await response.json()) as ConflictAiPromptResponse;
-      return body.prompt;
-    }
-    return response.text();
   }
 
   async getLocalShareState(): Promise<RelayShareState> {
