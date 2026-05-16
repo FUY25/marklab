@@ -5,14 +5,17 @@
   "type": "module",
   "scripts": {
     "build": "swift build",
+    "build:local-editor": "esbuild editor-web/markedit-local-editor.ts --bundle --format=esm --target=es2020 --minify --outfile=Sources/MarkLabApp/Resources/MarkEditLocalEditor/local-editor.js",
     "test": "swift test",
     "smoke:native-browser": "tsx smoke/native-browser-smoke.ts"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
     "@marklab/api": "workspace:*",
     "@marklab/collab-editor": "workspace:*",
     "@y-sweet/client": "0.9.1",
     "@y-sweet/sdk": "0.9.1",
+    "codemirror": "^6.0.2",
     "ws": "^8.18.0",
     "y-protocols": "^1.0.6",
     "y-sweet": "0.9.1",
@@ -20,6 +23,7 @@
   },
   "devDependencies": {
     "@types/ws": "^8.5.0",
+    "esbuild": "^0.27.7",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
   }

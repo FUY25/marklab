@@ -57,6 +57,7 @@ async function createYSweetAuthPair(): Promise<{ privateKey: string; serverToken
 async function runNativeRuntimeGate(): Promise<void> {
   await execFileAsync('swift', ['build', '--product', 'MarkLabApp'], { cwd: packageRoot });
   await execFileAsync('swift', ['test', '--filter', 'NativeCollaborationRuntimeTests'], { cwd: packageRoot });
+  await execFileAsync('swift', ['test', '--filter', 'MarkLabNativeUIStrategyTests'], { cwd: packageRoot });
 }
 
 async function getFreePort(): Promise<number> {
@@ -418,6 +419,7 @@ async function main(): Promise<void> {
       nativeText: nativeText.toString(),
       diskMarkdown: await readFile(diskPath, 'utf8'),
       nativeRuntimeGate: true,
+      nativeShellGate: true,
       nativeAppBuildGate: true,
       nativeProjectionHelperGate: true,
       nativeConflictGate: true,

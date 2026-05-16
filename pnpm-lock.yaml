@@ -256,6 +256,9 @@ importers:
 
   apps/marklab-macos:
     dependencies:
+      '@codemirror/lang-markdown':
+        specifier: ^6.5.0
+        version: 6.5.0
       '@marklab/api':
         specifier: workspace:*
         version: link:../api
@@ -268,6 +271,9 @@ importers:
       '@y-sweet/sdk':
         specifier: 0.9.1
         version: 0.9.1
+      codemirror:
+        specifier: ^6.0.2
+        version: 6.0.2
       ws:
         specifier: ^8.18.0
         version: 8.20.0
@@ -284,6 +290,9 @@ importers:
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
+      esbuild:
+        specifier: ^0.27.7
+        version: 0.27.7
       tsx:
         specifier: ^4.19.0
         version: 4.21.0

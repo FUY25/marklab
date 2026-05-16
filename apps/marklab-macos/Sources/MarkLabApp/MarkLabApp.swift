@@ -8,7 +8,7 @@ import MarkLabMacOS
 struct MarkLabApp: App {
   var body: some Scene {
     WindowGroup("MarkLab") {
-      MarkLabRootView(model: MarkLabAppModel())
+      MarkLabRootView(model: MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: true))
     }
   }
 }
@@ -55,19 +55,22 @@ final class MarkLabAppModel: ObservableObject {
   private var projectionTask: Task<Void, Never>?
   private var diskIngestionRevision = 0
   private var fileWatcher: DispatchSourceFileSystemObject?
+  let opensSelectedFilesInNewDocumentWindow: Bool
 
   init(
     hostedShareController: NativeHostedShareController? = MarkLabAppModel.makeHostedShareControllerFromEnvironment(),
     baselineStore: NativeProjectionBaselineStore = FileNativeProjectionBaselineStore.defaultStore(),
     conflictStore: NativeConflictStore = NativeConflictStore.defaultStore(),
     nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"],
-    beforeDiskIngestionReplace: (() -> Void)? = nil
+    beforeDiskIngestionReplace: (() -> Void)? = nil,
+    opensSelectedFilesInNewDocumentWindow: Bool = false
   ) {
     self.hostedShareController = hostedShareController
     self.baselineStore = baselineStore
     self.conflictStore = conflictStore
     self.nativeBearerToken = nativeBearerToken
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
+    self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
     if hostedShareController == nil {
       statusText = "Open a Markdown file. Sign in/workspace environment is required before sharing."
     }
@@ -98,7 +101,20 @@ final class MarkLabAppModel: ObservableObject {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }
+    if shouldOpenSelectedFileInNewDocumentWindow {
+      switch MarkEditDocumentWindowCoordinator.shared.openDocumentWindow(fileURL: url) {
+      case .opened:
+        statusText = "Opened \(url.lastPathComponent) in a document window."
+      case let .failed(statusText):
+        self.statusText = statusText
+      }
+      return
+    }
     loadFile(url)
+  }
+
+  var shouldOpenSelectedFileInNewDocumentWindow: Bool {
+    opensSelectedFilesInNewDocumentWindow || filePath != nil
   }
 
   func loadFile(_ url: URL) {
@@ -659,130 +675,7 @@ struct MarkLabRootView: View {
   @StateObject var model: MarkLabAppModel
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("MarkLab")
-        .font(.title2)
-      Text(model.statusText)
-        .foregroundStyle(.secondary)
-      HStack {
-        Button("Open") { model.openFile() }
-        Button("Save") { model.saveFileFromUI() }
-          .disabled(model.filePath == nil || model.conflict != nil)
-        Button("Start Sharing") { model.startSharing() }
-          .disabled(!model.actionsEnabled)
-        Button("Create Edit Link") { model.createLink(role: .edit) }
-          .disabled(!model.actionsEnabled)
-        Button("Create View Link") { model.createLink(role: .view) }
-          .disabled(!model.actionsEnabled)
-        Button("Copy Link") { model.copyLatestLink() }
-          .disabled(model.latestLink == nil)
-        Button("Revoke Link") { model.revokeLatestLink() }
-          .disabled(model.latestGrantId == nil)
-      }
-      if let latestLink = model.latestLink {
-        Text(latestLink)
-          .textSelection(.enabled)
-          .font(.caption)
-      }
-      if let context = model.localDaemonContext {
-        HStack {
-          Text("Local daemon: \(context.shareState.hostOnline ? "online" : "offline") · versions \(context.versions.count)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Button("Restore Latest Version") { model.restoreLatestVersion() }
-            .disabled(context.versions.isEmpty || model.conflict != nil)
-        }
-      }
-      if let conflict = model.conflict {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Conflict")
-            .font(.headline)
-          Text("Status \(conflict.status) · local \(conflict.localHash.prefix(12)) · shared \(conflict.sharedHash.prefix(12)) · base \(conflict.baselineHash.prefix(12)) · rev \(conflict.sharedRevision.map(String.init) ?? "unknown")")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-          HStack(alignment: .top) {
-            VStack(alignment: .leading) {
-              Text("Local disk")
-                .font(.caption)
-              TextEditor(text: .constant(conflict.localMarkdown))
-                .font(.system(.body, design: .monospaced))
-            }
-            VStack(alignment: .leading) {
-              Text("Shared editor")
-                .font(.caption)
-              TextEditor(text: .constant(conflict.sharedMarkdown))
-                .font(.system(.body, design: .monospaced))
-            }
-            VStack(alignment: .leading) {
-              Text("Base")
-                .font(.caption)
-              TextEditor(text: .constant(conflict.baselineMarkdown))
-                .font(.system(.body, design: .monospaced))
-            }
-          }
-          VStack(alignment: .leading) {
-            Text("Conflict diff")
-              .font(.caption)
-            TextEditor(text: .constant(conflict.diffPreview))
-              .font(.system(.body, design: .monospaced))
-              .frame(minHeight: 72)
-          }
-          HStack {
-            Button("Accept Local") { model.acceptLocalConflictVersion() }
-              .disabled(!model.canResolveConflictThroughSharedEditor)
-            Button("Keep Shared") { model.keepSharedConflictVersion() }
-              .disabled(!model.canResolveConflictThroughSharedEditor)
-          }
-          VStack(alignment: .leading) {
-            Text("Resolved Markdown")
-              .font(.caption)
-            TextEditor(text: $model.resolvedConflictMarkdown)
-              .font(.system(.body, design: .monospaced))
-              .frame(minHeight: 96)
-            Text("Resolved preview")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            TextEditor(text: .constant(model.resolvedConflictMarkdown))
-              .font(.system(.body, design: .monospaced))
-              .frame(minHeight: 64)
-            TextField("Type APPLY RESOLVED to confirm", text: $model.resolvedConflictConfirmation)
-              .textFieldStyle(.roundedBorder)
-            Button("Apply Resolved Markdown") { model.resolveConflictWithMergedMarkdown() }
-              .disabled(!model.canApplyResolvedConflictMarkdown)
-          }
-        }
-        .frame(minHeight: 160)
-      }
-      if let embeddedCollabURL = model.embeddedCollabURL {
-        HostedCollabWebView(
-          url: embeddedCollabURL,
-          diskIngestion: model.pendingDiskIngestion,
-          nativeBearerToken: model.nativeBearerToken,
-          onMarkdownSnapshot: { markdown in model.projectSharedMarkdownFromWebView(markdown) },
-          onDiskIngestionResult: { result in model.handleDiskIngestionBridgeResult(result) }
-        )
-        .frame(minHeight: model.conflict == nil ? 360 : 1, maxHeight: model.conflict == nil ? .infinity : 1)
-        .opacity(model.conflict == nil ? 1 : 0)
-        .allowsHitTesting(model.conflict == nil)
-        .accessibilityHidden(model.conflict != nil)
-      } else {
-        TextEditor(text: $model.text)
-          .font(.system(.body, design: .monospaced))
-          .disabled(model.filePath == nil || model.conflict != nil)
-          .overlay {
-            if model.filePath == nil {
-              Text("Open a Markdown file")
-                .foregroundStyle(.secondary)
-            }
-          }
-      }
-    }
-    .padding(24)
-    .frame(minWidth: 760, minHeight: 520)
-    .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
-      model.ingestExternalFileChanges()
-    }
+    MarkEditDocumentShellView(model: model)
   }
 }
 

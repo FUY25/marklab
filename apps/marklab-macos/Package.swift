@@ -11,7 +11,11 @@ let package = Package(
   ],
   targets: [
     .target(name: "MarkLabMacOS"),
-    .executableTarget(name: "MarkLabApp", dependencies: ["MarkLabMacOS"]),
+    .executableTarget(
+      name: "MarkLabApp",
+      dependencies: ["MarkLabMacOS"],
+      resources: [.process("Resources")]
+    ),
     .testTarget(name: "MarkLabMacOSTests", dependencies: ["MarkLabMacOS", "MarkLabApp"]),
   ]
 )
