@@ -49,13 +49,14 @@ This plan does not build billing or production deploy. It makes local installati
 - Browser collaborator links should open the public web origin at `/collab?docId=...&branchId=...&token=...&mode=edit|view`. Existing `apps/web` share/access panels now generate that route shape, with assets under `/collab-web/`.
 - `/workspaces/:workspaceId/settings` exists in `apps/collab-web` with Members and Documents tabs plus a disabled Plan & Billing placeholder. Packaging/docs should route workspace administration to that browser shell until native settings UI exists.
 
-## Native Facts From Plan 4
+## Native Facts From Plans 4 And 5.5
 
-- Native source is `apps/marklab-macos/`, a SwiftPM package using a Reference MarkEdit strategy. Package from this repo; do not assume a separate native repository.
-- The native app currently embeds the hosted `/collab` editor in a WKWebView for shared editing. Later packaging may bundle a richer/native Yjs runtime, but alpha packaging must include the hosted-collab bridge behavior and its same-origin API authorization injection.
+- Native source is `apps/marklab-macos/`, a SwiftPM package using a Port MarkEdit UI shell strategy. Package from this repo; do not assume a separate native repository.
+- The native app now uses a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local Markdown editor surface, toolbar/status/inspector collaboration layer, and document-scoped conflict panel. Packaging smoke must open the packaged app into that shell; a generic SwiftUI prototype form is no longer the expected UI.
+- The native app embeds the hosted `/collab` editor in a WKWebView for shared editing. Later packaging may bundle a richer/native Yjs runtime, but alpha packaging must include the hosted-collab bridge behavior and its same-origin API authorization injection.
 - The packaged runtime must include workspace links for `packages/shared`, `packages/markdown`, and `packages/collab-editor`. `prepare-package.mjs` already copies `packages/collab-editor`; keep package smokes covering this so clean installs do not fail on `@marklab/collab-editor`.
 - MarkLab.app starts or reuses the local daemon with `marklab share --json --daemon-only`, then reads `/api/local/app-context`. Packaging must preserve that daemon-only boundary and must not create hidden relay grants just to bootstrap app local state.
-- Native app/browser smoke command is `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. The passing smoke returns app-kind/browser convergence, disk projection, and bidirectional cursor-awareness gates. It does not prove a signed `.app` bundle, notarization, or GUI WKWebView automation; Task 4 and Task 6 must add those packaging-specific checks.
+- Native app/browser smoke command is `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. The passing smoke returns shell/runtime gates, app-kind/browser convergence, disk projection, and bidirectional cursor-awareness gates. It does not prove a signed `.app` bundle, notarization, or GUI WKWebView automation; Task 4 and Task 6 must add those packaging-specific checks.
 
 ## File Structure
 

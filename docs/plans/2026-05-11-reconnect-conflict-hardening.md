@@ -58,15 +58,15 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 - Browser E2E now includes a real API-root Y-Sweet websocket smoke for two browser edit tabs, plus a faster memory-provider reconnect test for queued local edits. This plan still needs the full reconnect/conflict matrix against provider restart, disk projection, native/browser combinations, and conflict payloads.
 - The browser editor has no conflict banner or conflict-resolution UI yet; Task 3 should add that UI inside the existing `apps/collab-web` editor shell rather than creating a new browser app.
 
-## Native Facts From Plan 4
+## Native Facts From Plans 4 And 5.5
 
-- Native source now lives in this monorepo at `apps/marklab-macos/` as a SwiftPM package using a Reference MarkEdit strategy. The app owns the local source editor, share UI, native conflict surface, hosted collaboration WKWebView bridge, local daemon client, and app-owned daemon registry format.
+- Native source now lives in this monorepo at `apps/marklab-macos/` as a SwiftPM package using a Port MarkEdit UI shell strategy. The app owns a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local editor surface, share UI, native conflict inspector, hosted collaboration WKWebView bridge, local daemon client, and app-owned daemon registry format.
 - The first native collaboration editor embeds the hosted `/collab` CodeMirror/Yjs app with `clientKind=app`; it does not yet ship a fully bundled native Yjs runtime. Shared browser/native editor semantics live in `packages/collab-editor/` and should be reused by browser conflict UI.
 - The app editor URL is first-party and grantless. Public edit/view access grants are collaborator links only. The WKWebView injects `Authorization: Bearer ml_user_...` and `X-MarkLab-Native-App: 1` only into same-origin `/api/` fetches; the API downgrades app kind unless that authenticated native marker resolves to a non-guest actor.
 - MarkLab.app watches the opened shared file with a macOS file-system dispatch source and also runs a timer fallback. One-sided disk changes are sent back into the embedded Y.Text editor only if live provider text still matches the expected baseline. Divergent disk/shared changes already open the native conflict surface.
 - Native projection baselines are durable before in-memory advancement and store the full tuple: `lastProjectedMarkdown`, `lastProjectedHash`, `lastProviderStateFingerprint`, and `updatedAt`. The hosted-WKWebView MVP uses explicit `provider-ytext:sha256:...` fingerprints, not binary Yjs state fingerprints.
 - After sharing, the app starts or reuses the local daemon boundary with `marklab share --json --daemon-only` and loads `/api/local/app-context`; this must not create a hidden local relay edit grant.
-- Plan 4 smoke command: `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. It proves app-kind/browser convergence, disk projection, Swift build/runtime gates, and bidirectional cursor awareness, but it does not launch a GUI WKWebView automation harness. Keep that limitation explicit when expanding the conflict/reconnect matrix.
+- Native smoke command: `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. It proves app-kind/browser convergence, disk projection, MarkEdit shell strategy, Swift build/runtime gates, and bidirectional cursor awareness, but it does not launch a GUI WKWebView automation harness. Keep that limitation explicit when expanding the conflict/reconnect matrix.
 
 ## File Structure
 

@@ -47,29 +47,29 @@ Plan 4 chose the allowed **Reference** strategy and produced a working but minim
 
 ### Task 1: Lock The UI Strategy With Failing Tests
 
-- [ ] Add a native UI contract test that fails while `MarkLabRootView` still owns the product UI as a `VStack`/`TextEditor` prototype.
-- [ ] The test must assert that the app exposes a MarkEdit-derived shell descriptor with:
+- [x] Add a native UI contract test that fails while `MarkLabRootView` still owns the product UI as a `VStack`/`TextEditor` prototype.
+- [x] The test must assert that the app exposes a MarkEdit-derived shell descriptor with:
   - document-window mode;
   - MarkEdit source attribution;
   - WebKit/CodeMirror local editor mode;
   - collaboration controls as an overlay/inspector/toolbar layer.
-- [ ] Acceptance command: `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`.
+- [x] Acceptance command: `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`.
 
 ### Task 2: Introduce MarkEdit-Derived Shell Types
 
-- [ ] Create a new `MarkEditShell` area under `apps/marklab-macos/Sources/MarkLabApp/`.
-- [ ] Add copied/adapted MarkEdit shell primitives with attribution:
+- [x] Create a new `MarkEditShell` area under `apps/marklab-macos/Sources/MarkLabApp/`.
+- [x] Add copied/adapted MarkEdit shell primitives with attribution:
   - document/window shell descriptor;
   - editor container;
   - status/toolbar model;
   - editor web view wrapper or bridge.
-- [ ] Keep these types small enough for SwiftPM and current tests; do not try to import the whole Xcode project in one step.
-- [ ] Replace the app entry point's primary content composition with the MarkEdit-derived shell.
-- [ ] Acceptance command: `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`.
+- [x] Keep these types small enough for SwiftPM and current tests; do not try to import the whole Xcode project in one step.
+- [x] Replace the app entry point's primary content composition with the MarkEdit-derived shell.
+- [x] Acceptance command: `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`.
 
 ### Task 3: Move Existing Collaboration UI Into The Shell Layer
 
-- [ ] Move current sharing actions into a MarkEdit-style toolbar/status/inspector layer:
+- [x] Move current sharing actions into a MarkEdit-style toolbar/status/inspector layer:
   - open;
   - save;
   - start sharing;
@@ -78,51 +78,51 @@ Plan 4 chose the allowed **Reference** strategy and produced a working but minim
   - copy link;
   - revoke link;
   - daemon/version/restore status.
-- [ ] Ensure collaboration controls do not own the root editor layout.
-- [ ] Add tests that the shell exposes the collaboration commands without requiring the prototype `MarkLabRootView`.
-- [ ] Acceptance command: `swift test --package-path apps/marklab-macos`.
+- [x] Ensure collaboration controls do not own the root editor layout.
+- [x] Add tests that the shell exposes the collaboration commands without requiring the prototype `MarkLabRootView`.
+- [x] Acceptance command: `swift test --package-path apps/marklab-macos`.
 
 ### Task 4: Replace Unshared `TextEditor` With A MarkEdit-Style Editor Surface
 
-- [ ] Add an AppKit/WebKit editor view for unshared local editing based on MarkEdit's `EditorWebView`/editor-container pattern.
-- [ ] Preserve exact local file bytes for unshared save behavior already covered by `LocalMarkdownDocumentTests`.
-- [ ] Keep the current hosted `/collab` WebView for shared editing as a bridge slice, but embed it in the shell.
-- [ ] Add tests or smoke assertions proving the prototype SwiftUI `TextEditor` is no longer the normal editor path.
-- [ ] Acceptance commands:
+- [x] Add an AppKit/WebKit editor view for unshared local editing based on MarkEdit's `EditorWebView`/editor-container pattern.
+- [x] Preserve exact local file bytes for unshared save behavior already covered by `LocalMarkdownDocumentTests`.
+- [x] Keep the current hosted `/collab` WebView for shared editing as a bridge slice, but embed it in the shell.
+- [x] Add tests or smoke assertions proving the prototype SwiftUI `TextEditor` is no longer the normal editor path.
+- [x] Acceptance commands:
   - `swift test --package-path apps/marklab-macos`;
   - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`.
 
 ### Task 5: Conflict UI As MarkEdit-Style Panel
 
-- [ ] Move conflict preview/actions out of the root `VStack` and into a document-scoped panel/inspector.
-- [ ] Keep the existing resolution semantics:
+- [x] Move conflict preview/actions out of the root `VStack` and into a document-scoped panel/inspector.
+- [x] Keep the existing resolution semantics:
   - accept local;
   - keep shared;
   - paste resolved Markdown;
   - guarded disk save;
   - active-provider verification.
-- [ ] Add Swift tests covering conflict action availability through the shell state.
-- [ ] Acceptance command: `swift test --package-path apps/marklab-macos`.
+- [x] Add Swift tests covering conflict action availability through the shell state.
+- [x] Acceptance command: `swift test --package-path apps/marklab-macos`.
 
 ### Task 6: Documentation And Downstream Refresh
 
-- [ ] Update `docs/appdesigndoc.md` to replace the Plan 4 **Reference** strategy statement with the Plan 5.5 **Port MarkEdit UI** strategy.
-- [ ] Update downstream plans that mention native UI/package shape:
+- [x] Update `docs/appdesigndoc.md` to replace the Plan 4 **Reference** strategy statement with the Plan 5.5 **Port MarkEdit UI** strategy.
+- [x] Update downstream plans that mention native UI/package shape:
   - `docs/plans/2026-05-11-packaging-cli-distribution-docs.md`;
   - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`;
   - `docs/plans/2026-05-11-billing-subscription-seats.md` only if seat/client-kind wording changes.
-- [ ] Run `rg -n "MarkEdit|native|TextEditor|MarkLabRootView|WKWebView|collaboration UI|conflict" docs/plans docs/appdesigndoc.md`.
-- [ ] Commit docs separately if implementation and docs are split.
+- [x] Run `rg -n "MarkEdit|native|TextEditor|MarkLabRootView|WKWebView|collaboration UI|conflict" docs/plans docs/appdesigndoc.md`.
+- [x] Commit docs separately if implementation and docs are split.
 
 ### Task 7: Verification And Review
 
-- [ ] Run `swift test --package-path apps/marklab-macos`.
-- [ ] Run `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`.
-- [ ] Run relevant API/browser tests if shell wiring changes hosted collaboration behavior.
-- [ ] Run `git diff --check`.
-- [ ] Run one fresh holistic reviewer on the staged Plan 5.5 diff before commit.
-- [ ] Commit implementation with `git commit -m "feat: migrate native app to markedit ui shell"`.
-- [ ] Commit downstream docs with `git commit -m "docs: refresh plans after markedit ui migration"` if docs are separate.
+- [x] Run `swift test --package-path apps/marklab-macos`.
+- [x] Run `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`.
+- [x] Run relevant API/browser tests if shell wiring changes hosted collaboration behavior.
+- [x] Run `git diff --check`.
+- [x] Run one fresh holistic reviewer on the staged Plan 5.5 diff before commit.
+- [x] Commit implementation with `git commit -m "feat: migrate native app to markedit ui shell"`.
+- [x] Commit downstream docs with `git commit -m "docs: refresh plans after markedit ui migration"` if docs are separate.
 
 ## Non-Goals
 
