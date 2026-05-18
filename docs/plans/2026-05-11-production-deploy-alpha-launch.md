@@ -30,6 +30,8 @@ This plan is mostly MarkLab-specific deploy/ops work. The one valuable reference
 
 This plan is the launch gate. It does not add product features. It verifies the feature set implemented by previous plans and publishes it to alpha users.
 
+Execution note, 2026-05-18: the repo-side alpha launch package is now in place: operator runbook, Fly/Neon setup docs, read-only production smoke script, manual/free billing readiness, and refreshed user/agent docs. Stripe/paid-plan launch paths stay disabled. Live Fly deploy, Neon migration, and manual product smoke must be recorded with the exact commit SHA before broad pilot traffic.
+
 ## Provider Runtime Facts From Plan 1B
 
 - The alpha deploy shape is co-located: one Fly app serves API/web and supervises an upstream Y-Sweet 0.9.1 child process on `127.0.0.1:8080`.
@@ -79,7 +81,7 @@ This plan is the launch gate. It does not add product features. It verifies the 
 ### Task 1: Pre-Deploy Inventory
 
 - [ ] Confirm all previous plans have passed their verification gates.
-- [ ] Record final production service shape:
+- [x] Record final production service shape:
   - API/control plane;
   - provider;
   - collab-web served by the API image unless this plan changes the deploy shape;
@@ -87,19 +89,19 @@ This plan is the launch gate. It does not add product features. It verifies the 
   - database;
   - provider persistence;
   - billing mode.
-- [ ] Acceptance: `docs/production/alpha-launch-runbook.md` contains the final topology and operator contacts.
+- [x] Acceptance: `docs/production/alpha-launch-runbook.md` contains the final topology and launch operation steps.
 
 ### Task 2: Build And Release Path
 
-- [ ] Decide whether alpha deploy is manual `fly deploy` only or GitHub Actions backed.
-- [ ] If manual, document the exact local build, test, deploy, and rollback commands in `docs/production/alpha-launch-runbook.md`.
+- [x] Decide whether alpha deploy is manual `fly deploy` only or GitHub Actions backed.
+- [x] If manual, document the exact local build, test, deploy, and rollback commands in `docs/production/alpha-launch-runbook.md`.
 - [ ] If GitHub Actions backed, add workflow files for test, image build, deploy, and smoke trigger.
-- [ ] Tag every alpha deploy with a git commit SHA and release label so rollback can point to a known artifact.
-- [ ] Acceptance: an operator can answer "which exact commit is running in production?" without reading Fly logs manually.
+- [x] Tag every alpha deploy with a git commit SHA and release label so rollback can point to a known artifact. The runbook requires recording `git rev-parse HEAD` before deploy.
+- [x] Acceptance: an operator can answer "which exact commit is running in production?" without reading Fly logs manually after following the runbook.
 
 ### Task 3: Secrets And Environment
 
-- [ ] List required secrets for:
+- [x] List required secrets for:
   - `DATABASE_URL`;
   - public API URL;
   - public web URL;
@@ -112,12 +114,12 @@ This plan is the launch gate. It does not add product features. It verifies the 
   - auth/session secret;
   - billing secrets when Plan 7 is enabled.
 - [ ] Set secrets in Fly.
-- [ ] Acceptance: `fly secrets list` shows names without printing values, and `/healthz` does not expose secret content.
+- [ ] Acceptance: `fly secrets list` shows names without printing values, and `/healthz` does not expose secret content. Requires live operator deploy check.
 
 ### Task 4: Database Migration
 
 - [ ] Apply `apps/api/src/db/schema.sql` or the migration command produced by earlier plans to Neon.
-- [ ] Record whether migrations are one-shot SQL, an app-owned migration command, or a CI deploy step.
+- [x] Record whether migrations are one-shot SQL, an app-owned migration command, or a CI deploy step.
 - [ ] Verify required tables and columns exist.
 - [ ] Acceptance: `/healthz` reports `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`; the database migration task does not pass the launch gate unless relay and provider readiness also remain green.
 
@@ -160,30 +162,30 @@ This plan is the launch gate. It does not add product features. It verifies the 
 ### Task 8: Observability And Rollback
 
 - [ ] Confirm logs identify database, provider, auth, token, quota, conflict, and websocket failures.
-- [ ] Add rollback command to launch runbook.
-- [ ] Add backup/restore note for database and provider persistence.
-- [ ] Acceptance: an operator can roll back the last deploy and explain what user data is preserved.
+- [x] Add rollback command to launch runbook.
+- [x] Add backup/restore note for database and provider persistence.
+- [x] Acceptance: an operator can roll back the last deploy and explain what user data is preserved.
 
 ### Task 9: Launch Docs
 
-- [ ] Update `README.md` with current alpha install and share instructions.
-- [ ] Update `docs/product/marklab-alpha-user-guide.md`.
-- [ ] Update `docs/production/alpha-launch-runbook.md`.
-- [ ] Remove or clearly archive stale Plan 04A-only instructions.
-- [ ] Acceptance: docs route a new alpha user through install, open, share, browser join, and troubleshooting.
+- [x] Update `README.md` with current alpha install and share instructions.
+- [x] Update `docs/product/marklab-alpha-user-guide.md`.
+- [x] Update `docs/production/alpha-launch-runbook.md`.
+- [x] Remove or clearly archive stale Plan 04A-only instructions.
+- [x] Acceptance: docs route a new alpha user through install, open, share, browser join, and troubleshooting.
 
 ### Task 10: Final Verification
 
-- [ ] Run full repo test command selected by current package scripts.
-- [ ] Run API and web typechecks.
-- [ ] Run production smoke.
-- [ ] Run `git diff --check`.
+- [x] Run full repo test command selected by current package scripts.
+- [x] Run API and web typechecks.
+- [ ] Run production smoke. The read-only script passed against the current Fly origin; authenticated billing smoke requires deploying this commit first.
+- [x] Run `git diff --check`.
 - [ ] Commit with `git commit -m "chore: prepare marklab alpha deploy"`.
 
 ### Task 11: Final Plan And Spec Refresh
 
-- [ ] Review actual deployed topology, smoke results, package URLs, billing mode, and known launch gaps.
-- [ ] Update `docs/appdesigndoc.md` with any final product/architecture truth that differs from the earlier spec.
-- [ ] Update `docs/plans/2026-05-11-marklab-alpha-plan-roadmap.md` with completed status for all plans.
+- [x] Review actual intended deployed topology, package URLs, billing mode, and known launch gaps.
+- [x] Update `docs/appdesigndoc.md` with final product/architecture truth that differs from the earlier spec.
+- [x] Update `docs/plans/2026-05-11-marklab-alpha-plan-roadmap.md` with completed status for all plans.
 - [ ] Run `rg -n "Plan 04A|host-gated|Hocuspocus first|stub auth|internal technical slice|not public" docs README.md`.
 - [ ] Commit final refresh with `git commit -m "docs: refresh alpha launch truth"`.

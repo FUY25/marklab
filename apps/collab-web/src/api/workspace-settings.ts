@@ -25,12 +25,39 @@ export interface WorkspaceDocument {
   editGrantCount: number;
 }
 
+export interface WorkspaceBillingState {
+  workspaceId: string;
+  role: WorkspaceRole;
+  canManagePlan: boolean;
+  mode: 'manual' | 'stripe';
+  plan: {
+    planId: string;
+    name: string;
+    status: string;
+    currentPeriodEnd: string | null;
+  };
+  limits: {
+    memberSeats: number;
+    concurrentGuestEdits: number;
+  };
+  usage: {
+    memberSeats: number;
+    concurrentGuestEdits: number;
+  };
+  management: {
+    stripeConfigured: boolean;
+    canManagePayment: boolean;
+    message: string;
+  };
+}
+
 export interface WorkspaceSettingsClient {
   listMembers(workspaceId: string): Promise<WorkspaceMember[]>;
   createShareKey(workspaceId: string, input: { role: WorkspaceInviteRole; expiresAt?: string | null }): Promise<WorkspaceShareKey>;
   updateMemberRole(workspaceId: string, userId: string, role: WorkspaceRole): Promise<WorkspaceMember>;
   removeMember(workspaceId: string, userId: string): Promise<void>;
   listDocuments(workspaceId: string): Promise<WorkspaceDocument[]>;
+  getBillingState(workspaceId: string): Promise<WorkspaceBillingState>;
 }
 
 export interface WorkspaceSettingsClientOptions {
@@ -114,6 +141,10 @@ export function createWorkspaceSettingsClient(options: WorkspaceSettingsClientOp
     async listDocuments(workspaceId) {
       const body = requireRecord(await requestJson(workspaceApiPath(workspaceId, '/documents')), 'documents_response');
       return body.documents as WorkspaceDocument[];
+    },
+    async getBillingState(workspaceId) {
+      const body = requireRecord(await requestJson(workspaceApiPath(workspaceId, '/billing')), 'billing_response');
+      return body.billing as WorkspaceBillingState;
     },
   };
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   createWorkspaceSettingsClient,
   type WorkspaceDocument,
+  type WorkspaceBillingState,
   type WorkspaceInviteRole,
   type WorkspaceMember,
   type WorkspaceRole,
@@ -14,7 +15,7 @@ export interface WorkspaceSettingsProps {
   client?: WorkspaceSettingsClient | undefined;
 }
 
-type SettingsTab = 'members' | 'documents';
+type SettingsTab = 'members' | 'documents' | 'billing';
 
 const memberRoles: WorkspaceRole[] = ['Owner', 'Member', 'Reader'];
 const inviteRoles: WorkspaceInviteRole[] = ['Member', 'Reader'];
@@ -29,6 +30,7 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
   const [activeTab, setActiveTab] = useState<SettingsTab>('members');
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
+  const [billing, setBilling] = useState<WorkspaceBillingState | null>(null);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, WorkspaceRole>>({});
   const [inviteRole, setInviteRole] = useState<WorkspaceInviteRole>('Member');
   const [createdKey, setCreatedKey] = useState<WorkspaceShareKey | null>(null);
@@ -43,10 +45,12 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
     void Promise.all([
       client.listMembers(workspaceId),
       client.listDocuments(workspaceId),
-    ]).then(([nextMembers, nextDocuments]) => {
+      client.getBillingState(workspaceId),
+    ]).then(([nextMembers, nextDocuments, nextBilling]) => {
       if (disposed) return;
       setMembers(nextMembers);
       setDocuments(nextDocuments);
+      setBilling(nextBilling);
       setRoleDrafts({});
       setLoading(false);
     }).catch((loadError: unknown) => {
@@ -126,7 +130,13 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
         >
           Documents
         </button>
-        <button type="button" disabled>Plan & Billing</button>
+        <button
+          type="button"
+          className={activeTab === 'billing' ? 'active' : undefined}
+          onClick={() => setActiveTab('billing')}
+        >
+          Plan & Billing
+        </button>
       </nav>
       {error ? (
         <section className="unavailable-banner" role="status">{error}</section>
@@ -200,6 +210,28 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
               </div>
             ))}
           </div>
+        </section>
+      ) : null}
+      {!loading && activeTab === 'billing' && billing ? (
+        <section className="settings-panel" aria-label="Plan and billing">
+          <div className="settings-table" role="table" aria-label="Plan and billing">
+            <div role="row" className="settings-row settings-heading">
+              <span role="columnheader">Plan</span>
+              <span role="columnheader">Status</span>
+              <span role="columnheader">Member seats</span>
+              <span role="columnheader">Guest edits</span>
+            </div>
+            <div role="row" className="settings-row">
+              <span role="cell">{billing.plan.name}</span>
+              <span role="cell">{billing.plan.status}</span>
+              <span role="cell">{billing.usage.memberSeats} / {billing.limits.memberSeats}</span>
+              <span role="cell">{billing.usage.concurrentGuestEdits} / {billing.limits.concurrentGuestEdits}</span>
+            </div>
+          </div>
+          <section className="settings-secret" aria-label="Billing mode">
+            <strong>{billing.mode === 'manual' ? 'Manual billing' : 'Stripe billing'}</strong>
+            <p>{billing.management.message}</p>
+          </section>
         </section>
       ) : null}
     </main>

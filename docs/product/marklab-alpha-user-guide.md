@@ -21,6 +21,7 @@ Pilot users need:
 - macOS for MarkLab.app.
 - A modern browser for browser collaborators.
 - Access to the configured MarkLab API/web origin.
+- A MarkLab user token and workspace id for hosting/sharing during the private alpha.
 - For development builds, this repository and the commands in the manual runbook.
 
 Normal browser collaborators do not need Node, pnpm, Postgres, Docker, or Git.
@@ -114,6 +115,19 @@ Realtime sync keeps connected editors current. It is not a substitute for versio
 The API has version routes for manual save, autosave, list, and restore. Those routes flush active collaboration state before saving or restoring.
 
 The new native relay UI does not yet expose a complete hosted Versions panel. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
+
+## Plan And Billing
+
+The private alpha runs in manual/free mode. Stripe checkout, payment portal, webhooks, and paid-plan choices are not enabled.
+
+Workspace settings includes a `Plan & Billing` tab so owners and members can inspect the current plan, member-seat usage, and concurrent guest-edit usage. The tab is read-only for the private alpha. The control plane still enforces member-seat and guest-edit limits before issuing collaborator access or provider tokens.
+
+Operators can check the same state through:
+
+```sh
+curl -H "Authorization: Bearer <ml_user_...>" \
+  https://marklab-relay-alpha.fly.dev/api/workspaces/<workspace-id>/billing
+```
 
 ## Links And Revocation
 

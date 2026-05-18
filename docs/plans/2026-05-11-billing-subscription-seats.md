@@ -26,6 +26,8 @@ For a private free alpha, this plan can run in manual/free mode while preserving
 
 Current pilot decision: defer Stripe/paid billing for the private free alpha. Do not block Plan 6 native/package/manual acceptance work on this plan. The launch gate should still smoke deterministic manual/free limits for workspace-owned documents, including browser and native collaborator sessions.
 
+Execution note, 2026-05-18: the private alpha slice is implemented as manual/free billing infrastructure readiness. The schema can store manual/Stripe metadata on existing `subscriptions`, `/api/workspaces/:workspaceId/billing` exposes read-only current state, and `/workspaces/:workspaceId/settings` shows plan/usage. Stripe checkout, portal, webhooks, paid-plan selection, and manual admin plan mutation remain intentionally undecided and disabled.
+
 ## Provider Runtime Facts From Plan 1B
 
 - Billing and quota checks remain entirely in the control plane before Y-Sweet token issuance. The API-supervised Y-Sweet provider only validates native document tokens; it has no billing or seat-limit knowledge.
@@ -37,7 +39,7 @@ Current pilot decision: defer Stripe/paid billing for the private free alpha. Do
 - Plan 2 already enforces named-member seats through `workspace_share_keys` joins and `seat_limits.member_seats`.
 - Plan 2 already enforces concurrent guest edit quota during initial edit-token issuance through `subscriptions` -> `seat_limits.concurrent_guest_edits`. Existing guest edit sessions can refresh without re-running quota after grant/session/role/expiry/revocation checks.
 - Documents with `workspace_id is null` still use the legacy fallback guest quota so old/local documents keep working. Billing should not make that fallback path the public hosted default.
-- The workspace settings browser shell was created by Plan 3 at `/workspaces/:workspaceId/settings` in `apps/collab-web`. It has Members and Documents tabs wired to the Plan 2 server APIs plus a disabled Plan & Billing placeholder. This plan replaces that placeholder with the real billing view.
+- The workspace settings browser shell was created by Plan 3 at `/workspaces/:workspaceId/settings` in `apps/collab-web`. It has Members and Documents tabs wired to the Plan 2 server APIs. This plan adds the real billing view.
 
 ## Native Facts From Plan 4
 
@@ -63,62 +65,62 @@ Current pilot decision: defer Stripe/paid billing for the private free alpha. Do
 
 ### Task 1: Plan And Subscription Model
 
-- [ ] Verify and extend the existing plan records seeded by Plan 2 instead of creating a parallel model.
-- [ ] Store Stripe/manual billing metadata on the existing workspace subscription records.
-- [ ] Extend named-member seat limits and concurrent guest-edit limits through existing `seat_limits` rows.
-- [ ] Add tests proving default workspaces still get the free/manual subscription created by Plan 2.
-- [ ] Acceptance: a workspace without an active paid subscription still has deterministic limits.
+- [x] Verify and use the existing plan records seeded by Plan 2 instead of creating a parallel model.
+- [x] Store Stripe/manual billing metadata on the existing workspace subscription records.
+- [x] Read named-member seat limits and concurrent guest-edit limits through existing `seat_limits` rows.
+- [x] Add tests proving manual/free billing state uses the existing subscription and `seat_limits` rows.
+- [x] Acceptance: a workspace without an active paid subscription still has deterministic limits.
 
 ### Task 2: Seat Enforcement
 
 The enforcement *check points* already exist from `2026-05-11-control-plane-mvp.md` Task 5: that plan added member-seat checks and guest-edit quota checks backed by `subscriptions` and `seat_limits`. This task does **not** add parallel checks. It extracts those lookups into billing/seat-limit services, adds billing-mode metadata, and expands plan coverage.
 
-- [ ] Replace any remaining legacy fallback-only quota assumptions with explicit `subscriptions` -> `seat_limits.concurrent_guest_edits` service calls for workspace-owned documents.
-- [ ] Replace any remaining inline member-seat SQL with a shared lookup against `seat_limits.member_seats`.
-- [ ] If quota enforcement depends on new columns or tables during provider-token issuance, add them to the `/healthz` schema readiness contract so production cannot go green with an incomplete billing schema.
-- [ ] Keep guest view sessions outside guest edit quota (already true; verify with a regression test).
-- [ ] Keep first-party native app editor sessions outside guest edit quota while still counting collaborator browser/native guest edit sessions against `seat_limits.concurrent_guest_edits`.
-- [ ] Add tests for free-limit pass/fail and paid-limit pass/fail.
-- [ ] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits for workspace documents. Existing guest edit sessions still refresh when quota is full.
+- [x] Replace any remaining legacy fallback-only quota assumptions with explicit `subscriptions` -> `seat_limits.concurrent_guest_edits` service calls for workspace-owned documents.
+- [x] Replace any remaining inline member-seat SQL with a shared lookup against `seat_limits.member_seats`.
+- [x] If quota enforcement depends on new columns or tables during provider-token issuance, add them to the `/healthz` schema readiness contract so production cannot go green with an incomplete billing schema.
+- [x] Keep guest view sessions outside guest edit quota (already true; verified with regression tests).
+- [x] Keep first-party native app editor sessions outside guest edit quota while still counting collaborator browser/native guest edit sessions against `seat_limits.concurrent_guest_edits`.
+- [x] Add tests for free-limit pass/fail and paid-limit pass/fail.
+- [x] Acceptance: token issuance refuses over-quota guest edit sessions before calling Y-Sweet, using plan-driven limits for workspace documents. Existing guest edit sessions still refresh when quota is full.
 
 ### Task 3: Billing Provider Integration
 
-- [ ] Implement billing adapter with explicit modes:
+- [x] Implement billing state with explicit modes:
   - `manual`;
   - `stripe`.
-- [ ] In manual mode, admin changes subscription records through an internal route.
-- [ ] In Stripe mode, create checkout sessions, process webhook events, and update workspace subscription status.
-- [ ] Acceptance: tests cover webhook signature failure, duplicate event id, subscription active, subscription canceled, and payment past due.
+- [ ] In manual mode, admin changes subscription records through an internal route. Deferred because plan-setting/admin mutation is undecided for private alpha.
+- [ ] In Stripe mode, create checkout sessions, process webhook events, and update workspace subscription status. Deferred by current product decision.
+- [ ] Acceptance: tests cover webhook signature failure, duplicate event id, subscription active, subscription canceled, and payment past due. Deferred until Stripe mode is enabled.
 
 ### Task 4: Control UI
 
-The workspace settings server APIs exist from `2026-05-11-control-plane-mvp.md` Task 7B. The browser shell now exists in `apps/collab-web/src/workspaces/WorkspaceSettings.tsx` with Members/Documents tabs and a disabled Plan & Billing placeholder. This task replaces that placeholder with the real **Plan & Billing** tab. Do not create a new app.
+The workspace settings server APIs exist from `2026-05-11-control-plane-mvp.md` Task 7B. The browser shell exists in `apps/collab-web/src/workspaces/WorkspaceSettings.tsx` with Members/Documents tabs. This task adds the real **Plan & Billing** tab. Do not create a new app.
 
-- [ ] Replace the disabled Plan & Billing placeholder in `/workspaces/:workspaceId/settings` in `apps/collab-web`.
-- [ ] Show current plan, member seats used, guest edit sessions used, and upgrade/manage button.
-- [ ] Show clear unavailable messages when plan limits block action.
-- [ ] Owner-only sensitive actions (upgrade/cancel/manage payment) are enforced server-side; the UI hides them for non-owners but does not rely on UI hiding for security.
-- [ ] Acceptance: owner can open the Plan & Billing tab, see usage numbers, and trigger upgrade flow; non-owner sees the tab in read-only mode without management buttons.
+- [x] Add the Plan & Billing tab in `/workspaces/:workspaceId/settings` in `apps/collab-web`.
+- [x] Show current plan, member seats used, guest edit sessions used, and read-only management status.
+- [x] Show clear unavailable messages for paid-plan management while private alpha is manual/free.
+- [x] Owner-only sensitive actions are not exposed because paid-plan management is disabled server-side.
+- [x] Acceptance: owner/member can open the Plan & Billing tab and see usage numbers in read-only mode without management buttons.
 
 ### Task 5: Audit And Admin
 
-- [ ] Record plan-limit denials with workspace/session context.
-- [ ] Add admin read route for current workspace billing state.
-- [ ] Avoid storing payment secrets in normal app logs.
-- [ ] Acceptance: support can diagnose a denied invite or denied guest edit token from server logs and database records.
+- [ ] Record plan-limit denials with workspace/session context. Existing quota errors are explicit, but a richer audit log remains post-alpha.
+- [x] Add workspace billing read route for current workspace billing state.
+- [x] Avoid storing payment secrets in normal app logs; Stripe/payment secrets are not enabled in this slice.
+- [x] Acceptance: support can inspect current plan and usage through `/api/workspaces/:workspaceId/billing`.
 
 ### Task 6: Verification
 
-- [ ] Run `npx -y pnpm@10.0.0 test apps/api/src/services/billing-service.test.ts apps/api/src/services/seat-limit-service.test.ts apps/api/src/routes/billing-routes.test.ts`.
-- [ ] Run `npx -y pnpm@10.0.0 exec tsc --noEmit -p apps/api/tsconfig.json`.
+- [x] Run `npx -y pnpm@10.0.0 exec vitest run apps/api/src/services/billing-service.test.ts apps/api/src/services/seat-limit-service.test.ts apps/api/src/routes/billing-routes.test.ts apps/collab-web/src/workspaces/WorkspaceSettings.test.tsx apps/api/src/db/schema.test.ts`.
+- [x] Run `npx -y pnpm@10.0.0 exec tsc --noEmit -p apps/api/tsconfig.json`.
 - [ ] Run billing/manual-mode smoke.
-- [ ] Run `git diff --check`.
-- [ ] Commit with `git commit -m "feat: add billing and seat enforcement"`.
+- [x] Run `git diff --check`.
+- [ ] Commit with the Plan 6-8 alpha readiness implementation.
 
 ### Task 7: Downstream Plan Refresh
 
-- [ ] Review actual plan ids, env vars, webhook paths, manual mode behavior, and quota enforcement.
-- [ ] Update `docs/appdesigndoc.md` if billing or seat-limit product behavior changed.
-- [ ] Update `docs/plans/2026-05-11-production-deploy-alpha-launch.md`.
-- [ ] Run `rg -n "billing|subscription|seat|guest quota|Stripe|manual mode|webhook" docs/plans docs/appdesigndoc.md`.
+- [x] Review actual plan ids, env vars, webhook paths, manual mode behavior, and quota enforcement.
+- [x] Update docs if billing or seat-limit product behavior changed.
+- [x] Update `docs/plans/2026-05-11-production-deploy-alpha-launch.md`.
+- [x] Run `rg -n "billing|subscription|seat|guest quota|Stripe|manual mode|webhook" docs/plans docs/appdesigndoc.md`.
 - [ ] Commit plan refresh with `git commit -m "docs: refresh deploy plan after billing"`.

@@ -48,7 +48,7 @@ This plan does not build billing or the full production launch gate. It does inc
 
 - `apps/collab-web` is built into the API Docker image and served by the API process. The deploy-time dist path is `MARKLAB_COLLAB_WEB_DIST_DIR`; normal packaged clients should not need a separate collab-web origin.
 - Browser collaborator links should open the public web origin at `/collab?docId=...&branchId=...&token=...&mode=edit|view`. Existing `apps/web` share/access panels now generate that route shape, with assets under `/collab-web/`.
-- `/workspaces/:workspaceId/settings` exists in `apps/collab-web` with Members and Documents tabs plus a disabled Plan & Billing placeholder. Packaging/docs should route workspace administration to that browser shell until native settings UI exists.
+- `/workspaces/:workspaceId/settings` exists in `apps/collab-web` with Members, Documents, and read-only Plan & Billing tabs. Packaging/docs should route workspace administration to that browser shell until native settings UI exists.
 
 ## Native Facts From Plans 4 And 5.5
 
@@ -85,8 +85,8 @@ This plan does not build billing or the full production launch gate. It does inc
 
 - [x] Ensure packaged CLI defaults to hosted alpha API/provider URLs for archived relay compatibility.
 - [x] Ensure local dev can override URLs with env vars for archived relay compatibility.
-- [ ] Replace archived daemon `doctor` with a new relay/native doctor that reports app install state, API/web origin, `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready`.
-- [ ] Acceptance command: new `marklab doctor --json` shows hosted/default/local override state without `MARKLAB_ENABLE_LEGACY_CLI=1`.
+- [x] Replace archived daemon `doctor` with a new relay/native doctor that reports native app/open-link configuration, API/web origin, `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready`.
+- [x] Acceptance command: new `marklab doctor --json` shows hosted/default/local override state without `MARKLAB_ENABLE_LEGACY_CLI=1`.
 
 ### Task 2: CLI Command Coverage
 
@@ -94,12 +94,12 @@ V1 (alpha launch must-have):
 
 - [x] `join` — open the same `/collab?...mode=edit` share link in MarkLab.app without enabling the archived daemon path.
 - [x] `stop` — stop only explicitly enabled compatibility daemons; it must not imply that the new relay path requires a daemon.
-- [ ] `open` — open a local Markdown file in MarkLab.app or a sensible default without the archived daemon path.
-- [ ] `share` — start sharing a local file through MarkLab.app/control plane, not by creating an archived local-daemon relay link.
-- [ ] `status` — show current native relay sync/conflict state for a file.
-- [ ] `wait --synced` — block until native relay sync is complete; used by agents.
-- [ ] `conflict` — read current native relay conflict state as JSON for agents.
-- [ ] `doctor` — diagnose install, URLs, app URL scheme, and provider readiness without requiring daemon opt-in.
+- [x] `open` — open a local Markdown file in MarkLab.app or a sensible default without the archived daemon path.
+- [x] `share` — open the local file in MarkLab.app and route the user to native Start Sharing, not an archived local-daemon relay link.
+- [x] `status` — show current native relay sync/conflict state for a file.
+- [x] `wait --synced` — block until native relay sync is complete; used by agents.
+- [x] `conflict` — read current native relay conflict state as JSON for agents.
+- [x] `doctor` — diagnose install, URLs, app URL scheme, and provider readiness without requiring daemon opt-in.
 
 Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
 
@@ -113,15 +113,15 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 
 - [x] Add tests proving `join` preserves `/collab?...` edit URLs and does not rewrite them back to legacy hosted relay routes.
 - [x] Add tests proving `join` never falls back to the archived local-daemon route unless `MARKLAB_ENABLE_LEGACY_CLI=1` is explicitly set.
-- [ ] Add tests for new native relay `open/share/status/wait/conflict/doctor` once those commands are rebound.
-- [ ] Add tests proving new native relay `share` creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode.
+- [x] Add tests for new native relay `open/share/status/wait/conflict/doctor` once those commands are rebound.
+- [x] Prove the native app, not the CLI, creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode (`NativeControlPlaneShareTests`).
 - [x] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli` covers the current join/deactivation slice.
 
 ### Task 3: AI Agent Workflow
 
 - [x] Update `docs/agent/marklab-agent-guide.md`.
 - [x] Document that AI edits local `.md` files directly. The active MarkLab.app file watcher ingests changes into shared state automatically when a file is part of an active room; AI does not need a special API.
-- [x] Document that `wait --synced`, `status`, and `conflict` are deferred until they are rebound to the new native relay session model.
+- [x] Document that `wait --synced`, `status`, and `conflict` read the new native relay session model through MarkLab.app support files.
 - [x] Document the **deferred** explicit agent edit protocol (`marklab agent edit begin/end`) as post-v1 by omission from the shipped pilot flow: v1 relies on file-watcher ingestion alone.
 - [x] Add a one-line edit-link open command for alpha app collaborators.
 - [x] Acceptance: an agent can follow the guide without needing provider internals and without the begin/end protocol.
@@ -134,7 +134,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 - [x] Ensure packaged app bootstrap only uses `marklab share --json --daemon-only` when `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set and does not mint a hidden local relay edit link.
 - [x] Ensure packaged CLI/runtime includes `packages/collab-editor` so the installed collab-web and native smoke do not depend on repo-relative source paths.
 - [x] Ensure normal app users do not need Terminal after install for open/edit/share/join once env/session is configured.
-- [ ] Acceptance: clean install on a separate macOS user profile can open, edit, share, and quit.
+- [ ] Acceptance: clean install on a separate macOS user profile can open, edit, share, and quit. This remains a visual/manual packaging pass, not an automated unit test.
 
 ### Task 4A: Native App-To-App Join UX
 
@@ -142,7 +142,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 - [x] After `Start Sharing`, expose the collaboration inspector: create edit/view links, show copied-link feedback, list active human collaborators, list active grants/links known to the app session, and allow revoking each grant. Do not show AI agents as collaborators.
 - [x] When an edit link is opened in MarkLab.app, validate the link before creating or mutating any local file.
 - [x] Let the joining user choose where to create the new local `.md` from the shared document.
-- [ ] Attach the shared document to an existing local `.md` with conflict preview when non-empty or diverged.
+- [ ] Attach the shared document to an existing local `.md` with conflict preview when non-empty or diverged. Current pilot safely refuses unbound non-empty same-name files instead of overwriting them.
 - [x] Persist the binding between local file and shared document: local file path/bookmark, doc id, branch id, access/session identity, provider doc id/session URL, baseline/fingerprint, and last known app editor URL.
 - [x] Reopen restores the hosted `/collab` app session and local file projection from persisted binding without requiring the old daemon.
 - [x] Acceptance: App A opens a local file, starts sharing, creates an edit link, and the link is copied. App B opens the same edit link in MarkLab.app, chooses a local folder/path, coedits with App A, writes its own local `.md`, and reconnects after quit/reopen.
@@ -155,13 +155,13 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 - [x] Update troubleshooting/runbook for host offline, internal error, token expired, revoked link, conflict required, and sync timeout.
 - [x] Document the hosted login/workspace requirement for `share`: normal users create or select a workspace, then the app creates a workspace-owned document and edit/view links.
 - [x] Document the app-to-app flow: one edit link can be opened in the browser or in MarkLab.app; MarkLab.app asks where to create the local `.md`.
-- [ ] Acceptance: stale scan still reports historical plan/archive terms; current README/product/production/agent docs are refreshed for the new relay/native path.
+- [x] Acceptance: stale scan still reports historical plan/archive terms; current README/product/production/agent docs are refreshed for the new relay/native path.
 
 ### Task 6: Package Smoke
 
 - [x] Run package preparation.
 - [x] Install packaged CLI into a temporary prefix.
-- [ ] Run install/share/join/status/wait smoke against the local dev provider after those commands are rebound to the native relay session model.
+- [x] Run install/open/share/status/wait smoke for the rebound native relay CLI surface. `share` opens MarkLab.app; access-link creation remains native UI-owned.
 - [ ] Run the same package smoke against the Fly.io/Neon pilot target, using a test workspace and disposable document after redeploying the new stack.
 - [x] Run app-to-app smoke manually on the dev native runtime: App A shares a local file, App B opens the same edit link, both coedit, both local files update, and both reconnect after quit/reopen.
 - [x] Run `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser` against the dev native/browser runtime.

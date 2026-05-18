@@ -136,11 +136,28 @@ create table if not exists subscriptions (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   plan_id text not null references plans(id),
   status text not null check (status in ('manual', 'trialing', 'active', 'past_due', 'canceled')),
+  billing_mode text not null default 'manual' check (billing_mode in ('manual', 'stripe')),
+  external_customer_id text,
+  external_subscription_id text,
+  billing_metadata jsonb not null default '{}'::jsonb,
   current_period_end timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (workspace_id)
 );
+
+alter table subscriptions
+  add column if not exists billing_mode text not null default 'manual',
+  add column if not exists external_customer_id text,
+  add column if not exists external_subscription_id text,
+  add column if not exists billing_metadata jsonb not null default '{}'::jsonb;
+
+alter table subscriptions
+  drop constraint if exists subscriptions_billing_mode_check;
+
+alter table subscriptions
+  add constraint subscriptions_billing_mode_check
+  check (billing_mode in ('manual', 'stripe'));
 
 create table if not exists documents (
   id uuid primary key default gen_random_uuid(),

@@ -5,6 +5,7 @@ import { ZodError } from 'zod';
 import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
 import { createAuthRoutes } from '../routes/auth-routes';
+import { createBillingRoutes } from '../routes/billing-routes';
 import { createCollabSessionRoutes } from '../routes/collab-session-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
@@ -570,6 +571,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'workspace_billing_not_found') {
+    res.status(404).json({ error: 'workspace_billing_not_found' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'member_seat_limit_exceeded') {
     res.status(429).json({ error: 'member_seat_limit_exceeded' });
     return;
@@ -745,6 +751,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
       ...(options.oidcExchange ? { oidcExchange: options.oidcExchange } : {}),
     }));
     app.use('/api', createWorkspaceRoutes(pool));
+    app.use('/api', createBillingRoutes(pool));
     app.use('/api', createAccessRoutes(pool, routeOptions));
     if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
     app.use('/api', createImportExportRoutes(pool, routeOptions));

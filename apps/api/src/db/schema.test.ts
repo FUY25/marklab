@@ -42,6 +42,11 @@ describe('control-plane schema contract', () => {
     expect(schema).toContain("('dev', 'Dev')");
     expect(schema).toContain('concurrent_guest_edits integer not null');
     expect(schema).toContain("('dev', 1000, 1000)");
+    expect(schema).toContain("billing_mode text not null default 'manual' check (billing_mode in ('manual', 'stripe'))");
+    expect(schema).toContain('external_customer_id text');
+    expect(schema).toContain('external_subscription_id text');
+    expect(schema).toContain("billing_metadata jsonb not null default '{}'::jsonb");
+    expect(schema).toContain("add constraint subscriptions_billing_mode_check");
     expect(schema).toContain("status text not null default 'active' check (status in ('active', 'failed', 'closed'))");
     expect(schema).toContain("add column if not exists status text not null default 'active'");
     expect(compact(schema)).toContain('create unique index if not exists workspace_folders_root_name_idx on workspace_folders (workspace_id, name) where parent_folder_id is null');

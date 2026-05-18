@@ -1,6 +1,6 @@
-# Fly.io And Neon Alpha Relay Setup
+# Fly.io And Neon Alpha Setup
 
-This is the Plan 04A operator path for the hosted MarkLab relay. Fly.io and Neon are the first production target; Docker remains the portability boundary for later Render, Railway, or VPS deployments.
+This is the operator path for the current MarkLab alpha: hosted control plane, `/collab` browser app, and API-supervised Y-Sweet provider. It is not the archived anonymous relay-daemon alpha.
 
 ## Target Regions
 
@@ -19,19 +19,19 @@ Create or confirm access to:
 
 The default Fly app name is `marklab-relay-alpha`. Use it unless Fly reports the name is unavailable. If you choose another app name, replace every URL and every `<fly-app>` placeholder in this document with the chosen name.
 
-The Plan 04A Fly image serves the API, relay websocket, and built web app from the same Fly hostname. Browser relay links such as `/relay/<room>` must resolve on this app; do not deploy an API-only image for the alpha.
+The Fly image serves the API, built `/collab` app, workspace settings shell, and API-root Y-Sweet provider proxy from the same Fly hostname. Browser/app collaborator links use `/collab?docId=...&branchId=...&token=...&mode=edit|view`; do not deploy an API-only image for the alpha.
 
-Plan 1B also co-locates the upstream Y-Sweet provider in the same Fly machine. The API supervises a child `y-sweet serve` process on `127.0.0.1:8080`, stores provider checkpoints on a Fly volume at `/data/ysweet`, and proxies public Y-Sweet document routes to that child process. Current Y-Sweet 0.9.1 client tokens use `/d/<providerDocId>/ws/<providerDocId>` for websocket sync plus `/d/<providerDocId>/as-update` and `/d/<providerDocId>/update` for token-scoped document HTTP traffic.
+The API co-locates the upstream Y-Sweet provider in the same Fly machine. The API supervises a child `y-sweet serve` process on `127.0.0.1:8080`, stores provider checkpoints on a Fly volume at `/data/ysweet`, and proxies public Y-Sweet document routes to that child process. Current Y-Sweet 0.9.1 client tokens use `/d/<providerDocId>/ws/<providerDocId>` for websocket sync plus `/d/<providerDocId>/as-update` and `/d/<providerDocId>/update` for token-scoped document HTTP traffic.
 
-Plan 04A uses anonymous public relay room creation for the npm alpha. The daemon gets a per-room host token and uses that token for room-scoped link creation, share-state reads, grant revocation, and host-offline marking. Do not give ordinary users a global relay management token. Account login is a later hosted-auth plan.
+The current alpha is login/workspace backed. MarkLab.app creates or imports workspace-owned documents, creates access grants for collaborators, and receives short-lived provider tokens through the control plane. Do not use the old anonymous `/relay/<room>` daemon route for new pilot testing.
 
-Run the Plan 04A alpha as one Fly machine:
+Run the private alpha as one Fly machine:
 
 ```bash
 fly scale count 1 -a marklab-relay-alpha --yes
 ```
 
-Relay websocket sessions, host-online state, immediate revoke disconnects, and the co-located provider volume are single-machine assumptions for the alpha. Scaling to multiple machines requires a later sticky-routing or shared relay/provider fanout change.
+Provider websocket sessions and the co-located provider volume are single-machine assumptions for the private alpha. Scaling to multiple machines requires a later sticky-routing or shared provider fanout change.
 
 ## 2. Install And Authenticate Fly CLI
 
@@ -40,7 +40,7 @@ brew install flyctl
 fly auth login
 ```
 
-If Homebrew is not available, install Fly CLI with Fly's shell installer. Homebrew is only an operator dependency here; MarkLab is not documented as a Homebrew-distributed app in Plan 04A.
+If Homebrew is not available, install Fly CLI with Fly's shell installer. Homebrew is only an operator dependency here; MarkLab is not documented as a Homebrew-distributed app for this alpha.
 
 ## 3. Create The Neon Database
 
@@ -52,7 +52,7 @@ In Neon:
 4. Copy the connection string.
 5. Confirm the connection string includes `sslmode=require`.
 
-Use the direct Neon connection string as `DATABASE_URL` for Plan 04A. Do not commit it.
+Use the direct Neon connection string as `DATABASE_URL` for the private alpha. Do not commit it.
 
 ## 4. Create The Fly App
 
@@ -68,7 +68,7 @@ If `marklab-relay-alpha` is unavailable:
 fly launch --no-deploy --name <fly-app> --region sin
 ```
 
-If Fly generates a local `fly.toml`, compare it against `infra/fly/fly.toml.example`. The checked-in example is the contract for Plan 04A and must contain no secrets.
+If Fly generates a local `fly.toml`, compare it against the repo-root `fly.toml`. Checked-in Fly config must contain no secrets.
 
 Create the provider volume before deploying:
 
@@ -173,9 +173,12 @@ npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-s
 Then run the product smoke:
 
 ```bash
-npx -y @marklab/cli open README.md
-npx -y @marklab/cli share README.md
-npx -y @marklab/cli join <edit-link> --dir ./docs --name README.md
+MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev node scripts/marklab-alpha-smoke.mjs
+npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser
+marklab doctor --json
+marklab open README.md
+marklab share README.md
+marklab join '<edit-link>'
 ```
 
-The hosted relay is metadata, identity, permissions, and websocket routing only. It is not a cloud document workspace.
+The hosted service is identity, permissions, document metadata, `/collab`, and provider routing. The user's local `.md` remains the native app working copy.

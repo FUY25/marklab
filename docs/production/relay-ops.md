@@ -56,6 +56,8 @@ These are secrets. Do not expose them to CLI users, browser clients, or logs.
 7. Run a disposable workspace/document/access-grant smoke.
 8. Run native app and browser acceptance against the deployed URL.
 
+The detailed alpha launch checklist, rollback procedure, and smoke result log live in [Alpha Launch Runbook](alpha-launch-runbook.md).
+
 ## Health Semantics
 
 `/healthz` is the release gate.
@@ -106,6 +108,25 @@ npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-s
 ```
 
 The smoke should create an edit collab session, connect a Y-Sweet Yjs client, write text, restart the provider, and verify persisted state.
+
+## Alpha Smoke
+
+Run the read-only production smoke against the deployed origin:
+
+```bash
+MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
+node scripts/marklab-alpha-smoke.mjs
+```
+
+To include the manual/free billing-state check, add a pilot user token and workspace id:
+
+```bash
+MARKLAB_USER_TOKEN=<ml_user_...> \
+MARKLAB_WORKSPACE_ID=<workspace-id> \
+node scripts/marklab-alpha-smoke.mjs
+```
+
+This smoke does not create documents or links by default. Product creation/revocation checks remain explicit launch-smoke steps in the alpha launch runbook.
 
 ## Incident Checks
 

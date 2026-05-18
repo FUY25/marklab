@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
-import { basename, dirname, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   AgentCommandError,
@@ -49,6 +50,7 @@ const cliPath = fileURLToPath(import.meta.url);
 const defaultApiPort = 3011;
 const defaultWebPort = 5175;
 const legacyCliOptInEnv = 'MARKLAB_ENABLE_LEGACY_CLI';
+const nativeRelayCommands = new Set(['open', 'share', 'status', 'wait', 'conflict', 'doctor']);
 const legacyLocalDaemonCommands = new Set([
   'open',
   'share',
@@ -109,6 +111,7 @@ function assertLegacyCliEnabled(input, env = process.env) {
     parseHostedCollabLink(input.link);
     return;
   }
+  if (nativeRelayCommands.has(input.command) && !legacyCliEnabled(env)) return;
   if (!legacyCliRequired(input.command) || legacyCliEnabled(env)) return;
   throw new AgentCommandError(
     'legacy_cli_disabled',
@@ -123,14 +126,14 @@ export function printCommandUsage(command) {
   marklab open <file.md>
   marklab open <file.md> --background
 
-Open a local Markdown file in MarkLab. Foreground mode keeps the daemon attached to this terminal; background mode keeps it running until marklab stop.`);
+Open a local Markdown file in MarkLab.app. The --background form is archived daemon compatibility and requires ${legacyCliOptInEnv}=1.`);
     return;
   }
   if (command === 'share') {
     console.log(`Usage:
   marklab share <file.md> [--json]
 
-Start sharing a local Markdown file. Foreground sharing stops when this terminal exits. Background hosting is available by opening the file with --background and creating links from that daemon.`);
+Open a local Markdown file in MarkLab.app and use the native Start Sharing flow. The app creates workspace-owned documents and access links; this command does not mint a hidden daemon relay link.`);
     return;
   }
   if (command === 'join') {
@@ -177,6 +180,7 @@ export function parseCliArgs(argv) {
     return {
       command,
       file,
+      json,
       background: rest.includes('--background'),
     };
   }
@@ -489,6 +493,100 @@ function openExternalURL(url) {
   return true;
 }
 
+function openExternalFile(filePath) {
+  if (process.env.MARKLAB_NO_OPEN === 'true') return false;
+  if (process.platform === 'darwin') {
+    spawn('open', ['-a', process.env.MARKLAB_APP_NAME ?? 'MarkLab', filePath], { stdio: 'ignore', detached: true }).unref();
+    return true;
+  }
+  if (process.platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', filePath], { stdio: 'ignore', detached: true }).unref();
+    return true;
+  }
+  spawn('xdg-open', [filePath], { stdio: 'ignore', detached: true }).unref();
+  return true;
+}
+
+function nativeAppSupportDir(env = process.env) {
+  if (env.MARKLAB_APP_SUPPORT_DIR?.trim()) return resolve(env.MARKLAB_APP_SUPPORT_DIR);
+  return join(homedir(), 'Library', 'Application Support', 'MarkLab');
+}
+
+async function readJsonFile(filePath, fallback) {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    return JSON.parse(await readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return fallback;
+    throw error;
+  }
+}
+
+function markdownHash(markdown) {
+  return `sha256:${createHash('sha256').update(markdown).digest('hex')}`;
+}
+
+function nativeConflictFileName(filePath) {
+  return `${Buffer.from(resolve(filePath), 'utf8')
+    .toString('base64')
+    .replaceAll('/', '_')
+    .replaceAll('+', '-')
+    .replaceAll('=', '')}.json`;
+}
+
+function summarizeNativeBinding(binding) {
+  if (!binding) return null;
+  return {
+    docId: binding.docId ?? null,
+    branchId: binding.branchId ?? null,
+    mode: binding.mode ?? null,
+    localDocId: binding.localDocId ?? null,
+    appEditorURL: binding.appEditorURL ?? null,
+    createdAt: binding.createdAt ?? null,
+    updatedAt: binding.updatedAt ?? null,
+    hasAccessToken: Boolean(binding.token),
+  };
+}
+
+async function readNativeRelayState(file, env = process.env) {
+  const markdownPath = await resolveMarkdownFile(file);
+  const appSupport = nativeAppSupportDir(env);
+  const [bindingsStore, baselinesStore, diskMarkdown] = await Promise.all([
+    readJsonFile(join(appSupport, 'shared-document-bindings.json'), { bindings: {} }),
+    readJsonFile(join(appSupport, 'projection-baselines.json'), { baselines: {} }),
+    import('node:fs/promises').then(({ readFile }) => readFile(markdownPath, 'utf8')),
+  ]);
+  const candidates = [markdownPath, resolve(file)];
+  const binding = candidates.map((candidate) => bindingsStore?.bindings?.[candidate]).find(Boolean) ?? null;
+  const baseline = candidates.map((candidate) => baselinesStore?.baselines?.[candidate]).find(Boolean) ?? null;
+  const conflictPath = join(appSupport, 'conflicts', nativeConflictFileName(markdownPath));
+  const conflict = await readJsonFile(conflictPath, null);
+  const observedHash = markdownHash(diskMarkdown);
+  const hasOpenConflict = Boolean(conflict && (conflict.status ?? 'open') === 'open');
+  const shared = Boolean(binding);
+  let syncState = shared ? 'pending' : 'local';
+  if (hasOpenConflict) syncState = 'conflict';
+  else if (shared && baseline?.lastProjectedHash === observedHash) syncState = 'synced';
+  return {
+    path: markdownPath,
+    appSupportDir: appSupport,
+    shared,
+    syncState,
+    observedHash,
+    docId: binding?.docId ?? null,
+    branchId: binding?.branchId ?? null,
+    binding: summarizeNativeBinding(binding),
+    baseline: baseline
+      ? {
+          lastProjectedHash: baseline.lastProjectedHash ?? null,
+          lastProviderStateFingerprint: baseline.lastProviderStateFingerprint ?? null,
+          updatedAt: baseline.updatedAt ?? null,
+        }
+      : null,
+    conflict: hasOpenConflict ? conflict : null,
+  };
+}
+
 export function parseHostedCollabLink(link) {
   let url;
   try {
@@ -793,6 +891,134 @@ async function openBackground(file) {
   console.log('Sync is running in the background.');
   console.log(`Stop with: marklab stop ${markdownPath}`);
   openBrowser(daemon.localUrl);
+}
+
+async function nativeOpenCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'open requires a Markdown file path.');
+  if (input.background) {
+    throw new AgentCommandError('invalid_target', 'open --background is archived daemon compatibility. Set MARKLAB_ENABLE_LEGACY_CLI=1 to use it.');
+  }
+  const markdownPath = await resolveMarkdownFile(input.file);
+  const opened = openExternalFile(markdownPath);
+  const result = agentSuccess({
+    path: markdownPath,
+    action: 'open_native_file',
+    opened,
+    nextStep: opened
+      ? 'MarkLab.app should open the local Markdown file.'
+      : 'Open this file in MarkLab.app.',
+  });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(opened ? `Opening ${markdownPath} in MarkLab.app.` : `Open ${markdownPath} in MarkLab.app.`);
+}
+
+async function nativeShareCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'share requires a Markdown file path.');
+  const markdownPath = await resolveMarkdownFile(input.file);
+  const opened = openExternalFile(markdownPath);
+  const result = agentSuccess({
+    path: markdownPath,
+    action: 'start_sharing_in_app',
+    opened,
+    nextStep: opened
+      ? 'Use Start Sharing in MarkLab.app. The app creates the workspace-owned document and access links.'
+      : 'Open this file in MarkLab.app, then use Start Sharing. The app creates the workspace-owned document and access links.',
+  });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(result.nextStep);
+}
+
+async function nativeStatusCommand(input) {
+  if (!input.file) {
+    const result = agentSuccess({
+      model: 'native-relay',
+      syncState: 'unknown',
+      message: 'Pass a Markdown file path to inspect native relay state.',
+    });
+    if (input.json) {
+      writeAgentJson(result);
+      return;
+    }
+    console.log(result.message);
+    return;
+  }
+  const state = await readNativeRelayState(input.file);
+  const result = agentSuccess(state);
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(`${state.path}`);
+  console.log(`  Shared: ${state.shared ? 'yes' : 'no'}`);
+  console.log(`  Sync state: ${state.syncState}`);
+  if (state.docId) console.log(`  Document: ${state.docId}`);
+  if (state.branchId) console.log(`  Branch: ${state.branchId}`);
+}
+
+async function nativeWaitCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'wait requires a Markdown file path.');
+  if (!input.synced) throw new AgentCommandError('invalid_target', 'wait currently requires --synced.');
+  const timeoutMs = Number.isFinite(input.timeoutMs) ? input.timeoutMs : 10000;
+  const startedAt = Date.now();
+  let latest;
+  while (Date.now() - startedAt <= timeoutMs) {
+    latest = await readNativeRelayState(input.file);
+    if (latest.syncState === 'conflict') {
+      throw new AgentCommandError('conflict_required', 'Native relay sync is paused on a conflict.', {
+        path: latest.path,
+        conflict: latest.conflict,
+      });
+    }
+    if (latest.syncState === 'synced' || latest.syncState === 'local') {
+      const result = agentSuccess({
+        path: latest.path,
+        syncState: latest.syncState,
+        observedHash: latest.observedHash,
+        waitedMs: Date.now() - startedAt,
+      });
+      if (input.json) {
+        writeAgentJson(result);
+        return;
+      }
+      console.log(`${latest.path} is ${latest.syncState} (${latest.observedHash}).`);
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new AgentCommandError('sync_timeout', 'Timed out waiting for native relay sync.', {
+    path: latest?.path ?? resolve(input.file),
+    syncState: latest?.syncState ?? 'unknown',
+    observedHash: latest?.observedHash ?? null,
+    timeoutMs,
+  });
+}
+
+async function nativeConflictCommand(input) {
+  if (!input.file) throw new AgentCommandError('invalid_target', 'conflict requires a Markdown file path.');
+  if (input.useLocal || input.useShared || input.resolveFile) {
+    throw new AgentCommandError('invalid_conflict_action', 'Native conflict resolution is handled in MarkLab.app. This CLI only reports conflict state.');
+  }
+  const state = await readNativeRelayState(input.file);
+  const result = agentSuccess({
+    path: state.path,
+    hasConflict: Boolean(state.conflict),
+    syncState: state.syncState,
+    conflict: state.conflict,
+    nextStep: state.conflict
+      ? 'Resolve the conflict in MarkLab.app before continuing.'
+      : 'No native relay conflict is open.',
+  });
+  if (input.json) {
+    writeAgentJson(result);
+    return;
+  }
+  console.log(state.conflict ? result.nextStep : 'No native relay conflict is open.');
 }
 
 async function startBackgroundDaemon(markdownPath, options = {}) {
@@ -1409,6 +1635,31 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   assertLegacyCliEnabled(input);
+
+  if (!legacyCliEnabled() && input.command === 'open') {
+    await nativeOpenCommand(input);
+    return;
+  }
+
+  if (!legacyCliEnabled() && input.command === 'share') {
+    await nativeShareCommand(input);
+    return;
+  }
+
+  if (!legacyCliEnabled() && input.command === 'status') {
+    await nativeStatusCommand(input);
+    return;
+  }
+
+  if (!legacyCliEnabled() && input.command === 'wait') {
+    await nativeWaitCommand(input);
+    return;
+  }
+
+  if (!legacyCliEnabled() && input.command === 'conflict') {
+    await nativeConflictCommand(input);
+    return;
+  }
 
   if (input.command === 'open' && input.file) {
     if (input.background) await openBackground(input.file);

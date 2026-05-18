@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import http from 'node:http';
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
@@ -21,6 +22,10 @@ import {
 import { createDaemonEntry, writeDaemonRegistry } from './daemon-supervisor.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+function markdownHash(markdown) {
+  return `sha256:${createHash('sha256').update(markdown).digest('hex')}`;
+}
 
 function listenOnLoopback(port) {
   const server = net.createServer();
@@ -209,7 +214,7 @@ describe('marklab CLI', () => {
     expect(legacyCliEnabled({})).toBe(false);
     expect(legacyCliEnabled({ MARKLAB_ENABLE_LEGACY_CLI: '1' })).toBe(true);
 
-    const result = await runCli(['status', '--json'], { MARKLAB_ENABLE_LEGACY_CLI: '0' }, 30000);
+    const result = await runCli(['recent', '--json'], { MARKLAB_ENABLE_LEGACY_CLI: '0' }, 30000);
     expect(result.code).toBe(8);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
@@ -258,15 +263,138 @@ describe('marklab CLI', () => {
     });
   });
 
+  it('opens local files through the native app path without enabling the legacy daemon CLI', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-open-'));
+    const markdownPath = join(directory, 'native.md');
+    await writeFile(markdownPath, '# Native open\n', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+
+    const result = await runCli(['open', markdownPath, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+
+    expectCliOk(result);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      action: 'open_native_file',
+      opened: false,
+    });
+  });
+
+  it('routes share through MarkLab.app in native mode instead of minting a daemon relay link', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-share-'));
+    const markdownPath = join(directory, 'share.md');
+    await writeFile(markdownPath, '# Native share\n', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+
+    const result = await runCli(['share', markdownPath, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+
+    expectCliOk(result);
+    const body = JSON.parse(result.stdout);
+    expect(body).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      action: 'start_sharing_in_app',
+      opened: false,
+    });
+    expect(body).not.toHaveProperty('grantId');
+    expect(body).not.toHaveProperty('url');
+  });
+
+  it('reads native shared-file status, wait, and conflict state from MarkLab.app support files without legacy opt-in', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-state-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    await mkdir(appSupportDirectory, { recursive: true });
+    const markdownPath = join(directory, 'shared.md');
+    const markdown = '# Synced native file\n';
+    await writeFile(markdownPath, markdown, 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+    const hash = markdownHash(markdown);
+    const now = '2026-05-18T12:00:00Z';
+
+    await writeFile(join(appSupportDirectory, 'shared-document-bindings.json'), JSON.stringify({
+      schemaVersion: 1,
+      bindings: {
+        [canonicalMarkdownPath]: {
+          schemaVersion: 1,
+          filePath: canonicalMarkdownPath,
+          docId: 'doc_native',
+          branchId: 'branch_native',
+          mode: 'edit',
+          token: null,
+          appEditorURL: 'https://app.example.test/collab?docId=doc_native&branchId=branch_native&mode=edit&clientKind=app&nativeShell=markedit',
+          localDocId: 'local_native',
+          baselineHash: hash,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    }), 'utf8');
+    await writeFile(join(appSupportDirectory, 'projection-baselines.json'), JSON.stringify({
+      schemaVersion: 1,
+      baselines: {
+        [canonicalMarkdownPath]: {
+          schemaVersion: 1,
+          lastProjectedMarkdown: markdown,
+          lastProjectedHash: hash,
+          lastProviderStateFingerprint: `provider-ytext:${hash}`,
+          updatedAt: now,
+        },
+      },
+    }), 'utf8');
+
+    const env = {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+    };
+
+    const status = await runCli(['status', markdownPath, '--json'], env, 30000);
+    expectCliOk(status);
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      shared: true,
+      syncState: 'synced',
+      docId: 'doc_native',
+      branchId: 'branch_native',
+      conflict: null,
+    });
+
+    const waited = await runCli(['wait', markdownPath, '--synced', '--json', '--timeout', '1000'], env, 30000);
+    expectCliOk(waited);
+    expect(JSON.parse(waited.stdout)).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      syncState: 'synced',
+      observedHash: hash,
+    });
+
+    const conflict = await runCli(['conflict', markdownPath, '--json'], env, 30000);
+    expectCliOk(conflict);
+    expect(JSON.parse(conflict.stdout)).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      hasConflict: false,
+      conflict: null,
+    });
+  });
+
   it('parses foreground, background, status, and stop commands', () => {
     expect(parseCliArgs(['open', 'README.md'])).toEqual({
       command: 'open',
       file: 'README.md',
+      json: false,
       background: false,
     });
     expect(parseCliArgs(['open', 'README.md', '--background'])).toEqual({
       command: 'open',
       file: 'README.md',
+      json: false,
       background: true,
     });
     expect(parseCliArgs(['status'])).toEqual({ command: 'status', file: null, json: false });

@@ -1,14 +1,20 @@
 # MarkLab CLI
 
-CLI helper package for MarkLab. The current non-legacy command surface is limited to opening hosted `/collab` edit links in MarkLab.app; the old local-daemon Markdown mirror commands remain archived compatibility commands.
+CLI helper package for MarkLab. The current non-legacy command surface routes local files and hosted `/collab` edit links into MarkLab.app, diagnoses the hosted pilot, and lets agents inspect native sync/conflict state. The old local-daemon Markdown mirror commands remain archived compatibility commands.
 
 The new MarkLab pilot uses MarkLab.app with the hosted `/collab` control-plane/Y-Sweet path:
 
 ```sh
+npx -y @marklab/cli doctor --json
+npx -y @marklab/cli open README.md
+npx -y @marklab/cli share README.md
 npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
+npx -y @marklab/cli status README.md --json
+npx -y @marklab/cli wait README.md --synced --json
+npx -y @marklab/cli conflict README.md --json
 ```
 
-That command opens `marklab://join?...` so MarkLab.app can ask where to create or attach the local Markdown file. View links stay browser-only.
+`open` and `share` open the file in MarkLab.app. `share` does not create hidden daemon relay links; the native app owns Start Sharing, workspace-owned document creation, and access-link creation. `join` opens `marklab://join?...` so MarkLab.app can ask where to create or attach the local Markdown file. View links stay browser-only.
 
 The legacy local-daemon CLI commands are disabled by default. For archived compatibility testing only, opt in explicitly:
 
@@ -35,19 +41,27 @@ Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pn
 ```sh
 marklab join <https://.../collab?...mode=edit>
 marklab open <file.md>
+marklab share <file.md>
+marklab status <file.md> --json
+marklab wait <file.md> --synced --json
+marklab conflict <file.md> --json
+marklab doctor --json
+```
+
+Archived compatibility commands require `MARKLAB_ENABLE_LEGACY_CLI=1`:
+
+```sh
 marklab open <file.md> --background
 marklab create-link <file.md> --role edit
 marklab create-link <file.md> --role view
-marklab share <file.md>
-marklab join <edit-link> <file.md>
-marklab join <edit-link> --pick-dir --background
-marklab join <edit-link> --dir ./docs --create-dir --background
-marklab status
+marklab join <legacy-relay-link> <file.md>
+marklab join <legacy-relay-link> --pick-dir --background
+marklab join <legacy-relay-link> --dir ./docs --create-dir --background
 marklab stop <file.md>
 marklab stop --all
 ```
 
-Use `marklab --help`, `marklab open --help`, `marklab create-link --help`, `marklab share --help`, or `marklab join --help` for command help. Except for hosted `/collab` edit-link opening, the commands above require `MARKLAB_ENABLE_LEGACY_CLI=1` until Plan 6 replaces the archived local-daemon command surface.
+Use `marklab --help`, `marklab open --help`, `marklab share --help`, or `marklab join --help` for command help.
 
 ## Archived Daemon Behavior
 
@@ -108,6 +122,7 @@ Normal new-pilot users do not need to set those variables. Operators and self-ho
 MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev \
 MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev \
 MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay \
+MARKLAB_ENABLE_LEGACY_CLI=1 \
 marklab share README.md
 ```
 

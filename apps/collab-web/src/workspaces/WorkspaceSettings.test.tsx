@@ -33,6 +33,31 @@ function createClient(overrides: Partial<WorkspaceSettingsClient> = {}): Workspa
         editGrantCount: 1,
       },
     ]),
+    getBillingState: vi.fn(async () => ({
+      workspaceId: 'ws_1',
+      role: 'Owner' as const,
+      canManagePlan: false,
+      mode: 'manual' as const,
+      plan: {
+        planId: 'free',
+        name: 'Free',
+        status: 'manual',
+        currentPeriodEnd: null,
+      },
+      limits: {
+        memberSeats: 1,
+        concurrentGuestEdits: 3,
+      },
+      usage: {
+        memberSeats: 1,
+        concurrentGuestEdits: 2,
+      },
+      management: {
+        stripeConfigured: false,
+        canManagePayment: false,
+        message: 'Manual/free alpha mode. Stripe and paid-plan changes are not enabled.',
+      },
+    })),
     ...overrides,
   };
 }
@@ -65,6 +90,13 @@ describe('WorkspaceSettings', () => {
     expect(await screen.findByText('Spec doc')).toBeTruthy();
     expect(screen.getByText('2 view')).toBeTruthy();
     expect(screen.getByText('1 edit')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan & Billing' }));
+    expect(await screen.findByText('Free')).toBeTruthy();
+    expect(screen.getByText('manual')).toBeTruthy();
+    expect(screen.getByText('1 / 1')).toBeTruthy();
+    expect(screen.getByText('2 / 3')).toBeTruthy();
+    expect(screen.getByText('Manual/free alpha mode. Stripe and paid-plan changes are not enabled.')).toBeTruthy();
   });
 
   it('surfaces server 403 responses for reader attempts to mutate settings', async () => {

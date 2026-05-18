@@ -4,6 +4,8 @@ Date: 2026-05-11
 
 Status: Stage-level implementation roadmap. Each plan is intentionally smaller than the full product spec and must produce a testable increment.
 
+Update, 2026-05-18: Plans 1A through 5 are closed for the current private alpha baseline. Plan 6 is implemented for the native relay pilot except for visual/manual clean-install packaging checks. Plan 7 is implemented only as manual/free billing infrastructure readiness; Stripe, paid-plan selection, and admin plan mutation are intentionally deferred. Plan 8 now has the repo-side launch package, runbook, and smoke script; live Fly deploy, Neon migration, and recorded manual product smoke remain operator launch-gate actions. There is no numbered implementation plan after Plan 8 in this roadmap.
+
 ## Why This Should Converge
 
 Yes, the proposed structure should make engineering converge, because each stage has:
@@ -26,7 +28,7 @@ The important rule is that downstream plans are living execution documents, whil
 | 4 | `2026-05-11-marklab-native-integration.md` | MarkLab.app / MarkEdit-based local editor integration | Packaging, local user workflow |
 | 5 | `2026-05-11-reconnect-conflict-hardening.md` | Relay-like conflict UX and reconnect E2E hardening | Alpha release gate |
 | 6 | `2026-05-11-packaging-cli-distribution-docs.md` | CLI, packaging, user docs, diagnostics | Deploy readiness |
-| 7 | `2026-05-11-billing-subscription-seats.md` | Subscription records, seat enforcement, billing hooks | Paid/public launch |
+| 7 | `2026-05-11-billing-subscription-seats.md` | Manual/free subscription records and billing-readiness hooks now; Stripe later | Paid/public launch |
 | 8 | `2026-05-11-production-deploy-alpha-launch.md` | Production deploy, smoke, rollback, launch gate | Alpha launch |
 
 ## Sequencing
@@ -44,6 +46,8 @@ Recommended execution order matches the Order column in the table above. Plans a
 9. `2026-05-11-production-deploy-alpha-launch.md` (8).
 
 The billing plan (7) can be deferred for a private free alpha, but the control-plane plan (2) still must include the data model concepts for seats, subscriptions, and guest quotas because provider-token issuance depends on them.
+
+For the current private alpha, execute Plan 7 in manual/free mode only and keep Stripe/payment UX disabled. The next real launch gate is Plan 8's recorded production smoke, not a new Plan 9.
 
 ## Downstream Refresh Rule
 

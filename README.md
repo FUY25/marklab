@@ -167,13 +167,19 @@ The Docker build depends on the repo-root `.dockerignore`; keep it updated when 
 
 ## CLI Status
 
-The CLI currently has one normal new-pilot command:
+The CLI now has native-relay pilot commands that work without the archived daemon opt-in:
 
 ```sh
+marklab doctor --json
+marklab open README.md
+marklab share README.md
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
+marklab status README.md --json
+marklab wait README.md --synced --json
+marklab conflict README.md --json
 ```
 
-That opens a `marklab://join?...` deep link for MarkLab.app. View links are rejected because they are browser-only.
+`open` and `share` route to MarkLab.app; `share` does not mint a hidden daemon relay link. The app owns Start Sharing, workspace-owned document creation, and access-link creation. `join` opens a `marklab://join?...` deep link for MarkLab.app. View links are rejected because they are browser-only. `status`, `wait`, and `conflict` read native MarkLab.app support files so agents can coordinate with the local `.md` without using provider internals.
 
 The old daemon commands are archived compatibility commands and require explicit opt-in:
 
@@ -192,6 +198,7 @@ MARKLAB_ENABLE_LEGACY_CLI=1 marklab create-link README.md --role edit
 - [Archived Local Daemon Distribution](docs/production/local-daemon-distribution.md)
 - [Privacy And Storage](docs/production/privacy-and-storage.md)
 - [Hosted Relay Operations](docs/production/relay-ops.md)
+- [Alpha Launch Runbook](docs/production/alpha-launch-runbook.md)
 - [Agent Guide](docs/agent/marklab-agent-guide.md)
 
 ## Archived Plans

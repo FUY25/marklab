@@ -29,15 +29,26 @@ If MarkLab.app reports a paused sync state or conflict, stop changing that watch
 
 ## After Editing
 
-Tell the user which file changed and ask them to confirm the MarkLab.app sync indicator. When the new hosted CLI `status`/`wait` surface is implemented, agents should use it here; until then, the old daemon `status`, `wait`, `save-version`, and `conflict` commands are archived compatibility commands and require `MARKLAB_ENABLE_LEGACY_CLI=1`.
+Tell the user which file changed and use the native relay CLI status surface when available:
+
+```bash
+marklab status <file.md> --json
+marklab wait <file.md> --synced --json
+marklab conflict <file.md> --json
+```
+
+These commands read MarkLab.app support files and do not use the archived local daemon. If `conflict` reports an open conflict, stop editing the watched file and let the user resolve it in MarkLab.app.
 
 ## Link Management
 
 Agents should not create or revoke links through undocumented APIs. Link creation, copy, revoke, active collaborators, and local sync state belong in the native collaboration inspector for the current pilot.
 
-The only normal CLI command in the new pilot is opening a hosted edit link in the native app:
+Normal new-pilot CLI commands are UI/native routing and sync inspection:
 
 ```bash
+marklab doctor --json
+marklab open <file.md>
+marklab share <file.md>
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
@@ -45,12 +56,9 @@ View links stay browser-only.
 
 ## Deferred Control Surface
 
-The planned hosted agent control surface is:
+The remaining planned hosted agent control surface is:
 
-- `status`
-- `wait --synced`
-- `conflict`
 - `save-version`
 - `versions`
 
-Those commands must bind to the new relay/native session model before becoming normal pilot guidance. The archived local-daemon versions of those commands are not the new product path.
+Those commands must bind to the new relay/native session model before becoming normal pilot guidance. The archived local-daemon versions of those commands are not the new product path and require `MARKLAB_ENABLE_LEGACY_CLI=1`.

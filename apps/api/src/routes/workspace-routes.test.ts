@@ -153,18 +153,28 @@ function createWorkspacePool() {
       return { rows: [{ id: key.id } as Row], rowCount: 1 };
     }
 
-    if (sql.includes('from workspace_share_keys') && !sql.includes('seat_limits')) {
+    if (sql.includes('from workspace_share_keys') && !sql.includes('for update of k')) {
       const key = shareKeys.find((candidate) => candidate.token_hash === params?.[0] && !candidate.revoked_at);
       if (!key) return { rows: [], rowCount: 0 };
       return { rows: [{ workspace_id: key.workspace_id } as Row], rowCount: 1 };
     }
 
     if (sql.includes('from workspace_share_keys')) {
-      expect(sql).toContain("s.status in ('manual', 'trialing', 'active')");
-      expect(sql).toContain('(s.current_period_end is null or s.current_period_end > now())');
       const key = shareKeys.find((candidate) => candidate.token_hash === params?.[0] && !candidate.revoked_at);
       if (!key) return { rows: [], rowCount: 0 };
-      const subscription = subscriptions.find((candidate) => candidate.workspace_id === key.workspace_id);
+      return {
+        rows: [{
+          workspace_id: key.workspace_id,
+          role: key.role,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('from workspaces w') && sql.includes('seat_limits sl')) {
+      expect(sql).toContain("s.status in ('manual', 'trialing', 'active')");
+      expect(sql).toContain('(s.current_period_end is null or s.current_period_end > now())');
+      const subscription = subscriptions.find((candidate) => candidate.workspace_id === params?.[0]);
       const usableSubscription = subscription
         && ['manual', 'trialing', 'active'].includes(subscription.status)
         && (!subscription.current_period_end || new Date(subscription.current_period_end).getTime() > Date.now())
@@ -172,8 +182,6 @@ function createWorkspacePool() {
         : undefined;
       return {
         rows: [{
-          workspace_id: key.workspace_id,
-          role: key.role,
           member_seats: seatLimits.get(usableSubscription?.plan_id ?? 'free') ?? 1,
         } as Row],
         rowCount: 1,

@@ -100,7 +100,7 @@ The product MVP includes a control-plane foundation even if the first UI is mini
 - Roles: `Owner`, `Member`, `Reader`.
 - Workspace share keys / invite keys.
 - Document-level access grants: `view` and `edit`.
-- Sessions: browser, app, daemon, agent, and guest.
+- Sessions: browser, app, and guest collaborator sessions. AI agents edit through the local file and are not shown as collaborators.
 - Provider tokens: short-lived tokens used to connect to the Yjs collaboration provider.
 - Plans, workspace member-seat limits, and concurrent-guest-edit quota.
 - Subscription records.
@@ -227,11 +227,12 @@ The first deploy is one Fly app plus Neon Postgres, with the API supervising an 
 
 The current alpha uses:
 
-- One Fly app for web, API, and `/relay` websocket.
-- Neon Postgres for room metadata, grants, sessions, host state, revision/hash, and ephemeral Yjs state.
-- A host-gated protocol where browser edits are proposed to the host daemon and accepted only after host acknowledgement.
+- One Fly app for web, API/control plane, `/collab`, workspace settings, and an API-supervised upstream Y-Sweet provider.
+- Neon Postgres for users, workspaces, documents, branches, access grants, sessions, versions, subscriptions, and seat-limit metadata.
+- A Fly volume at `/data/ysweet` for Y-Sweet provider persistence.
+- MarkLab.app as the local-file owner/editor, with browser and app collaborators using the same hosted `/collab` provider path.
 
-This is useful for the alpha, but it does not satisfy the next product requirement: guest editing while the host is offline.
+The archived anonymous `/relay` host-gated daemon route remains compatibility-only and is disabled by default. It is not the pilot path for new testing.
 
 ### Target Server Model
 
@@ -439,7 +440,7 @@ When a client transitions from disconnected to connected, or when a previously-i
 
 ### CLI surface for safe coordination
 
-CLI and agent commands expose `status`, `wait-for-sync`, and conflict state so local automation can coordinate safely around an in-flight session. Routing details — which CLI subcommands talk to the local MarkLab.app over IPC vs the control plane over HTTPS — are deferred to the CLI implementation ticket; the contract is that `wait-for-sync` blocks until the local Y.Doc has fully synced and projected to disk.
+CLI and agent commands expose `status`, `wait-for-sync`, and conflict state so local automation can coordinate safely around an in-flight session. In the current native pilot, those commands read MarkLab.app support files for the active local file instead of talking to the archived daemon. The contract is that `wait-for-sync` blocks until the local shared state has synced and projected to disk, or reports conflict/timeout.
 
 ## Collaboration Data Flow
 
@@ -771,15 +772,15 @@ Build the collaboration provider foundation. Phase 1 owns the server side end-to
 - Durable update log and snapshot.
 - Short-lived Y-Sweet ClientToken validation (10-min `validForSeconds`, 2-min refresh margin, provider-side token signature/expiration/document/authorization enforcement).
 - Document-level view/edit grants.
-- Join flow: stub auth (dev-mode token-mint endpoint) is acceptable for Phase 1 harness work only. Real login/control-plane session handling must land before public browser/native client work. Phase 1's token/session API contract must already match the post-control-plane shape so the auth swap is internal.
-- Guest sessions (control-plane creates a guest session record even under stub auth).
+- Join flow: a development-only token-mint harness is acceptable for Phase 1 harness work only. Real login/control-plane session handling must land before customer-facing browser/native client work. Phase 1's token/session API contract must already match the post-control-plane shape so the auth swap is internal.
+- Guest sessions (control-plane creates a guest session record even under the development harness).
 - App local Yjs persistence (used by the Phase 1 harness; full app integration is Phase 2).
 - Awareness fanout.
 - `Y.PermanentUserData` clientID-to-identity binding.
 - Opaque provider document ids.
 - Revocation: refresh denial only; provider has no active cutoff in Phase 1.
 - Malicious-client negative test proves read-only Y-Sweet authorization rejects raw HTTP/websocket updates before any trusted live read-only mode can ship.
-- Phase 1 and any pre-control-plane browser harness work are internal technical slices. They are not public MVP release candidates until real login/control-plane UI replaces stub auth.
+- Phase 1 and any pre-control-plane browser harness work are internal harness milestones. They are not customer MVP release candidates until real login/control-plane UI replaces the development harness.
 
 Phase 1 acceptance criteria that require a browser UI (browser IndexedDB persistence, remote cursor/highlight rendering, presence avatars) move to Phase 1B; Phase 1 validates the server-side awareness fanout and Y.Doc persistence with the harness client.
 

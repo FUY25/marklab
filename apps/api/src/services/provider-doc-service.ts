@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DbExecutor, DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
+import { readConcurrentGuestEditQuota } from './seat-limit-service';
 
 export const LEGACY_DOCUMENT_QUOTA_KEY_PREFIX = 'legacy:marklab-alpha-doc:';
 
@@ -367,26 +368,6 @@ export async function countOtherActiveGuestEditSessions(pool: DbExecutor, input:
   );
 
   return Number(counted.rows[0]?.active_guest_sessions ?? 0);
-}
-
-export async function readConcurrentGuestEditQuota(pool: DbExecutor, input: {
-  docId: string;
-  fallbackQuota: number;
-}): Promise<number> {
-  const result = await pool.query<{ concurrent_guest_edits: string | number | null }>(
-    `select case when d.workspace_id is null then $2
-                 else coalesce(sl.concurrent_guest_edits, $2)
-            end as concurrent_guest_edits
-       from documents d
-       left join subscriptions s on s.workspace_id = d.workspace_id
-        and s.status in ('manual', 'trialing', 'active')
-        and (s.current_period_end is null or s.current_period_end > now())
-       left join seat_limits sl on d.workspace_id is not null
-        and sl.plan_id = coalesce(s.plan_id, 'free')
-      where d.id = $1`,
-    [input.docId, input.fallbackQuota],
-  );
-  return Number(result.rows[0]?.concurrent_guest_edits ?? input.fallbackQuota);
 }
 
 export async function assertStoredGuestEditGrantActive(pool: DbExecutor, input: {

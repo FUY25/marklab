@@ -12,8 +12,8 @@ import {
   markProviderTokenRefreshIssued,
   providerTokenIssuanceCanIssue,
   recordProviderTokenIssuanceWithPolicy,
-  readConcurrentGuestEditQuota,
 } from './provider-doc-service';
+import { readConcurrentGuestEditQuota } from './seat-limit-service';
 
 function createProviderDocPool(existingProviderDocId: string | null = null, seededAt: string | null = '2026-05-11T00:00:00.000Z') {
   const calls: Array<{ sql: string; params: readonly unknown[] }> = [];

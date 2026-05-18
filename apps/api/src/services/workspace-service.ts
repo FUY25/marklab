@@ -3,6 +3,7 @@ import type { DbExecutor, DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { hashToken } from './access-control';
 import { requireWorkspaceRole, type WorkspaceRole } from './control-plane-access';
+import { readWorkspaceMemberSeatLimit } from './seat-limit-service';
 
 export interface WorkspaceSummary {
   workspaceId: string;
@@ -54,7 +55,6 @@ interface ShareKeyRow {
 interface JoinKeyRow {
   workspace_id: string;
   role: WorkspaceRole;
-  member_seats: string | number;
 }
 
 interface DocumentRow {
@@ -215,13 +215,8 @@ export async function joinWorkspaceWithShareKey(pool: DbPool, input: { userId: s
 
     const keyResult = await client.query<JoinKeyRow>(
       `select k.workspace_id,
-              k.role,
-              coalesce(sl.member_seats, 1) as member_seats
+              k.role
          from workspace_share_keys k
-         left join subscriptions s on s.workspace_id = k.workspace_id
-          and s.status in ('manual', 'trialing', 'active')
-          and (s.current_period_end is null or s.current_period_end > now())
-       left join seat_limits sl on sl.plan_id = coalesce(s.plan_id, 'free')
         where k.token_hash = $1
           and k.workspace_id = $2
           and k.revoked_at is null
@@ -247,7 +242,11 @@ export async function joinWorkspaceWithShareKey(pool: DbPool, input: { userId: s
           where workspace_id = $1`,
         [key.workspace_id],
       );
-      if (Number(counted.rows[0]?.member_count ?? 0) >= Number(key.member_seats)) throw new Error('member_seat_limit_exceeded');
+      const memberSeatLimit = await readWorkspaceMemberSeatLimit(client, {
+        workspaceId: key.workspace_id,
+        fallbackLimit: 1,
+      });
+      if (Number(counted.rows[0]?.member_count ?? 0) >= memberSeatLimit) throw new Error('member_seat_limit_exceeded');
       await client.query(
         `insert into workspace_members
            (workspace_id, user_id, role)

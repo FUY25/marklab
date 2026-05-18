@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AgentCommandError, agentSuccess } from './agent-json.mjs';
+import { defaultAlphaRelayConfig } from './relay-config.mjs';
 
 const minimumNodeMajor = 20;
 
@@ -110,6 +111,97 @@ async function checkRelayReachability(url, timeoutMs = 1500) {
 function truncateProbeText(value, maxLength = 2000) {
   const text = String(value ?? '');
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function trimTrailingSlash(value) {
+  return value.replace(/\/+$/u, '');
+}
+
+function resolvePilotTarget(env) {
+  const apiUrl = env.MARKLAB_CONTROL_PLANE_API_URL?.trim()
+    || env.MARKLAB_PUBLIC_API_URL?.trim()
+    || defaultAlphaRelayConfig.publicApiUrl;
+  const webUrl = env.MARKLAB_PUBLIC_WEB_URL?.trim()
+    || defaultAlphaRelayConfig.publicWebUrl;
+  return {
+    apiUrl: trimTrailingSlash(apiUrl),
+    webUrl: trimTrailingSlash(webUrl),
+    source: env.MARKLAB_CONTROL_PLANE_API_URL || env.MARKLAB_PUBLIC_API_URL || env.MARKLAB_PUBLIC_WEB_URL
+      ? 'environment'
+      : 'default-alpha',
+  };
+}
+
+function resolveNativeAppPath(env) {
+  const configuredPath = env.MARKLAB_APP_PATH?.trim() || env.MARKLAB_APP_BUNDLE_PATH?.trim();
+  return configuredPath ? resolve(configuredPath) : null;
+}
+
+function nativeJoinScheme(env) {
+  const scheme = env.MARKLAB_APP_URL_SCHEME?.trim() || 'marklab';
+  return scheme.replace(/:.*$/u, '');
+}
+
+function addNativeAppChecks(checks, warnings, env, platform = process.platform) {
+  const appPath = resolveNativeAppPath(env);
+  const appName = env.MARKLAB_APP_NAME?.trim() || 'MarkLab';
+  if (appPath) {
+    if (existsSync(appPath)) {
+      addCheck(checks, 'native_app', 'ok', 'Configured MarkLab.app bundle path exists.', {
+        appPath,
+        source: 'environment',
+      });
+    } else {
+      const message = 'Configured MarkLab.app bundle path does not exist.';
+      warnings.push({ code: 'native_app_missing', message, details: { appPath } });
+      addCheck(checks, 'native_app', 'warning', message, { appPath, source: 'environment' });
+    }
+  } else if (platform === 'darwin') {
+    addCheck(checks, 'native_app', 'ok', 'No MarkLab.app bundle path configured; CLI will ask LaunchServices to open the app by name.', {
+      appName,
+      source: 'launch-services',
+    });
+  } else {
+    const message = 'MarkLab.app native routing is only supported on macOS.';
+    warnings.push({ code: 'native_app_platform_unsupported', message, details: { platform } });
+    addCheck(checks, 'native_app', 'warning', message, { platform });
+  }
+
+  const scheme = nativeJoinScheme(env);
+  addCheck(checks, 'native_url_scheme', 'ok', 'Native join URL scheme is configured.', {
+    scheme,
+    example: `${scheme}://join?url=${encodeURIComponent('https://marklab-relay-alpha.fly.dev/collab?docId=...&branchId=...&token=...&mode=edit')}`,
+  });
+}
+
+async function checkApiHealth(apiUrl, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${apiUrl}/healthz`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = { raw: truncateProbeText(text) };
+    }
+    const record = body && typeof body === 'object' ? body : {};
+    return {
+      ok: response.ok && record.ok !== false,
+      status: response.status,
+      schemaReady: record.schema?.ready === true,
+      schemaMissing: Array.isArray(record.schema?.missing) ? record.schema.missing : [],
+      providerReady: record.provider?.ready === true,
+      providerStoreReady: record.provider?.storeReady === true,
+      databaseReady: record.database?.ready === true,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function repoRootFromCliDirectory() {
@@ -257,6 +349,39 @@ export async function runDoctor(input = {}, options = {}) {
   addCheck(checks, 'installation_mode', 'ok', `CLI installation mode detected as ${installationMode}.`, {
     installationMode,
   });
+
+  addNativeAppChecks(checks, warnings, env, options.platform ?? process.platform);
+
+  const pilotTarget = resolvePilotTarget(env);
+  try {
+    new URL(pilotTarget.apiUrl);
+    new URL(pilotTarget.webUrl);
+    addCheck(checks, 'pilot_target', 'ok', `Pilot target uses ${pilotTarget.source} URLs.`, pilotTarget);
+  } catch {
+    const message = 'Configured MarkLab pilot API/web URLs are invalid.';
+    errors.push({ code: 'invalid_pilot_target', message, details: pilotTarget });
+    addCheck(checks, 'pilot_target', 'error', message, pilotTarget);
+  }
+
+  if (env.MARKLAB_DOCTOR_SKIP_NETWORK === '1') {
+    addCheck(checks, 'api_health', 'warning', 'Skipped /healthz network probe.', { apiUrl: pilotTarget.apiUrl });
+  } else {
+    try {
+      const health = await (options.apiHealthProbe ?? checkApiHealth)(pilotTarget.apiUrl, options.apiHealthTimeoutMs ?? 2500);
+      const healthReady = health.ok && health.schemaReady && health.providerReady && health.providerStoreReady;
+      if (healthReady) {
+        addCheck(checks, 'api_health', 'ok', 'API /healthz reports schema and provider ready.', health);
+      } else {
+        const message = 'API /healthz is not fully ready.';
+        warnings.push({ code: 'api_health_not_ready', message, details: health });
+        addCheck(checks, 'api_health', 'warning', message, health);
+      }
+    } catch (error) {
+      const message = 'Unable to reach API /healthz.';
+      warnings.push({ code: 'api_health_unreachable', message, details: { apiUrl: pilotTarget.apiUrl, cause: error instanceof Error ? error.message : String(error) } });
+      addCheck(checks, 'api_health', 'warning', message, { apiUrl: pilotTarget.apiUrl });
+    }
+  }
 
   if (await isLoopbackPortAvailable(0)) {
     addCheck(checks, 'loopback_bind', 'ok', 'Loopback bind is available.');
