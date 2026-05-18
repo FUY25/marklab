@@ -156,6 +156,19 @@ A healthy deployment must expose `/healthz` with database, schema, and provider 
 }
 ```
 
+For launch operations, apply `apps/api/src/db/schema.sql` to Neon before a health-gated Fly deploy, then run the strict smoke with an authenticated pilot owner:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
+NO_COLOR=1 fly deploy -a marklab-relay-alpha --local-only --depot=false --wait-timeout 10m --yes
+MARKLAB_BOOTSTRAP_EMAIL=<pilot-owner@example.com> node scripts/marklab-bootstrap-alpha-user.mjs
+MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
+MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 \
+MARKLAB_USER_TOKEN=<ml_user_...> \
+MARKLAB_WORKSPACE_ID=<workspace-id> \
+node scripts/marklab-alpha-smoke.mjs
+```
+
 If Fly remote builders hang at `Waiting for depot builder` or `Waiting for remote builder`, use the documented local Docker deploy path:
 
 ```sh

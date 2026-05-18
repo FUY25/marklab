@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readlink, readdir } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readlink, readdir, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ensurePackagedRuntimeWorkspaceLinks } from './marklab.mjs';
 
@@ -36,6 +36,26 @@ function expectOk(result) {
     code: 0,
     signal: null,
   });
+}
+
+function listenOnLoopback(port = 0) {
+  const server = net.createServer();
+  return new Promise((resolveServer, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolveServer(server));
+  });
+}
+
+async function freePort() {
+  const server = await listenOnLoopback(0);
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    throw new Error('missing_test_port');
+  }
+  const port = address.port;
+  await new Promise((resolveClose) => server.close(resolveClose));
+  return port;
 }
 
 describe('packed @marklab/cli install smoke', () => {
@@ -80,5 +100,28 @@ describe('packed @marklab/cli install smoke', () => {
       expectOk(result);
       expect(result.stdout).toContain('Usage:');
     }
+
+    const markdownPath = join(installDir, 'doctor.md');
+    await writeFile(markdownPath, '# Doctor\n', 'utf8');
+    const npmBinDir = join(installDir, 'node_modules', '.bin');
+    const nodeBinDir = dirname(process.execPath);
+    const doctor = await run(bin, ['doctor', markdownPath, '--json'], {
+      cwd: installDir,
+      env: {
+        MARKLAB_DOCTOR_SKIP_NETWORK: '1',
+        MARKLAB_API_PORT: String(await freePort()),
+        MARKLAB_WEB_PORT: String(await freePort()),
+        PATH: `${npmBinDir}${delimiter}${nodeBinDir}${delimiter}/usr/bin:/bin`,
+      },
+    });
+    expectOk(doctor);
+    const body = JSON.parse(doctor.stdout);
+    expect(body.ok).toBe(true);
+    expect(body.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'milkdown_headless_runtime',
+        status: 'ok',
+      }),
+    ]));
   }, 120000);
 });

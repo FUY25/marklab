@@ -1,4 +1,5 @@
 import type { DbExecutor } from '../db/client';
+import { GUEST_EDIT_SESSION_IDLE_TIMEOUT_SECONDS } from '../config/collab-session-policy';
 import { requireWorkspaceRole, type WorkspaceRole } from './control-plane-access';
 
 export type BillingMode = 'manual' | 'stripe';
@@ -53,7 +54,7 @@ export async function getWorkspaceBillingState(pool: DbExecutor, input: {
   const role = await requireWorkspaceRole(pool, {
     workspaceId: input.workspaceId,
     userId: input.userId,
-    allowed: ['Owner', 'Member', 'Reader'],
+    allowed: ['Owner', 'Member'],
   });
 
   const result = await pool.query<BillingStateRow>(
@@ -61,6 +62,8 @@ export async function getWorkspaceBillingState(pool: DbExecutor, input: {
         select *
           from subscriptions s
          where s.workspace_id = $1
+           and s.status in ('manual', 'trialing', 'active')
+           and (s.current_period_end is null or s.current_period_end > now())
          limit 1
       )
       select coalesce(s.plan_id, 'free') as plan_id,
@@ -77,20 +80,39 @@ export async function getWorkspaceBillingState(pool: DbExecutor, input: {
             ) as member_seats_used,
             (
               select count(*)
-                from collab_sessions cs
-                join documents d on d.id = cs.doc_id
-               where d.workspace_id = $1
-                 and cs.mode = 'edit'
-                 and cs.is_guest = true
-                 and cs.status = 'active'
-                 and (cs.expires_at is null or cs.expires_at > now())
+                from (
+                  select cs.id,
+                         cs.last_seen_at,
+                         latest_issuance.status
+                    from collab_sessions cs
+                    join documents d on d.id = cs.doc_id
+                    left join lateral (
+                      select pti.status
+                        from provider_token_issuances pti
+                       where pti.doc_id = cs.doc_id
+                         and pti.branch_id = cs.branch_id
+                         and pti.session_id = cs.id
+                         and pti."authorization" = 'full'
+                         and pti.status in ('pending', 'issued', 'revoked')
+                       order by pti.issued_at desc,
+                                case when pti.status = 'revoked' then 0 else 1 end,
+                                pti.id desc
+                       limit 1
+                    ) latest_issuance on true
+                   where d.workspace_id = $1
+                     and cs.mode = 'edit'
+                     and cs.is_guest = true
+                     and cs.status = 'active'
+                ) active_guest_sessions
+               where active_guest_sessions.status in ('pending', 'issued')
+                 and active_guest_sessions.last_seen_at + ($2 * interval '1 second') > now()
             ) as guest_edit_sessions_used
        from (select 1) seed
        left join selected_subscription s on true
        join plans p on p.id = coalesce(s.plan_id, 'free')
        join seat_limits sl on sl.plan_id = p.id
       limit 1`,
-    [input.workspaceId],
+    [input.workspaceId, GUEST_EDIT_SESSION_IDLE_TIMEOUT_SECONDS],
   );
   const row = result.rows[0];
   if (!row) throw new Error('workspace_billing_not_found');

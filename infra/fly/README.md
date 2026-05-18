@@ -135,8 +135,14 @@ Provider env defaults that are not secrets live in `fly.toml`: `MARKLAB_YSWEET_P
 
 ## 6. Deploy
 
+Apply the checked-in schema to Neon before the health-gated deploy. `/healthz` includes schema readiness, so deploying first can leave the Fly rollout unhealthy until the schema catches up.
+
 ```bash
-fly deploy
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
+```
+
+```bash
+fly deploy -a <fly-app> --local-only --depot=false --wait-timeout 10m --yes
 ```
 
 Then inspect:
@@ -155,7 +161,7 @@ curl https://marklab-relay-alpha.fly.dev/healthz
 
 ## 7. Schema And Health Expectations
 
-The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production should do the same through the migration path owned by the API integration work. Until the API exposes a source-integrated migration command, the operator must apply the checked-in schema to Neon before accepting alpha traffic.
+The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production must do the same before rollout. Until the API exposes a source-integrated migration command, the operator applies the checked-in schema to Neon directly.
 
 `/healthz` reports process liveness separately from database readiness, schema readiness, relay readiness, and provider readiness. A production response is not alpha-ready unless `ok`, `database.ready`, `schema.ready`, `relay.ready`, `provider.ready`, and `provider.storeReady` are all `true`.
 
@@ -170,15 +176,18 @@ fly logs
 npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-smoke.ts
 ```
 
-Then run the product smoke:
+Then run the deployed product smoke. Always set the target URL explicitly, especially for staging or a non-default Fly app:
 
 ```bash
-MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev node scripts/marklab-alpha-smoke.mjs
+MARKLAB_ALPHA_BASE_URL=https://<fly-app>.fly.dev node scripts/marklab-alpha-smoke.mjs
+MARKLAB_ALPHA_BASE_URL=https://<fly-app>.fly.dev MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 MARKLAB_USER_TOKEN=<ml_user_...> MARKLAB_WORKSPACE_ID=<workspace-id> node scripts/marklab-alpha-smoke.mjs
 npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser
 marklab doctor --json
 marklab open README.md
 marklab share README.md
 marklab join '<edit-link>'
 ```
+
+The provider smoke and native/browser smoke above are local harnesses. They do not replace the deployed persistence check: create a real shared document on the Fly origin, type a marker, restart the Fly machine, and confirm the marker survives provider restart from `/data/ysweet`.
 
 The hosted service is identity, permissions, document metadata, `/collab`, and provider routing. The user's local `.md` remains the native app working copy.

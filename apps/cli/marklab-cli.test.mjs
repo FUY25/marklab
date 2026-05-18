@@ -234,6 +234,9 @@ describe('marklab CLI', () => {
     expect(buildNativeJoinDeepLink(editLink)).toBe(
       'marklab://join?url=https%3A%2F%2Fapp.example.test%2Fcollab%3FdocId%3Ddoc_1%26branchId%3Dbranch_1%26token%3Dml_access_edit%26mode%3Dedit',
     );
+    expect(buildNativeJoinDeepLink(editLink, { MARKLAB_APP_URL_SCHEME: 'marklab-beta' })).toBe(
+      'marklab-beta://join?url=https%3A%2F%2Fapp.example.test%2Fcollab%3FdocId%3Ddoc_1%26branchId%3Dbranch_1%26token%3Dml_access_edit%26mode%3Dedit',
+    );
 
     const result = await runCli(['join', editLink, '--json'], {
       MARKLAB_ENABLE_LEGACY_CLI: '0',
@@ -263,6 +266,23 @@ describe('marklab CLI', () => {
     });
   });
 
+  it('rejects hosted collab edit links without raw access tokens before opening the native app', async () => {
+    const tokenlessEditLink = 'https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit';
+
+    expect(() => parseHostedCollabLink(tokenlessEditLink)).toThrow('join link is missing token');
+    const result = await runCli(['join', tokenlessEditLink, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'invalid_target',
+      message: 'join link is missing token.',
+    });
+  });
+
   it('opens local files through the native app path without enabling the legacy daemon CLI', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-open-'));
     const markdownPath = join(directory, 'native.md');
@@ -280,6 +300,23 @@ describe('marklab CLI', () => {
       path: canonicalMarkdownPath,
       action: 'open_native_file',
       opened: false,
+    });
+  });
+
+  it('reports native launch failures instead of returning opened true', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-open-fail-'));
+    const markdownPath = join(directory, 'native.md');
+    await writeFile(markdownPath, '# Native open\n', 'utf8');
+
+    const result = await runCli(['open', markdownPath, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_OPEN_COMMAND_FOR_TEST: '/usr/bin/false',
+    }, 30000);
+
+    expect(result.code).toBe(8);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'native_launch_failed',
     });
   });
 

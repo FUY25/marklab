@@ -22,6 +22,43 @@ export function evaluateHealth(body) {
   };
 }
 
+export function extractStaticAssetPaths(html, assetPrefix) {
+  if (typeof html !== 'string') return [];
+  return Array.from(html.matchAll(/\b(?:src|href)="([^"]+)"/gu))
+    .map((match) => match[1])
+    .filter((value) => typeof value === 'string' && value.startsWith(assetPrefix));
+}
+
+export function extractModuleAssetPaths(html, assetPrefix) {
+  if (typeof html !== 'string') return [];
+  return Array.from(html.matchAll(/<script\b(?=[^>]*\btype="module")(?=[^>]*\bsrc="([^"]+)")[^>]*>/giu))
+    .map((match) => match[1])
+    .filter((value) => typeof value === 'string' && value.startsWith(assetPrefix));
+}
+
+export function evaluateStaticShellHtml(html, input) {
+  const failures = [];
+  if (typeof html !== 'string') {
+    return { ok: false, failures: ['html.string'] };
+  }
+  if (!html.includes(`<title>${input.requiredTitle}</title>`)) {
+    failures.push(`html.title:${input.requiredTitle}`);
+  }
+  if (!/<div\s+id="root"\s*><\/div>/iu.test(html)) {
+    failures.push('html.root');
+  }
+  if (extractModuleAssetPaths(html, input.assetPrefix).length === 0) {
+    failures.push(`html.moduleAssetPrefix:${input.assetPrefix}`);
+  }
+  if (extractStaticAssetPaths(html, input.assetPrefix).length === 0) {
+    failures.push(`html.assetPrefix:${input.assetPrefix}`);
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+  };
+}
+
 async function readResponse(response) {
   const text = await response.text();
   const contentType = response.headers.get('content-type') ?? '';
@@ -48,6 +85,7 @@ export async function runAlphaSmoke(input = {}) {
   const baseUrl = trimTrailingSlash(input.baseUrl ?? process.env.MARKLAB_ALPHA_BASE_URL ?? defaultBaseUrl);
   const userToken = input.userToken ?? process.env.MARKLAB_USER_TOKEN;
   const workspaceId = input.workspaceId ?? process.env.MARKLAB_WORKSPACE_ID;
+  const requireAuthenticatedSmoke = input.requireAuthenticatedSmoke ?? process.env.MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE === '1';
   const results = [];
 
   const health = await fetchRequired(`${baseUrl}/healthz`);
@@ -62,15 +100,23 @@ export async function runAlphaSmoke(input = {}) {
   });
 
   const collabHtml = await fetchRequired(`${baseUrl}/collab`);
-  if (typeof collabHtml !== 'string' || !/id="root"|type="module"|collab-web/u.test(collabHtml)) {
-    throw new Error('collab_route_unexpected_html');
+  const collabShell = evaluateStaticShellHtml(collabHtml, {
+    requiredTitle: 'MarkLab Collaborator',
+    assetPrefix: '/collab-web/assets/',
+  });
+  if (!collabShell.ok) throw new Error(`collab_route_unexpected_html:${collabShell.failures.join(',')}`);
+  const collabAssets = extractStaticAssetPaths(collabHtml, '/collab-web/assets/');
+  for (const assetPath of collabAssets) {
+    await fetchRequired(new URL(assetPath, baseUrl).toString());
   }
-  results.push({ check: 'collab_route', ok: true });
+  results.push({ check: 'collab_route', ok: true, assetCount: collabAssets.length });
 
   const settingsHtml = await fetchRequired(`${baseUrl}/workspaces/smoke/settings`);
-  if (typeof settingsHtml !== 'string' || !/id="root"|type="module"|collab-web/u.test(settingsHtml)) {
-    throw new Error('workspace_settings_route_unexpected_html');
-  }
+  const settingsShell = evaluateStaticShellHtml(settingsHtml, {
+    requiredTitle: 'MarkLab Collaborator',
+    assetPrefix: '/collab-web/assets/',
+  });
+  if (!settingsShell.ok) throw new Error(`workspace_settings_route_unexpected_html:${settingsShell.failures.join(',')}`);
   results.push({ check: 'workspace_settings_route', ok: true });
 
   if (userToken && workspaceId) {
@@ -85,6 +131,8 @@ export async function runAlphaSmoke(input = {}) {
       memberSeats: billing.billing.limits?.memberSeats ?? null,
       concurrentGuestEdits: billing.billing.limits?.concurrentGuestEdits ?? null,
     });
+  } else if (requireAuthenticatedSmoke) {
+    throw new Error('authenticated_smoke_required:MARKLAB_USER_TOKEN and MARKLAB_WORKSPACE_ID must both be set');
   } else {
     results.push({
       check: 'manual_billing',
@@ -105,9 +153,9 @@ export async function runAlphaSmoke(input = {}) {
 function printUsage() {
   console.log(`Usage:
   MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev node scripts/marklab-alpha-smoke.mjs
-  MARKLAB_USER_TOKEN=<ml_user_...> MARKLAB_WORKSPACE_ID=<workspace-id> node scripts/marklab-alpha-smoke.mjs
+  MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 MARKLAB_USER_TOKEN=<ml_user_...> MARKLAB_WORKSPACE_ID=<workspace-id> node scripts/marklab-alpha-smoke.mjs
 
-This smoke is read-only by default. It checks /healthz, /collab, workspace settings shell, and optional manual/free billing state.`);
+This smoke is read-only by default. It checks /healthz, the real /collab static shell and assets, workspace settings shell, and optional manual/free billing state. Set MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 for launch gates.`);
 }
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {

@@ -479,32 +479,96 @@ function openBrowser(url) {
   spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
 }
 
-function openExternalURL(url) {
-  if (process.env.MARKLAB_NO_OPEN === 'true') return false;
-  if (process.platform === 'darwin') {
-    spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
-    return true;
+function nativeJoinScheme(env = process.env) {
+  const scheme = (env.MARKLAB_APP_URL_SCHEME?.trim() || 'marklab').replace(/:.*$/u, '');
+  if (!/^[a-z][a-z0-9+.-]*$/iu.test(scheme)) {
+    throw new AgentCommandError('invalid_config', 'MARKLAB_APP_URL_SCHEME must be a valid URL scheme.', { scheme });
   }
-  if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
-    return true;
-  }
-  spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
-  return true;
+  return scheme;
 }
 
-function openExternalFile(filePath) {
+function nativeAppBundlePath(env = process.env) {
+  return env.MARKLAB_APP_PATH?.trim() || env.MARKLAB_APP_BUNDLE_PATH?.trim() || null;
+}
+
+function nativeAppName(env = process.env) {
+  return env.MARKLAB_APP_NAME?.trim() || 'MarkLab';
+}
+
+function runOpener(command, args, timeoutMs = 10_000) {
+  return new Promise((resolveRun) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      resolveRun({ exitCode: null, signal: 'SIGTERM', stderr, timedOut: true });
+    }, timeoutMs);
+
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveRun({ exitCode: null, signal: null, stderr, error: error instanceof Error ? error.message : String(error) });
+    });
+    child.once('close', (exitCode, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveRun({ exitCode, signal, stderr });
+    });
+  });
+}
+
+async function runNativeOpen(command, args, action) {
+  const result = await runOpener(command, args);
+  if (result.exitCode === 0) return true;
+  throw new AgentCommandError('native_launch_failed', `Failed to ${action} in MarkLab.app.`, {
+    command,
+    args,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: Boolean(result.timedOut),
+    stderr: String(result.stderr ?? '').slice(0, 2000),
+    error: result.error,
+  });
+}
+
+async function openExternalURL(url, env = process.env) {
   if (process.env.MARKLAB_NO_OPEN === 'true') return false;
+  if (env.MARKLAB_OPEN_COMMAND_FOR_TEST) {
+    return runNativeOpen(env.MARKLAB_OPEN_COMMAND_FOR_TEST, [url], 'open the shared link');
+  }
   if (process.platform === 'darwin') {
-    spawn('open', ['-a', process.env.MARKLAB_APP_NAME ?? 'MarkLab', filePath], { stdio: 'ignore', detached: true }).unref();
-    return true;
+    const appPath = nativeAppBundlePath(env);
+    const args = appPath ? ['-a', resolve(appPath), url] : ['-a', nativeAppName(env), url];
+    return runNativeOpen('open', args, 'open the shared link');
   }
   if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', filePath], { stdio: 'ignore', detached: true }).unref();
-    return true;
+    return runNativeOpen('cmd', ['/c', 'start', '', url], 'open the shared link');
   }
-  spawn('xdg-open', [filePath], { stdio: 'ignore', detached: true }).unref();
-  return true;
+  return runNativeOpen('xdg-open', [url], 'open the shared link');
+}
+
+async function openExternalFile(filePath, env = process.env) {
+  if (process.env.MARKLAB_NO_OPEN === 'true') return false;
+  if (env.MARKLAB_OPEN_COMMAND_FOR_TEST) {
+    return runNativeOpen(env.MARKLAB_OPEN_COMMAND_FOR_TEST, [filePath], 'open the file');
+  }
+  if (process.platform === 'darwin') {
+    const appPath = nativeAppBundlePath(env);
+    const args = ['-a', appPath ? resolve(appPath) : nativeAppName(env), filePath];
+    return runNativeOpen('open', args, 'open the file');
+  }
+  if (process.platform === 'win32') {
+    return runNativeOpen('cmd', ['/c', 'start', '', filePath], 'open the file');
+  }
+  return runNativeOpen('xdg-open', [filePath], 'open the file');
 }
 
 function nativeAppSupportDir(env = process.env) {
@@ -602,15 +666,17 @@ export function parseHostedCollabLink(link) {
   }
   const docId = url.searchParams.get('docId');
   const branchId = url.searchParams.get('branchId');
+  const token = url.searchParams.get('token');
   const mode = url.searchParams.get('mode') ?? 'edit';
   if (!docId) throw new AgentCommandError('invalid_target', 'join link is missing docId.');
   if (!branchId) throw new AgentCommandError('invalid_target', 'join link is missing branchId.');
+  if (!token) throw new AgentCommandError('invalid_target', 'join link is missing token.');
   if (mode !== 'edit') throw new AgentCommandError('invalid_target', 'View links stay browser-only. Ask for an edit link to join in MarkLab.app.');
   return {
     url,
     docId,
     branchId,
-    token: url.searchParams.get('token'),
+    token,
     mode,
   };
 }
@@ -633,9 +699,9 @@ function isCollabURL(link) {
   }
 }
 
-export function buildNativeJoinDeepLink(link) {
+export function buildNativeJoinDeepLink(link, env = process.env) {
   const parsed = parseHostedCollabLink(link);
-  const deepLink = new URL('marklab://join');
+  const deepLink = new URL(`${nativeJoinScheme(env)}://join`);
   deepLink.searchParams.set('url', parsed.url.toString());
   return deepLink.toString();
 }
@@ -899,7 +965,7 @@ async function nativeOpenCommand(input) {
     throw new AgentCommandError('invalid_target', 'open --background is archived daemon compatibility. Set MARKLAB_ENABLE_LEGACY_CLI=1 to use it.');
   }
   const markdownPath = await resolveMarkdownFile(input.file);
-  const opened = openExternalFile(markdownPath);
+  const opened = await openExternalFile(markdownPath);
   const result = agentSuccess({
     path: markdownPath,
     action: 'open_native_file',
@@ -918,7 +984,7 @@ async function nativeOpenCommand(input) {
 async function nativeShareCommand(input) {
   if (!input.file) throw new AgentCommandError('invalid_target', 'share requires a Markdown file path.');
   const markdownPath = await resolveMarkdownFile(input.file);
-  const opened = openExternalFile(markdownPath);
+  const opened = await openExternalFile(markdownPath);
   const result = agentSuccess({
     path: markdownPath,
     action: 'start_sharing_in_app',
@@ -1481,7 +1547,7 @@ async function joinCommand(input) {
   if (!input.link) throw new Error('join requires an edit link');
   if (isCollabURL(input.link)) {
     const deepLink = buildNativeJoinDeepLink(input.link);
-    const opened = openExternalURL(deepLink);
+    const opened = await openExternalURL(deepLink);
     if (input.json) {
       writeAgentJson(agentSuccess({
         link: input.link,

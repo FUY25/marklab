@@ -14,6 +14,8 @@ export const agentErrorCodes = Object.freeze([
   'forbidden_agent_write',
   'doctor_failed',
   'invalid_target',
+  'invalid_config',
+  'native_launch_failed',
 ]);
 
 export const agentExitCodes = Object.freeze({
@@ -44,6 +46,8 @@ const errorExitCode = Object.freeze({
   forbidden_agent_write: agentExitCodes.invalidCommandOrTarget,
   doctor_failed: agentExitCodes.doctorFailure,
   invalid_target: agentExitCodes.invalidCommandOrTarget,
+  invalid_config: agentExitCodes.invalidCommandOrTarget,
+  native_launch_failed: agentExitCodes.featureUnavailable,
 });
 
 export class AgentCommandError extends Error {

@@ -47,7 +47,7 @@ List secret names without printing values:
 fly secrets list -a marklab-relay-alpha
 ```
 
-## Build And Deploy
+## Build, Migrate, And Deploy
 
 Use manual Fly deploy for the private alpha.
 
@@ -60,7 +60,13 @@ npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app
 npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package
 ```
 
-Deploy:
+Apply the checked-in schema to Neon before deploying an image that depends on new readiness columns. Fly health checks call `/healthz`; if the schema is behind, the rollout can remain unhealthy or time out before the post-deploy migration step is reached.
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
+```
+
+Deploy after schema readiness is in place:
 
 ```sh
 git rev-parse HEAD
@@ -75,12 +81,12 @@ fly releases -a marklab-relay-alpha
 fly machines list -a marklab-relay-alpha
 ```
 
-## Database Migration
+## Database Readiness
 
-The current migration path is the checked-in schema file:
+The current migration path is the checked-in schema file. It is expected to be safe to re-run:
 
 ```sh
-psql "$DATABASE_URL" -f apps/api/src/db/schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
 ```
 
 The launch gate is not just "SQL ran"; `/healthz` must show database, schema, relay, provider, and provider store ready.
@@ -100,23 +106,46 @@ Required health:
 }
 ```
 
+## Pilot Owner Bootstrap
+
+Production disables `/api/auth/dev-login`; do not rely on dev auth for alpha pilots. Until OIDC is configured, create a pilot owner session from the operator machine with direct Neon access:
+
+```sh
+BOOTSTRAP_JSON=$(mktemp "${TMPDIR:-/tmp}/marklab-alpha-bootstrap.XXXXXX.json")
+chmod 600 "$BOOTSTRAP_JSON"
+
+MARKLAB_BOOTSTRAP_EMAIL=<pilot-owner@example.com> \
+MARKLAB_BOOTSTRAP_NAME='Pilot Owner' \
+MARKLAB_BOOTSTRAP_WORKSPACE_NAME='MarkLab Alpha Pilot' \
+MARKLAB_BOOTSTRAP_PLAN_ID=dev \
+node scripts/marklab-bootstrap-alpha-user.mjs > "$BOOTSTRAP_JSON"
+
+export MARKLAB_USER_TOKEN=$(jq -r .userToken "$BOOTSTRAP_JSON")
+export MARKLAB_WORKSPACE_ID=$(jq -r .workspaceId "$BOOTSTRAP_JSON")
+```
+
+By default, the script revokes previous active sessions for the same owner email before issuing the new 30-day `ml_user_...` token. Set `MARKLAB_BOOTSTRAP_ROTATE_SESSIONS=0` only if you deliberately need multiple active owner tokens during an incident. Treat `$BOOTSTRAP_JSON` as a secret handoff file: do not commit it, paste it into docs, or send it to guests. Browser/app collaborators should receive edit/view links created from MarkLab.app, not the owner token.
+
 ## Smoke Commands
 
-Read-only alpha smoke:
+Read-only alpha smoke for process/schema/provider/static-shell readiness:
 
 ```sh
 MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
 node scripts/marklab-alpha-smoke.mjs
 ```
 
-Read-only smoke with authenticated manual/free billing state:
+Launch-gate smoke with authenticated manual/free billing state:
 
 ```sh
 MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
+MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 \
 MARKLAB_USER_TOKEN=<ml_user_...> \
 MARKLAB_WORKSPACE_ID=<workspace-id> \
 node scripts/marklab-alpha-smoke.mjs
 ```
+
+Local harnesses are useful regression checks but do not prove deployed Fly volume persistence or packaged native behavior against the live origin.
 
 Native/browser local smoke:
 
@@ -129,6 +158,13 @@ Provider persistence smoke for local/API-supervised provider runtime:
 ```sh
 npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-smoke.ts
 ```
+
+Production persistence smoke:
+
+- Start a real app/browser edit session against `https://marklab-relay-alpha.fly.dev`.
+- Type a unique marker in the shared document.
+- Restart the Fly machine with `fly machine restart <machine-id> -a marklab-relay-alpha`.
+- Reopen the same edit link and confirm the marker is still present after the provider process restarts and reads `/data/ysweet`.
 
 Manual production smoke checklist:
 

@@ -1,11 +1,11 @@
-import { constants as fsConstants, existsSync, watch } from 'node:fs';
+import { constants as fsConstants, existsSync, mkdirSync, rmSync, symlinkSync, watch } from 'node:fs';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AgentCommandError, agentSuccess } from './agent-json.mjs';
 import { defaultAlphaRelayConfig } from './relay-config.mjs';
@@ -142,6 +142,10 @@ function nativeJoinScheme(env) {
   return scheme.replace(/:.*$/u, '');
 }
 
+function validateNativeUrlScheme(scheme) {
+  return /^[a-z][a-z0-9+.-]*$/iu.test(scheme);
+}
+
 function addNativeAppChecks(checks, warnings, env, platform = process.platform) {
   const appPath = resolveNativeAppPath(env);
   const appName = env.MARKLAB_APP_NAME?.trim() || 'MarkLab';
@@ -168,6 +172,10 @@ function addNativeAppChecks(checks, warnings, env, platform = process.platform) 
   }
 
   const scheme = nativeJoinScheme(env);
+  if (!validateNativeUrlScheme(scheme)) {
+    addCheck(checks, 'native_url_scheme', 'error', 'Native join URL scheme is invalid.', { scheme });
+    return;
+  }
   addCheck(checks, 'native_url_scheme', 'ok', 'Native join URL scheme is configured.', {
     scheme,
     example: `${scheme}://join?url=${encodeURIComponent('https://marklab-relay-alpha.fly.dev/collab?docId=...&branchId=...&token=...&mode=edit')}`,
@@ -204,8 +212,34 @@ async function checkApiHealth(apiUrl, timeoutMs = 2500) {
   }
 }
 
-function repoRootFromCliDirectory() {
-  return resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+export function resolveRuntimeRootFromCliDirectory(cliDirectory = dirname(fileURLToPath(import.meta.url))) {
+  const workspaceRoot = resolve(cliDirectory, '../..');
+  const packagedRuntimeRoot = resolve(cliDirectory, 'runtime');
+  if (existsSync(resolve(workspaceRoot, 'pnpm-workspace.yaml'))) return workspaceRoot;
+  if (existsSync(resolve(packagedRuntimeRoot, 'pnpm-workspace.yaml'))) return packagedRuntimeRoot;
+  return cliDirectory;
+}
+
+function cliPackageRootFromRuntimeRoot(runtimeRoot) {
+  return basename(runtimeRoot) === 'runtime' ? dirname(runtimeRoot) : runtimeRoot;
+}
+
+function ensureRuntimeWorkspaceLinks(activeRuntimeRoot) {
+  if (!existsSync(resolve(activeRuntimeRoot, 'pnpm-workspace.yaml'))) return false;
+  if (basename(activeRuntimeRoot) !== 'runtime') return false;
+  const scopeRoot = resolve(activeRuntimeRoot, 'node_modules/@marklab');
+  mkdirSync(scopeRoot, { recursive: true });
+  for (const name of ['shared', 'markdown', 'collab-editor']) {
+    const linkPath = resolve(scopeRoot, name);
+    const target = `../../packages/${name}`;
+    try {
+      rmSync(linkPath, { recursive: true, force: true });
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  return true;
 }
 
 function runProbeProcess(command, args, options = {}) {
@@ -259,7 +293,8 @@ function runProbeProcess(command, args, options = {}) {
 }
 
 export async function defaultMilkdownRuntimeProbe(options = {}) {
-  const repoRoot = repoRootFromCliDirectory();
+  const repoRoot = resolveRuntimeRootFromCliDirectory();
+  ensureRuntimeWorkspaceLinks(repoRoot);
   const apiDirectory = resolve(repoRoot, 'apps/api');
   const runtimeModulePath = resolve(apiDirectory, 'src/services/milkdown-headless-runtime.ts');
   if (!existsSync(runtimeModulePath)) {
@@ -286,9 +321,15 @@ export async function defaultMilkdownRuntimeProbe(options = {}) {
       process.exit(1);
     });
   `;
-  const localTsx = resolve(repoRoot, 'node_modules/.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
-  const command = existsSync(localTsx) ? localTsx : 'pnpm';
-  const args = existsSync(localTsx) ? ['-e', probeScript] : ['--dir', apiDirectory, 'exec', 'tsx', '-e', probeScript];
+  const tsxBinary = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
+  const candidateTsxBins = [
+    resolve(repoRoot, 'node_modules/.bin', tsxBinary),
+    resolve(cliPackageRootFromRuntimeRoot(repoRoot), 'node_modules/.bin', tsxBinary),
+    resolve(cliPackageRootFromRuntimeRoot(repoRoot), '..', '..', '.bin', tsxBinary),
+  ];
+  const localTsx = candidateTsxBins.find((candidate) => existsSync(candidate));
+  const command = localTsx ?? 'pnpm';
+  const args = localTsx ? ['-e', probeScript] : ['--dir', apiDirectory, 'exec', 'tsx', '-e', probeScript];
   const result = await runProbeProcess(command, args, {
     cwd: repoRoot,
     env: options.env,
@@ -299,7 +340,7 @@ export async function defaultMilkdownRuntimeProbe(options = {}) {
     return {
       ok: false,
       details: {
-        command: existsSync(localTsx) ? 'tsx' : 'pnpm exec tsx',
+        command: localTsx ? 'tsx' : 'pnpm exec tsx',
         exitCode: result.exitCode,
         signal: result.signal,
         timedOut: Boolean(result.timedOut),
@@ -316,14 +357,14 @@ export async function defaultMilkdownRuntimeProbe(options = {}) {
       ok: true,
       details: {
         ...(outputLine ? JSON.parse(outputLine) : {}),
-        command: existsSync(localTsx) ? 'tsx' : 'pnpm exec tsx',
+        command: localTsx ? 'tsx' : 'pnpm exec tsx',
       },
     };
   } catch {
     return {
       ok: true,
       details: {
-        command: existsSync(localTsx) ? 'tsx' : 'pnpm exec tsx',
+        command: localTsx ? 'tsx' : 'pnpm exec tsx',
         stdout: truncateProbeText(result.stdout),
       },
     };
@@ -351,6 +392,14 @@ export async function runDoctor(input = {}, options = {}) {
   });
 
   addNativeAppChecks(checks, warnings, env, options.platform ?? process.platform);
+  const nativeSchemeCheck = checks.find((check) => check.name === 'native_url_scheme');
+  if (nativeSchemeCheck?.status === 'error') {
+    errors.push({
+      code: 'native_url_scheme_invalid',
+      message: nativeSchemeCheck.message,
+      details: nativeSchemeCheck.details,
+    });
+  }
 
   const pilotTarget = resolvePilotTarget(env);
   try {

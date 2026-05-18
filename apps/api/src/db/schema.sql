@@ -180,11 +180,23 @@ create table if not exists document_branches (
   unique (doc_id, slug)
 );
 
-alter table documents
-  add constraint documents_default_branch_fk
-  foreign key (default_branch_id)
-  references document_branches(id)
-  deferrable initially deferred;
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'documents_default_branch_fk'
+       and conrelid = 'documents'::regclass
+       and confrelid = 'document_branches'::regclass
+  ) then
+    alter table documents
+      add constraint documents_default_branch_fk
+      foreign key (default_branch_id)
+      references document_branches(id)
+      deferrable initially deferred;
+  end if;
+end
+$$;
 
 create table if not exists document_branch_states (
   branch_id uuid primary key references document_branches(id) on delete cascade,
@@ -440,17 +452,37 @@ create table if not exists document_versions (
   unique (branch_id, version_number)
 );
 
-alter table document_branches
-  add constraint document_branches_head_version_fk
-  foreign key (head_version_id)
-  references document_versions(id)
-  deferrable initially deferred;
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'document_branches_head_version_fk'
+       and conrelid = 'document_branches'::regclass
+       and confrelid = 'document_versions'::regclass
+  ) then
+    alter table document_branches
+      add constraint document_branches_head_version_fk
+      foreign key (head_version_id)
+      references document_versions(id)
+      deferrable initially deferred;
+  end if;
 
-alter table document_branches
-  add constraint document_branches_created_from_version_fk
-  foreign key (created_from_version_id)
-  references document_versions(id)
-  deferrable initially deferred;
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'document_branches_created_from_version_fk'
+       and conrelid = 'document_branches'::regclass
+       and confrelid = 'document_versions'::regclass
+  ) then
+    alter table document_branches
+      add constraint document_branches_created_from_version_fk
+      foreign key (created_from_version_id)
+      references document_versions(id)
+      deferrable initially deferred;
+  end if;
+end
+$$;
 
 create index if not exists document_versions_branch_created_idx
   on document_versions (branch_id, created_at desc);

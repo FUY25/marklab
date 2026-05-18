@@ -5,8 +5,12 @@ import { createHttpApp } from '../http/app';
 import { hashToken } from '../services/access-control';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 
-function createBillingRoutePool() {
-  const sessions = new Map([[hashToken('owner-token'), 'user_owner']]);
+function createBillingRoutePool(input: { role?: 'Owner' | 'Member' | 'Reader' } = {}) {
+  const role = input.role ?? 'Owner';
+  const sessions = new Map([
+    [hashToken('owner-token'), 'user_owner'],
+    [hashToken('reader-token'), 'user_reader'],
+  ]);
   const query: DbPool['query'] = async <Row = unknown>(sql: string, params?: readonly unknown[]): Promise<DbQueryResult<Row>> => {
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 0 };
     if (sql.includes('update user_sessions') && sql.includes('from users')) {
@@ -18,7 +22,7 @@ function createBillingRoutePool() {
       };
     }
     if (sql.includes('from workspace_members') && sql.includes('where workspace_id = $1')) {
-      return { rows: [{ role: 'Owner' } as Row], rowCount: 1 };
+      return { rows: [{ role } as Row], rowCount: 1 };
     }
     if (sql.includes('from subscriptions s') && sql.includes('join seat_limits sl')) {
       return {
@@ -72,5 +76,14 @@ describe('billing routes', () => {
         canManagePayment: false,
       },
     });
+  });
+
+  it('does not expose billing state to read-only workspace members', async () => {
+    const app = createHttpApp(createBillingRoutePool({ role: 'Reader' }), createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/workspaces/ws_1/billing')
+      .set({ Authorization: 'Bearer reader-token' })
+      .expect(403);
   });
 });

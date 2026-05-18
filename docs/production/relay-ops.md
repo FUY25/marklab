@@ -111,22 +111,24 @@ The smoke should create an edit collab session, connect a Y-Sweet Yjs client, wr
 
 ## Alpha Smoke
 
-Run the read-only production smoke against the deployed origin:
+Run the read-only production smoke against the deployed origin. Always set `MARKLAB_ALPHA_BASE_URL`; do not rely on the script default when testing staging or a renamed Fly app.
 
 ```bash
 MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
 node scripts/marklab-alpha-smoke.mjs
 ```
 
-To include the manual/free billing-state check, add a pilot user token and workspace id:
+For a launch gate, include the authenticated manual/free billing-state check and require it to run:
 
 ```bash
+MARKLAB_ALPHA_BASE_URL=https://marklab-relay-alpha.fly.dev \
+MARKLAB_ALPHA_REQUIRE_AUTH_SMOKE=1 \
 MARKLAB_USER_TOKEN=<ml_user_...> \
 MARKLAB_WORKSPACE_ID=<workspace-id> \
 node scripts/marklab-alpha-smoke.mjs
 ```
 
-This smoke does not create documents or links by default. Product creation/revocation checks remain explicit launch-smoke steps in the alpha launch runbook.
+This smoke does not create documents or links by default. Product creation/revocation checks and the deployed Fly-volume restart check remain explicit launch-smoke steps in the alpha launch runbook.
 
 ## Incident Checks
 

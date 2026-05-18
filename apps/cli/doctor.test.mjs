@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runDoctor } from './doctor.mjs';
+import { resolveRuntimeRootFromCliDirectory, runDoctor } from './doctor.mjs';
 
 const successfulMilkdownProbe = async () => ({
   ok: true,
@@ -232,5 +232,35 @@ describe('doctor command checks', () => {
         }),
       }),
     ]));
+  });
+
+  it('resolves packaged runtime sources under the CLI package runtime directory', async () => {
+    const cliDirectory = await mkdtemp(join(tmpdir(), 'marklab-cli-runtime-root-'));
+    await mkdir(resolve(cliDirectory, 'runtime', 'apps', 'api'), { recursive: true });
+    await writeFile(resolve(cliDirectory, 'runtime', 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n', 'utf8');
+
+    expect(resolveRuntimeRootFromCliDirectory(cliDirectory)).toBe(resolve(cliDirectory, 'runtime'));
+  });
+
+  it('fails doctor when the configured native join URL scheme is invalid', async () => {
+    await expect(
+      runDoctor(
+        {},
+        {
+          env: {
+            MARKLAB_APP_URL_SCHEME: '1 bad',
+            MARKLAB_API_PORT: String(await freePort()),
+            MARKLAB_WEB_PORT: String(await freePort()),
+            MARKLAB_DOCTOR_SKIP_NETWORK: '1',
+          },
+          milkdownRuntimeProbe: successfulMilkdownProbe,
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'doctor_failed',
+      details: {
+        errors: [expect.objectContaining({ code: 'native_url_scheme_invalid' })],
+      },
+    });
   });
 });
