@@ -9,6 +9,7 @@ The product model is still simple: the user's `.md` file on disk remains the loc
 The current pilot is the new relay/Y-Sweet native path, not the old local daemon route.
 
 - Native app: `apps/marklab-macos`
+- Hosted pilot target: `https://marklab-relay-alpha.fly.dev`
 - Browser collaborator route: `/collab?docId=...&branchId=...&token=...&mode=edit|view`
 - Control plane: `/api/auth/*`, `/api/workspaces/*`, `/api/docs/*`, access grants, and collab sessions
 - Provider: Y-Sweet routes proxied at the API root, for example `/d/<providerDocId>/ws/<providerDocId>`
@@ -16,7 +17,30 @@ The current pilot is the new relay/Y-Sweet native path, not the old local daemon
 
 The old daemon CLI workflow can still be tested only by opting in with `MARKLAB_ENABLE_LEGACY_CLI=1`. Normal pilot users should use MarkLab.app and hosted `/collab` links.
 
+As of May 18, 2026, `marklab-relay-alpha.fly.dev` is deployed with the new API/control-plane/Y-Sweet stack on Fly.io, backed by Neon and a Fly volume for provider data. Public health should include `ok: true`, `schema.ready: true`, `provider.ready: true`, and `provider.storeReady: true`.
+
 ## Pilot Workflow
+
+Launch MarkLab.app with a hosted control-plane session:
+
+```sh
+MARKLAB_CONTROL_PLANE_API_URL=https://marklab-relay-alpha.fly.dev \
+MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev \
+MARKLAB_USER_TOKEN=<ml_user_...> \
+MARKLAB_WORKSPACE_ID=<workspace-id> \
+swift run --package-path apps/marklab-macos MarkLabApp
+```
+
+For the local operator pilot on this machine, the seeded values are stored in the ignored `.env.marklab-pilot` file:
+
+```sh
+set -a
+source ./.env.marklab-pilot
+set +a
+swift run --package-path apps/marklab-macos MarkLabApp
+```
+
+Broad external pilots still need a real login path, normally OIDC via `MARKLAB_OIDC_*`. Production disables `/api/auth/dev-login`, so do not rely on dev auth for arbitrary pilot users.
 
 Host:
 
@@ -50,7 +74,9 @@ View links are browser-only and must not mount an editable editor.
 
 ## Save Model
 
-Local-only editing behaves like a normal document editor: edits live in the app until the user saves with `Cmd+S` or the standard save command.
+Local-only editing behaves like a normal document editor by default: edits live in the app until the user saves with `Cmd+S` or the standard save command.
+
+The native document toolbar includes `Local Autosave`. When enabled, local-only edits are written to the `.md` file after a short debounce, and `Cmd+S` still flushes immediately. This setting is only for local-only windows; it does not write through shared-mode projection.
 
 Shared editing has two flows:
 
@@ -98,13 +124,46 @@ Manual pilot setup and acceptance steps are in:
 
 ## Hosted Pilot Infra
 
-The intended external pilot shape is Fly.io plus Neon:
+The current hosted pilot shape is Fly.io plus Neon:
 
 - Fly.io hosts the API, `/collab` static app, control-plane routes, and API-root Y-Sweet provider proxy.
 - Neon stores users, workspaces, documents, branches, access grants, versions, and session metadata.
 - A Fly volume stores Y-Sweet provider data.
 
-The older `marklab-relay-alpha.fly.dev` deployment can be reused as the target service only after redeploying the new control-plane/Y-Sweet stack and applying the current schema. A healthy new-stack deployment must expose `/healthz` with provider readiness, including `provider.ready: true` and `provider.storeReady: true`.
+`marklab-relay-alpha.fly.dev` has been redeployed to the new stack. Verify it before a pilot session:
+
+```sh
+curl -fsS https://marklab-relay-alpha.fly.dev/healthz | jq .
+fly status -a marklab-relay-alpha
+fly checks list -a marklab-relay-alpha
+fly volumes list -a marklab-relay-alpha
+```
+
+A healthy deployment must expose `/healthz` with database, schema, and provider readiness:
+
+```json
+{
+  "ok": true,
+  "schema": {
+    "ready": true,
+    "missing": []
+  },
+  "provider": {
+    "required": true,
+    "ready": true,
+    "storeReady": true
+  }
+}
+```
+
+If Fly remote builders hang at `Waiting for depot builder` or `Waiting for remote builder`, use the documented local Docker deploy path:
+
+```sh
+open -a Docker
+NO_COLOR=1 fly deploy -a marklab-relay-alpha --local-only --depot=false --wait-timeout 10m --yes
+```
+
+The Docker build depends on the repo-root `.dockerignore`; keep it updated when new large local-only directories are added.
 
 ## CLI Status
 
