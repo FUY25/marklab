@@ -313,6 +313,7 @@ struct MarkEditDocumentShellView: View {
           .foregroundStyle(link.status == .active ? .green : .secondary)
         Spacer()
         Button("Copy") { model.copyAccessLink(link) }
+          .disabled(link.url == nil)
         Button("Revoke") { model.revokeAccessLink(link) }
           .disabled(link.status != .active)
       }
@@ -326,11 +327,17 @@ struct MarkEditDocumentShellView: View {
           .font(.caption2)
           .foregroundStyle(.secondary)
       }
-      Text(link.url)
-        .font(.caption2)
-        .lineLimit(2)
-        .truncationMode(.middle)
-        .textSelection(.enabled)
+      if let url = link.url {
+        Text(url)
+          .font(.caption2)
+          .lineLimit(2)
+          .truncationMode(.middle)
+          .textSelection(.enabled)
+      } else {
+        Text("URL unavailable after relaunch; revoke still works.")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
     }
     .padding(8)
     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))

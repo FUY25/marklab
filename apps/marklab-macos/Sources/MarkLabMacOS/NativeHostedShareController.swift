@@ -23,6 +23,17 @@ public final class NativeHostedShareController: @unchecked Sendable {
     return imported
   }
 
+  public func restoreSharedDocument(from binding: NativeSharedDocumentBinding, suggestedFilename: String? = nil) {
+    document = NativeHostedDocument(
+      docId: binding.docId,
+      branchId: binding.branchId,
+      versionId: "",
+      hash: binding.baselineHash
+    )
+    localDocId = binding.localDocId
+    self.suggestedFilename = suggestedFilename ?? URL(fileURLWithPath: binding.filePath).lastPathComponent
+  }
+
   public func createLink(role: NativeLinkRole) async throws -> NativeHostedShareLink {
     guard let document else { throw NativeHostedShareError.documentNotShared }
     return try await client.createAccessGrant(
@@ -42,5 +53,10 @@ public final class NativeHostedShareController: @unchecked Sendable {
 
   public func revokeLink(grantId: String) async throws {
     try await client.revokeAccessGrant(grantId: grantId)
+  }
+
+  public func listLinks() async throws -> [NativeHostedAccessGrantSummary] {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.listAccessGrants(document: document)
   }
 }

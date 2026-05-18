@@ -91,7 +91,7 @@ Expected behavior:
 - MarkLab validates the edit link before creating or mutating a local file.
 - MarkLab asks for the destination folder.
 - The local filename is the shared document name.
-- If a same-name local file is non-empty or diverged, MarkLab must show a conflict/preview path instead of overwriting silently.
+- If a same-name local file is non-empty and is not already bound to that shared document, this pilot slice refuses the join instead of overwriting silently. Attach-to-existing with conflict preview remains the unchecked Plan 6 follow-up.
 - Reopen restores the local binding without using the old daemon.
 
 ## Saving
@@ -121,7 +121,7 @@ One edit link can be used by more than one person, so the link list and active c
 
 Revoking a link removes that grant. It does not delete local files.
 
-`Stop Sharing` revokes active links known to the current app session and returns the document to local-only editing. Historical grants created in another session require the server-backed grant list before the app can revoke all of them after relaunch.
+`Stop Sharing` refreshes active grants from the server, revokes active branch links it can manage, and returns the document to local-only editing. Links created before the current app session may be listed without a copyable URL because raw access tokens are not stored after creation; revoke still works from the grant id.
 
 ## Missing Files And Conflicts
 

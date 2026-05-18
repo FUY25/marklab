@@ -39,9 +39,13 @@ function plistEscape(value) {
 const configuration = argValue('--configuration', 'release');
 const output = resolve(repoRoot, argValue('--output', 'dist/MarkLab.app'));
 const skipBuild = process.argv.includes('--skip-build');
+const skipEditorBuild = process.argv.includes('--skip-editor-build');
 const sign = !process.argv.includes('--no-sign');
 
 if (!skipBuild) {
+  if (!skipEditorBuild) {
+    run('npx', ['-y', 'pnpm@10.0.0', '--dir', packageRoot, 'build:local-editor'], { cwd: repoRoot });
+  }
   run('swift', ['build', '--configuration', configuration], { cwd: packageRoot });
 }
 

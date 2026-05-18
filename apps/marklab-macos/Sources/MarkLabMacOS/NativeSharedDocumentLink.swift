@@ -10,6 +10,7 @@ public enum NativeSharedDocumentLinkError: Error, Equatable {
   case unsupportedURL
   case missingDocId
   case missingBranchId
+  case missingAccessToken
   case invalidMode
   case localJoinRequiresEditLink
   case localFileNotEmpty

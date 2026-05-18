@@ -13,6 +13,7 @@ struct NativeControlPlaneShareTests {
     transport.enqueue(json: #"{"docId":"doc_hosted","branchId":"branch_main","versionId":"version_1","hash":"sha256:hosted"}"#, statusCode: 201)
     transport.enqueue(json: #"{"grantId":"grant_edit","branchId":"branch_main","token":"ml_access_edit","role":"edit","expiresAt":null,"createdAt":"2026-05-15T12:00:00.000Z"}"#, statusCode: 201)
     transport.enqueue(json: #"{"grantId":"grant_view","branchId":"branch_main","token":"ml_access_view","role":"view","expiresAt":null,"createdAt":"2026-05-15T12:01:00.000Z"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grants":[{"grantId":"grant_view","branchId":"branch_main","branchName":"main","role":"view","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:01:00.000Z","sessions":[]},{"grantId":"grant_edit","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]}]}"#)
     transport.enqueue(data: Data(), statusCode: 204)
     let client = NativeControlPlaneShareClient(
       apiBaseURL: URL(string: "https://api.example.test")!,
@@ -28,6 +29,7 @@ struct NativeControlPlaneShareTests {
     let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
     let editLink = try await controller.createLink(role: .edit)
     let viewLink = try await controller.createLink(role: .view)
+    let grants = try await controller.listLinks()
     try await controller.revokeLink(grantId: editLink.grantId)
 
     #expect(document.docId == "doc_hosted")
@@ -36,8 +38,10 @@ struct NativeControlPlaneShareTests {
     #expect(appEditorURL.fragment == nil)
     #expect(editLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_edit&mode=edit&filename=note.md")
     #expect(viewLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_view&mode=view&filename=note.md")
+    #expect(grants.map(\.grantId) == ["grant_view", "grant_edit"])
     #expect(transport.requests.map(\.percentEncodedPath) == [
       "/api/docs/import",
+      "/api/docs/doc_hosted/branches/branch_main/access-grants",
       "/api/docs/doc_hosted/branches/branch_main/access-grants",
       "/api/docs/doc_hosted/branches/branch_main/access-grants",
       "/api/access-grants/grant_edit",

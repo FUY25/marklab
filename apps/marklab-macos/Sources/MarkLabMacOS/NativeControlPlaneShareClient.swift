@@ -24,6 +24,15 @@ public struct NativeHostedShareLink: Equatable {
   public let createdAt: String?
 }
 
+public struct NativeHostedAccessGrantSummary: Decodable, Equatable, Sendable {
+  public let grantId: String
+  public let role: NativeLinkRole
+  public let branchId: String
+  public let expiresAt: String?
+  public let revokedAt: String?
+  public let createdAt: String?
+}
+
 public final class NativeControlPlaneShareClient: @unchecked Sendable {
   private let apiBaseURL: URL
   private let webBaseURL: URL
@@ -105,6 +114,21 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
       headers: ["Authorization": "Bearer \(bearerToken)"]
     )
     _ = try decodeNativeJSON(EmptyNativeResponse.self, from: try await transport.send(request))
+  }
+
+  public func listAccessGrants(document: NativeHostedDocument) async throws -> [NativeHostedAccessGrantSummary] {
+    struct Response: Decodable {
+      let grants: [NativeHostedAccessGrantSummary]
+    }
+    let request = NativeHTTPRequest(
+      method: "GET",
+      url: appendPath(
+        "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/access-grants",
+        to: apiBaseURL
+      ),
+      headers: ["Authorization": "Bearer \(bearerToken)"]
+    )
+    return try decodeNativeJSON(Response.self, from: try await transport.send(request)).grants
   }
 
   private func browserURL(

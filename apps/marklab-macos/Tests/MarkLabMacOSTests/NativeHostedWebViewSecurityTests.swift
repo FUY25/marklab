@@ -50,6 +50,20 @@ struct NativeHostedWebViewSecurityTests {
     ))
   }
 
+  @Test("allows filename metadata only when it is part of the expected app editor URL")
+  func allowsExpectedFilenameMetadata() throws {
+    let expectedURL = try #require(URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access_edit&mode=edit&clientKind=app&nativeShell=markedit&localDocId=local_1&filename=note.md"))
+
+    #expect(nativeHostedWebViewURLIsAllowed(
+      try #require(URL(string: "https://app.example.test/collab?filename=note.md&clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&token=ml_access_edit&localDocId=local_1&nativeShell=markedit")),
+      expectedURL: expectedURL
+    ))
+    #expect(!nativeHostedWebViewURLIsAllowed(
+      try #require(URL(string: "https://app.example.test/collab?filename=other.md&clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&token=ml_access_edit&localDocId=local_1&nativeShell=markedit")),
+      expectedURL: expectedURL
+    ))
+  }
+
   @Test("matches default HTTPS origin ports")
   func matchesDefaultHTTPSOriginPorts() throws {
     let origin = NativeHostedWebViewOrigin(url: try #require(URL(string: "https://app.example.test/collab")))

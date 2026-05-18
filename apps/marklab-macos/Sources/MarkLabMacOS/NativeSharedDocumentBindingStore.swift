@@ -34,6 +34,27 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
     self.updatedAt = updatedAt
   }
 
+  public init(
+    fileURL: URL,
+    document: NativeHostedDocument,
+    appEditorURL: URL,
+    baselineMarkdown: String,
+    createdAt: String = ISO8601DateFormatter().string(from: Date()),
+    updatedAt: String = ISO8601DateFormatter().string(from: Date())
+  ) {
+    self.schemaVersion = 1
+    self.filePath = NativeLocalDocumentIdentity.canonicalPath(fileURL: fileURL)
+    self.docId = document.docId
+    self.branchId = document.branchId
+    self.mode = .edit
+    self.token = nil
+    self.appEditorURL = appEditorURL
+    self.localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
+    self.baselineHash = NativeProjectionBaselineRecord.markdownHash(baselineMarkdown)
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+  }
+
   public func matches(_ link: NativeSharedDocumentLink) -> Bool {
     docId == link.docId && branchId == link.branchId && mode == link.mode
   }

@@ -41,7 +41,7 @@ struct MarkLabAppModelTests {
     )
 
     try model.joinSharedDocument(
-      linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit",
+      linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit&filename=joined.md",
       localFileURL: fileURL
     )
 
@@ -50,8 +50,8 @@ struct MarkLabAppModelTests {
     #expect(model.filePath == fileURL.path)
     #expect(model.hasSharedDocument)
     #expect(model.latestGrantId == nil)
-    #expect(model.latestLink == "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit")
-    #expect(model.embeddedCollabURL?.absoluteString == "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)")
+    #expect(model.latestLink == "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit&filename=joined.md")
+    #expect(model.embeddedCollabURL?.absoluteString == "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)&filename=joined.md")
     #expect(model.statusText == "Joined shared document doc_join. Waiting for shared content.")
     let binding = try #require(try bindingStore.loadBinding(fileURL: fileURL))
     #expect(binding.docId == "doc_join")
@@ -59,6 +59,59 @@ struct MarkLabAppModelTests {
     #expect(binding.token == "ml_access_edit")
     #expect(binding.localDocId == localDocId)
     #expect(try baselineStore.loadBaseline(fileURL: fileURL)?.lastProjectedMarkdown == "")
+  }
+
+  @MainActor
+  @Test("persists host start-sharing binding for reopen and guest reconnect")
+  func persistsHostStartSharingBinding() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "host.md")
+    try Data("# Host\n\nBefore share\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_host","branchId":"branch_main","versionId":"version_1","hash":"sha256:host"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grants":[]}"#)
+    let hostedShareController = NativeHostedShareController(client: NativeControlPlaneShareClient(
+      apiBaseURL: URL(string: "https://api.example.test")!,
+      webBaseURL: URL(string: "https://app.example.test")!,
+      bearerToken: "ml_user_session",
+      workspaceId: "workspace_1",
+      transport: transport
+    ))
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let model = MarkLabAppModel(
+      hostedShareController: hostedShareController,
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    await model.startSharingAndConnect()
+
+    let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
+    let binding = try #require(try bindingStore.loadBinding(fileURL: fileURL))
+    #expect(binding.docId == "doc_host")
+    #expect(binding.branchId == "branch_main")
+    #expect(binding.token == nil)
+    #expect(binding.localDocId == localDocId)
+    #expect(binding.appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_host&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)")
+    #expect(model.embeddedCollabURL == binding.appEditorURL)
+
+    let reopened = MarkLabAppModel(
+      hostedShareController: hostedShareController,
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+    transport.enqueue(json: #"{"grants":[]}"#)
+    reopened.loadFile(fileURL)
+    await Task.yield()
+
+    #expect(reopened.embeddedCollabURL == binding.appEditorURL)
+    #expect(reopened.statusText == "Joined shared document doc_host.")
   }
 
   @MainActor
@@ -92,6 +145,68 @@ struct MarkLabAppModelTests {
     #expect(model.text == "Local mirror\n")
     #expect(model.embeddedCollabURL == MarkLabAppModel.markEditNativeShellURL(appEditorURL))
     #expect(model.statusText == "Joined shared document doc_join.")
+  }
+
+  @MainActor
+  @Test("stop sharing refreshes and revokes server grants created before this app session")
+  func stopSharingRevokesServerHydratedGrants() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "host.md")
+    try Data("Shared before stop\n".utf8).write(to: fileURL)
+    let link = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_host&branchId=branch_main&token=ml_access_edit&mode=edit")
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: fileURL,
+        document: NativeHostedDocument(docId: "doc_host", branchId: "branch_main", versionId: "version_1", hash: "sha256:host"),
+        appEditorURL: link.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)),
+        baselineMarkdown: "Shared before stop\n"
+      ),
+      fileURL: fileURL
+    )
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"grants":[{"grantId":"grant_old","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]},{"grantId":"grant_new","branchId":"branch_main","branchName":"main","role":"view","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:01:00.000Z","sessions":[]}]}"#)
+    transport.enqueue(json: #"{"grants":[{"grantId":"grant_old","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]},{"grantId":"grant_new","branchId":"branch_main","branchName":"main","role":"view","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:01:00.000Z","sessions":[]}]}"#)
+    transport.enqueue(data: Data(), statusCode: 204)
+    transport.enqueue(data: Data(), statusCode: 204)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    await model.stopSharingAndReturnToLocalEditing()
+
+    let requestPaths = transport.requests.map(\.percentEncodedPath)
+    #expect(requestPaths.contains("/api/docs/doc_host/branches/branch_main/access-grants"))
+    #expect(requestPaths.contains("/api/access-grants/grant_old"))
+    #expect(requestPaths.contains("/api/access-grants/grant_new"))
+    #expect(!model.hasSharedDocument)
+    #expect(model.managedAccessLinks.isEmpty)
+    #expect(try bindingStore.loadBinding(fileURL: fileURL) == nil)
+  }
+
+  @Test("server-hydrated access links parse fractional ISO expiry")
+  func serverHydratedAccessLinkParsesFractionalExpiry() {
+    let link = NativeManagedAccessLink(grant: NativeHostedAccessGrantSummary(
+      grantId: "grant_expired",
+      role: .edit,
+      branchId: "branch_main",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+      revokedAt: nil,
+      createdAt: "1999-12-31T23:59:00.000Z"
+    ))
+
+    #expect(link.status == .expired)
   }
 
   @MainActor
@@ -162,6 +277,12 @@ struct MarkLabAppModelTests {
       try model.joinSharedDocument(
         linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit",
         localFileURL: fileURL
+      )
+    }
+    #expect(throws: NativeSharedDocumentLinkError.missingAccessToken) {
+      try model.joinSharedDocument(
+        linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&mode=edit",
+        localFileURL: directory.url.appending(path: "missing-token.md")
       )
     }
     #expect(model.filePath == nil)

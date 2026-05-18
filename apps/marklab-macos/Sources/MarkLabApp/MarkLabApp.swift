@@ -129,7 +129,7 @@ enum NativeManagedAccessLinkStatus: String, Equatable {
 struct NativeManagedAccessLink: Identifiable, Equatable {
   let grantId: String
   let role: NativeLinkRole
-  let url: String
+  let url: String?
   let expiresAt: String?
   let createdAt: String?
   var status: NativeManagedAccessLinkStatus
@@ -143,6 +143,31 @@ struct NativeManagedAccessLink: Identifiable, Equatable {
     expiresAt = link.expiresAt
     createdAt = link.createdAt
     status = .active
+  }
+
+  init(grant: NativeHostedAccessGrantSummary, existing: NativeManagedAccessLink? = nil) {
+    grantId = grant.grantId
+    role = grant.role
+    url = existing?.url
+    expiresAt = grant.expiresAt
+    createdAt = grant.createdAt
+    status = Self.status(expiresAt: grant.expiresAt, revokedAt: grant.revokedAt)
+  }
+
+  private static func status(expiresAt: String?, revokedAt: String?) -> NativeManagedAccessLinkStatus {
+    if revokedAt != nil { return .revoked }
+    guard let expiresAt, let expiry = iso8601Date(from: expiresAt) else { return .active }
+    return expiry <= Date() ? .expired : .active
+  }
+
+  private static func iso8601Date(from value: String) -> Date? {
+    let standardFormatter = ISO8601DateFormatter()
+    if let date = standardFormatter.date(from: value) {
+      return date
+    }
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractionalFormatter.date(from: value)
   }
 }
 
@@ -331,6 +356,9 @@ final class MarkLabAppModel: ObservableObject {
       document = opened
       text = opened.text
       filePath = url.path
+      if let sharedBinding {
+        hostedShareController?.restoreSharedDocument(from: sharedBinding, suggestedFilename: url.lastPathComponent)
+      }
       latestLink = nil
       latestGrantId = nil
       managedAccessLinks = []
@@ -352,6 +380,9 @@ final class MarkLabAppModel: ObservableObject {
         clearConflictState()
         embeddedCollabURL = Self.markEditNativeShellURL(sharedBinding.appEditorURL)
         statusText = "Joined shared document \(sharedBinding.docId)."
+        Task {
+          await refreshManagedAccessLinksFromServer()
+        }
       } else {
         clearConflictState()
         statusText = "Editing \(url.lastPathComponent)."
@@ -416,6 +447,9 @@ final class MarkLabAppModel: ObservableObject {
     guard link.mode == .edit else {
       throw NativeSharedDocumentLinkError.localJoinRequiresEditLink
     }
+    guard link.token?.isEmpty == false else {
+      throw NativeSharedDocumentLinkError.missingAccessToken
+    }
     let existingBinding = try? sharedDocumentBindingStore.loadBinding(fileURL: localFileURL)
     if existingBinding?.matches(link) != true && Self.localFileHasUserContent(localFileURL) {
       throw NativeSharedDocumentLinkError.localFileNotEmpty
@@ -466,6 +500,8 @@ final class MarkLabAppModel: ObservableObject {
       return "Shared link is missing docId."
     case NativeSharedDocumentLinkError.missingBranchId:
       return "Shared link is missing branchId."
+    case NativeSharedDocumentLinkError.missingAccessToken:
+      return "Open a tokenized edit link in MarkLab.app."
     case NativeSharedDocumentLinkError.invalidMode:
       return "Shared link has an invalid mode."
     default:
@@ -505,27 +541,42 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func startSharing() {
+    Task {
+      await startSharingAndConnect()
+    }
+  }
+
+  func startSharingAndConnect() async {
     guard conflict == nil else {
       statusText = "Resolve the conflict before sharing."
       return
     }
     guard let hostedShareController, let fileURL = document?.fileURL else { return }
-    Task {
-      do {
-        try saveFile()
-        let shared = try await hostedShareController.startSharing(fileURL: fileURL)
-        latestLink = nil
-        latestGrantId = nil
-        managedAccessLinks = []
-        activeCollaborators = []
-        embeddedCollabURL = try hostedShareController.appEditorURL()
-        let sharedMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
-        try updateProjectionBaseline(sharedMarkdown, fileURL: fileURL)
-        ensureCLILocalDaemonBoundary(fileURL: fileURL)
-        statusText = "Shared \(fileURL.lastPathComponent) as \(shared.docId). App editor connected as workspace user."
-      } catch {
-        statusText = "Unable to start sharing."
-      }
+    do {
+      try saveFile()
+      let shared = try await hostedShareController.startSharing(fileURL: fileURL)
+      latestLink = nil
+      latestGrantId = nil
+      managedAccessLinks = []
+      activeCollaborators = []
+      let appEditorURL = try hostedShareController.appEditorURL()
+      let sharedMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
+      try sharedDocumentBindingStore.saveBinding(
+        NativeSharedDocumentBinding(
+          fileURL: fileURL,
+          document: shared,
+          appEditorURL: appEditorURL,
+          baselineMarkdown: sharedMarkdown
+        ),
+        fileURL: fileURL
+      )
+      try updateProjectionBaseline(sharedMarkdown, fileURL: fileURL)
+      embeddedCollabURL = appEditorURL
+      ensureCLILocalDaemonBoundary(fileURL: fileURL)
+      statusText = "Shared \(fileURL.lastPathComponent) as \(shared.docId). App editor connected as workspace user."
+      await refreshManagedAccessLinksFromServer()
+    } catch {
+      statusText = "Unable to start sharing."
     }
   }
 
@@ -562,7 +613,6 @@ final class MarkLabAppModel: ObservableObject {
       return
     }
 
-    let activeLinks = managedAccessLinks.filter { $0.status == .active }
     let fileURL = document?.fileURL
     do {
       try flushPendingSharedProjection()
@@ -575,9 +625,10 @@ final class MarkLabAppModel: ObservableObject {
       return
     }
 
+    let activeLinks = await accessLinksForStopSharing()
     var revokeFailures = 0
     if let hostedShareController {
-      for link in activeLinks {
+      for link in activeLinks where link.status == .active {
         do {
           try await hostedShareController.revokeLink(grantId: link.grantId)
         } catch {
@@ -625,7 +676,11 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func copyAccessLink(_ link: NativeManagedAccessLink) {
-    copyLinkToPasteboard(link.url)
+    guard let url = link.url else {
+      statusText = "Link URL is unavailable after relaunch. Revoke still works."
+      return
+    }
+    copyLinkToPasteboard(url)
     statusText = "Link copied to clipboard."
   }
 
@@ -677,6 +732,42 @@ final class MarkLabAppModel: ObservableObject {
 
   private func removeManagedAccessLink(grantId: String) {
     managedAccessLinks.removeAll { $0.grantId == grantId }
+  }
+
+  func refreshManagedAccessLinksFromServer() async {
+    let expectedFileURL = document?.fileURL
+    guard let hostedShareController, embeddedCollabURL != nil else { return }
+    do {
+      let grants = try await hostedShareController.listLinks()
+      guard embeddedCollabURL != nil, document?.fileURL == expectedFileURL else { return }
+      let existingById = Dictionary(uniqueKeysWithValues: managedAccessLinks.map { ($0.grantId, $0) })
+      managedAccessLinks = grants
+        .map { NativeManagedAccessLink(grant: $0, existing: existingById[$0.grantId]) }
+        .filter { $0.status != .revoked }
+      if let latestGrantId, !managedAccessLinks.contains(where: { $0.grantId == latestGrantId }) {
+        self.latestGrantId = nil
+        latestLink = nil
+      }
+    } catch {
+      // Existing in-memory links remain usable even if the historical grant list is temporarily unavailable.
+    }
+  }
+
+  private func accessLinksForStopSharing() async -> [NativeManagedAccessLink] {
+    guard let hostedShareController else {
+      return managedAccessLinks.filter { $0.status == .active }
+    }
+    do {
+      let grants = try await hostedShareController.listLinks()
+      let existingById = Dictionary(uniqueKeysWithValues: managedAccessLinks.map { ($0.grantId, $0) })
+      let serverLinks = grants
+        .map { NativeManagedAccessLink(grant: $0, existing: existingById[$0.grantId]) }
+        .filter { $0.status != .revoked }
+      managedAccessLinks = serverLinks
+      return serverLinks
+    } catch {
+      return managedAccessLinks.filter { $0.status == .active }
+    }
   }
 
   func restoreLatestVersion() {
