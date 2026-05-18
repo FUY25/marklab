@@ -672,11 +672,13 @@ This file records correctness/security bugs found by plan-level review passes.
     - Impact: older persisted conflict URLs without `nativeShell=markedit` could reopen inside the native app using the browser editor chrome/preview instead of the MarkEdit-derived shell.
     - Resolution: conflict URL loading and conflict URL persistence now normalize `/collab` URLs to include `nativeShell=markedit` and strip fragments.
 
-## Unfixed Stop Point
+## Plan 5.5 Follow-Up Fixes
 
-1. `apps/collab-web` test harness now fails on the new native read-only conflict regression.
-   - Status: unfixed by request.
-   - Evidence: `npx -y pnpm@10.0.0 --filter @marklab/collab-web test` reports 24 passing tests but exits 1 due an unhandled `ReferenceError: indexedDB is not defined`.
-   - Trigger: `apps/collab-web/src/App.test.tsx` added a render-level regression for native conflict resolution while read-only. Rendering `CollaborativeMarkdownEditor` constructs `IndexeddbPersistence`, and jsdom does not provide `indexedDB`.
-   - Likely fix: mock `y-indexeddb` or provide a test-only `indexedDB` shim for this test, or move the native editability/ingestion assertion into a lower-level bridge/unit test that does not mount the full collaborative editor.
-   - Current related gates: `swift test --package-path apps/marklab-macos` passes with 39 tests, and `npx -y pnpm@10.0.0 --filter @marklab/collab-web typecheck` passes.
+1. `apps/collab-web` test harness exited 1 on the new native read-only conflict regression because rendering `CollaborativeMarkdownEditor` constructed `IndexeddbPersistence`, and jsdom does not provide `indexedDB`.
+   - Resolution: added a file-local `vi.mock('y-indexeddb', ...)` stub in `apps/collab-web/src/App.test.tsx`. The mock satisfies `IndexeddbPersistence`'s constructor and `destroy()` contract without touching browser-side offline persistence, which the App-level routing tests do not assert.
+
+2. `apps/collab-web` vitest jsdom environment shipped a non-functional `window.localStorage` (null-prototype `{}` instead of a `Storage` instance), masked behind the indexedDB unhandled rejection above. Once the indexedDB stop point was fixed, the four `src/api/edit-session-storage.test.ts` cases failed with `localStorage.getItem is not a function`, `localStorage.clear is not a function`, and a null read for a previously-persisted session.
+   - Trigger: `vitest@3.2.4` invokes jsdom with `--localstorage-file` but no path (`Warning: --localstorage-file was provided without a valid path`); jsdom then returns a plain empty object on `window.localStorage`. `Storage` and `Storage.prototype` themselves remain intact on `window`, but no real instance is wired in.
+   - Resolution: added `apps/collab-web/vitest.setup.ts` and `apps/collab-web/vitest.config.ts`. The setup file installs `Storage.prototype.{getItem,setItem,removeItem,clear,key,length}` backed by a per-instance `WeakMap` (so `vi.spyOn(Storage.prototype, 'setItem')` still works) and replaces `window.localStorage` and `window.sessionStorage` with `Object.create(Storage.prototype)` instances exposed via configurable getters (so `vi.spyOn(window, 'localStorage', 'get')` still works). Coverage: `pnpm --filter @marklab/collab-web test` now reports `Test Files 7 passed (7) | Tests 24 passed (24)` with exit code 0.
+
+   Note: the masking pattern here is the same shape as `bug.md` items 49 (blocked browser storage `get`) and 50 (root vitest discovery skipped `.test.tsx`) — a test-environment defect that hides product-test signal. Whenever a test-harness change opens a new failure, treat it as recovered signal, not new regressions.

@@ -13,6 +13,27 @@ vi.mock('@y-sweet/client', async () => {
   };
 });
 
+// jsdom has no indexedDB. The App-level routing tests do not exercise offline
+// persistence; they only assert that the editor mounts, exposes the native
+// bridges, and that provider construction is/isn't called. Stub y-indexeddb so
+// that constructing CollaborativeMarkdownEditor does not throw
+// `ReferenceError: indexedDB is not defined` and fail the run. See bug.md
+// "Unfixed Stop Point" (collab-web vitest indexedDB).
+vi.mock('y-indexeddb', () => {
+  class IndexeddbPersistenceStub {
+    whenSynced: Promise<void> = Promise.resolve();
+    on(): void {}
+    off(): void {}
+    destroy(): Promise<void> {
+      return Promise.resolve();
+    }
+    clearData(): Promise<void> {
+      return Promise.resolve();
+    }
+  }
+  return { IndexeddbPersistence: IndexeddbPersistenceStub };
+});
+
 function viewSessionResponse(): Response {
   return new Response(JSON.stringify({
     mode: 'view',
