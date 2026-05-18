@@ -44,6 +44,7 @@ struct MarkEditDocumentShellView: View {
         headingToolbarMenu
         emphasisToolbarGroup
         listToolbarMenu
+        documentToolbarMenu
         collaborationToolbarMenu
       }
     }
@@ -53,6 +54,9 @@ struct MarkEditDocumentShellView: View {
     }
     .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
       model.ingestExternalFileChanges()
+    }
+    .onDisappear {
+      _ = try? model.flushLocalAutosave()
     }
     .onChange(of: requiresCollaborationInspector) { _, requiresInspector in
       if requiresInspector {
@@ -83,7 +87,7 @@ struct MarkEditDocumentShellView: View {
         )
       } else {
         MarkEditLocalMarkdownEditorView(
-          text: $model.text,
+          text: localEditorTextBinding,
           selectionStatusText: $editorSelectionStatus,
           isEditable: model.filePath != nil && model.conflict == nil,
           command: editorCommand
@@ -170,6 +174,18 @@ struct MarkEditDocumentShellView: View {
     .disabled(!localFormattingEnabled)
   }
 
+  private var documentToolbarMenu: some View {
+    Menu {
+      Toggle("Local Autosave", isOn: Binding(
+        get: { model.localAutosaveEnabled },
+        set: { model.setLocalAutosaveEnabled($0) }
+      ))
+    } label: {
+      Label("Document", systemImage: "doc.text")
+    }
+    .help("Document")
+  }
+
   private var collaborationToolbarMenu: some View {
     Menu {
       if !model.hasSharedDocument {
@@ -217,6 +233,13 @@ struct MarkEditDocumentShellView: View {
 
   private var localFormattingEnabled: Bool {
     model.filePath != nil && model.conflict == nil
+  }
+
+  private var localEditorTextBinding: Binding<String> {
+    Binding(
+      get: { model.text },
+      set: { model.receiveLocalEditorMarkdown($0) }
+    )
   }
 
   private var markdownHeadings: [MarkEditMarkdownHeading] {

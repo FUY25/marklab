@@ -96,7 +96,9 @@ Expected behavior:
 
 ## Saving
 
-Local-only windows save like a normal document editor. Use `Cmd+S` or the standard save command.
+Local-only windows save like a normal document editor by default. Use `Cmd+S` or the standard save command.
+
+The document toolbar has a `Local Autosave` setting. When it is on, local-only edits are written to the `.md` file after a short debounce, and `Cmd+S` still flushes immediately. This setting only applies before sharing; shared windows use the realtime projection behavior below.
 
 Shared windows additionally project remote shared markdown to disk:
 

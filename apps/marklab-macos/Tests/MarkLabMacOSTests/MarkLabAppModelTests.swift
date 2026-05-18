@@ -26,6 +26,76 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("local autosave setting gates local-only disk saves")
+  func localAutosaveSettingGatesLocalOnlyDiskSaves() throws {
+    let suiteName = "MarkLabAppModelTests.localAutosave.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer {
+      defaults.removePersistentDomain(forName: suiteName)
+    }
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "note.md")
+    try Data("Base\n".utf8).write(to: fileURL)
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      settingsDefaults: defaults
+    )
+
+    model.loadFile(fileURL)
+    model.receiveLocalEditorMarkdown("Draft\n")
+
+    #expect(!model.localAutosaveEnabled)
+    #expect(try model.flushLocalAutosave() == false)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "Base\n")
+    #expect(try baselineStore.loadBaseline(fileURL: fileURL) == nil)
+
+    model.setLocalAutosaveEnabled(true)
+
+    #expect(model.localAutosaveEnabled)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "Draft\n")
+    #expect(try baselineStore.loadBaseline(fileURL: fileURL)?.lastProjectedMarkdown == "Draft\n")
+
+    let remembered = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "remembered-conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      settingsDefaults: defaults
+    )
+    #expect(remembered.localAutosaveEnabled)
+  }
+
+  @MainActor
+  @Test("local autosave setting does not write through shared-mode projection")
+  func localAutosaveSettingDoesNotWriteThroughSharedModeProjection() throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "joined.md")
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      localAutosaveEnabled: true
+    )
+
+    try model.joinSharedDocument(
+      linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit&filename=joined.md",
+      localFileURL: fileURL
+    )
+    model.receiveLocalEditorMarkdown("Should not save through local autosave\n")
+
+    #expect(try model.flushLocalAutosave() == false)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "")
+  }
+
+  @MainActor
   @Test("joins an edit link as a local shared document without the legacy daemon")
   func joinsEditLinkAsLocalSharedDocument() throws {
     let directory = try TemporaryDirectory()

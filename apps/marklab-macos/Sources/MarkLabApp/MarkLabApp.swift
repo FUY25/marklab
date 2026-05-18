@@ -241,6 +241,7 @@ final class MarkLabAppModel: ObservableObject {
   @Published var localDaemonContext: NativeAppContext?
   @Published var resolvedConflictMarkdown = ""
   @Published var resolvedConflictConfirmation = ""
+  @Published var localAutosaveEnabled: Bool
 
   private var document: LocalMarkdownDocument?
   private let hostedShareController: NativeHostedShareController?
@@ -249,13 +250,17 @@ final class MarkLabAppModel: ObservableObject {
   private let sharedDocumentBindingStore: NativeSharedDocumentBindingStore
   let nativeBearerToken: String?
   private let beforeDiskIngestionReplace: (() -> Void)?
+  private let settingsDefaults: UserDefaults
   private var nativeShareController: NativeShareController?
   private var lastProjectedMarkdown: String?
   private var pendingSharedMarkdown: String?
   private var projectionTask: Task<Void, Never>?
+  private var localAutosaveTask: Task<Void, Never>?
   private var diskIngestionRevision = 0
   private var fileWatcher: DispatchSourceFileSystemObject?
   let opensSelectedFilesInNewDocumentWindow: Bool
+  private static let localAutosaveDelayNanoseconds: UInt64 = 2_000_000_000
+  private static let localAutosaveEnabledDefaultsKey = "MarkLabLocalAutosaveEnabled"
 
   init(
     hostedShareController: NativeHostedShareController? = MarkLabAppModel.makeHostedShareControllerFromEnvironment(),
@@ -264,7 +269,9 @@ final class MarkLabAppModel: ObservableObject {
     sharedDocumentBindingStore: NativeSharedDocumentBindingStore = FileNativeSharedDocumentBindingStore.defaultStore(),
     nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"],
     beforeDiskIngestionReplace: (() -> Void)? = nil,
-    opensSelectedFilesInNewDocumentWindow: Bool = false
+    opensSelectedFilesInNewDocumentWindow: Bool = false,
+    localAutosaveEnabled: Bool? = nil,
+    settingsDefaults: UserDefaults = .standard
   ) {
     self.hostedShareController = hostedShareController
     self.baselineStore = baselineStore
@@ -272,14 +279,22 @@ final class MarkLabAppModel: ObservableObject {
     self.sharedDocumentBindingStore = sharedDocumentBindingStore
     self.nativeBearerToken = nativeBearerToken
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
+    self.settingsDefaults = settingsDefaults
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
+    self.localAutosaveEnabled = localAutosaveEnabled ?? Self.defaultLocalAutosaveEnabled(defaults: settingsDefaults)
     if hostedShareController == nil {
       statusText = "Open a Markdown file. Sign in/workspace environment is required before sharing."
     }
   }
 
   deinit {
+    localAutosaveTask?.cancel()
+    projectionTask?.cancel()
     fileWatcher?.cancel()
+  }
+
+  static func defaultLocalAutosaveEnabled(defaults: UserDefaults = .standard) -> Bool {
+    defaults.bool(forKey: localAutosaveEnabledDefaultsKey)
   }
 
   var actionsEnabled: Bool {
@@ -351,6 +366,7 @@ final class MarkLabAppModel: ObservableObject {
 
   func loadFile(_ url: URL) {
     do {
+      try flushLocalAutosave()
       let sharedBinding = try? sharedDocumentBindingStore.loadBinding(fileURL: url)
       let opened = try LocalMarkdownDocument.open(fileURL: url, shared: sharedBinding != nil)
       document = opened
@@ -520,6 +536,8 @@ final class MarkLabAppModel: ObservableObject {
       statusText = "Resolve the conflict before saving."
       return
     }
+    localAutosaveTask?.cancel()
+    localAutosaveTask = nil
     if embeddedCollabURL != nil {
       try flushPendingSharedProjection()
       return
@@ -538,6 +556,75 @@ final class MarkLabAppModel: ObservableObject {
     } catch {
       statusText = "Unable to save Markdown file."
     }
+  }
+
+  func receiveLocalEditorMarkdown(_ markdown: String) {
+    guard text != markdown else { return }
+    text = markdown
+    scheduleLocalAutosave()
+  }
+
+  @discardableResult
+  func flushLocalAutosave() throws -> Bool {
+    localAutosaveTask?.cancel()
+    localAutosaveTask = nil
+    return try autosaveLocalDocumentIfNeeded()
+  }
+
+  func setLocalAutosaveEnabled(_ enabled: Bool) {
+    guard localAutosaveEnabled != enabled else { return }
+    localAutosaveEnabled = enabled
+    settingsDefaults.set(enabled, forKey: Self.localAutosaveEnabledDefaultsKey)
+    if enabled {
+      do {
+        let saved = try flushLocalAutosave()
+        if !saved {
+          statusText = "Local autosave enabled."
+        }
+      } catch {
+        statusText = "Unable to autosave Markdown file."
+      }
+    } else {
+      localAutosaveTask?.cancel()
+      localAutosaveTask = nil
+      statusText = "Local autosave disabled."
+    }
+  }
+
+  private func scheduleLocalAutosave() {
+    guard localAutosaveEnabled, embeddedCollabURL == nil, conflict == nil, document != nil else { return }
+    let delay = Self.localAutosaveDelayNanoseconds
+    localAutosaveTask?.cancel()
+    localAutosaveTask = Task { [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: delay)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      await MainActor.run {
+        self?.flushLocalAutosaveFromTimer()
+      }
+    }
+  }
+
+  private func flushLocalAutosaveFromTimer() {
+    do {
+      try flushLocalAutosave()
+    } catch {
+      statusText = "Unable to autosave Markdown file."
+    }
+  }
+
+  private func autosaveLocalDocumentIfNeeded() throws -> Bool {
+    guard localAutosaveEnabled, embeddedCollabURL == nil, conflict == nil, var currentDocument = document else { return false }
+    guard currentDocument.text != text else { return false }
+    currentDocument.replaceText(text)
+    try currentDocument.save()
+    document = currentDocument
+    try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
+    statusText = "Autosaved \(currentDocument.fileURL.lastPathComponent)."
+    return true
   }
 
   func startSharing() {
