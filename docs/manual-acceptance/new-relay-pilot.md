@@ -11,13 +11,7 @@ It is not the old host-gated `/local#token=...` daemon route. The legacy local d
 
 ## Can We Use The Current Fly.io + Neon Alpha?
 
-Use Fly.io + Neon for the pilot, but redeploy the new stack first. The live `https://marklab-relay-alpha.fly.dev` deployment currently looks like the older hosted-relay alpha, not the new control-plane/Y-Sweet app:
-
-- `/healthz` reports `process`, `database`, `schema`, and `relay`, but no `provider` block.
-- `/api/auth/dev-login` and `/api/auth/session` return `404`.
-- `/collab` serves a static page, but the required new auth/control-plane routes are not deployed behind it.
-
-Before using Fly/Neon for an external pilot, the deployment must include:
+Yes, Fly.io + Neon is the right pilot stack for the new relay/Y-Sweet app path after redeploying the new stack and applying the current schema. A healthy production pilot target must include:
 
 - Latest API build with `createAuthRoutes`, workspace routes, access grants, collab-session routes, and provider proxy routes.
 - Built `apps/collab-web/dist` mounted through `MARKLAB_COLLAB_WEB_DIST_DIR`.
@@ -32,6 +26,44 @@ Before using Fly/Neon for an external pilot, the deployment must include:
   - `MARKLAB_YSWEET_SERVER_TOKEN=<server token from y-sweet gen-auth>`
 - A Fly volume mounted at `/data/ysweet`.
 - `/healthz` must return `ok: true` and include `provider.ready: true` plus `provider.storeReady: true`.
+
+Production auth caveat: `/api/auth/dev-login` is disabled under `NODE_ENV=production`, even if `MARKLAB_ENABLE_DEV_AUTH=true` is set. For a broad external pilot, configure OIDC (`MARKLAB_OIDC_*`) or another real login path. For a small operator-run pilot before OIDC is wired, seed a pilot owner session directly through the deployed app code and store the resulting env in an ignored local file such as `.env.marklab-pilot`.
+
+Production readiness checks:
+
+```bash
+curl -fsS https://marklab-relay-alpha.fly.dev/healthz | jq .
+fly status -a marklab-relay-alpha
+fly checks list -a marklab-relay-alpha
+fly volumes list -a marklab-relay-alpha
+fly secrets list -a marklab-relay-alpha
+```
+
+Required production signal:
+
+```json
+{
+  "ok": true,
+  "schema": {
+    "ready": true,
+    "missing": []
+  },
+  "provider": {
+    "required": true,
+    "ready": true,
+    "storeReady": true
+  }
+}
+```
+
+If `fly deploy` hangs at `Waiting for depot builder` or `Waiting for remote builder`, use the documented Fly fallback:
+
+```bash
+open -a Docker
+NO_COLOR=1 fly deploy -a marklab-relay-alpha --local-only --depot=false --wait-timeout 10m --yes
+```
+
+If `/healthz` reports missing schema objects after deploy, apply `apps/api/src/db/schema.sql` to the Neon database, then re-check `/healthz`. Do not proceed with manual acceptance until schema and provider are both ready.
 
 ## Local Pilot Setup
 
