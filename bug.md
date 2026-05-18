@@ -545,3 +545,138 @@ This file records correctness/security bugs found by plan-level review passes.
 107. Conflict packages did not expose the required `lastProjectedMarkdown` and `lastProjectedHash` fields.
      - Impact: clients and agents could inspect a conflict without the baseline required by the spec, especially when optional base fields were null.
      - Resolution: conflict packages now persist and expose `lastProjectedMarkdown` and `lastProjectedHash`; older stored conflicts are normalized on load with base-field fallbacks. Route coverage asserts both fields are returned.
+
+## Plan 5.5 MarkEdit UI Visual Alignment Findings
+
+1. The native shell still used prototype SwiftUI chrome around the editor.
+   - Impact: users saw a MarkLab-specific header and full-width status bar instead of a MarkEdit-style document window where the editor owns the main surface and collaboration is additive.
+   - Resolution: moved open/save/share/link/collaboration controls into the native window toolbar, changed collaboration details to an inspector, and replaced the bottom status bar with MarkEdit-style floating status pills.
+
+2. A SwiftPM-launched GUI app could run without presenting a document window.
+   - Impact: visual/manual smoke could start `MarkLabApp` as a process but leave the user with no editor window, hiding UI regressions.
+   - Resolution: added foreground app activation and a launch-file fallback that opens a MarkEdit document window when SwiftUI has not presented one.
+
+3. The local CodeMirror editor could render blank after opening a Markdown file.
+   - Impact: the model loaded and status reported the file, but the WebView stayed empty because native text application could run before the bundled editor bridge was ready, and the module script path was unreliable under app `file://` loading.
+   - Resolution: the bundled editor now posts an `editor-ready` bridge signal, the native coordinator polls for the bridge before applying pending Markdown, and the local editor HTML uses a classic bundled script.
+
+4. The SwiftUI launch window ignored the MarkEdit `720x480` document frame.
+   - Impact: visual smoke opened MarkLab at `1060x772`, so the app no longer matched the original MarkEdit document-window footprint even though secondary document windows used MarkEdit sizing.
+   - Resolution: centralized MarkEdit window metrics, applied the frame through the AppKit window layer once the hosting window exists, and covered the metric contract in native UI strategy tests.
+
+5. The local editor content started underneath the native toolbar.
+   - Impact: line 1 was hidden behind the toolbar in the live app, making the editor look unlike MarkEdit and making the first line hard to edit.
+   - Resolution: adjusted the bundled CodeMirror theme top inset and verified line 1 is visible in a live MarkLab window screenshot against the original MarkEdit screenshot.
+
+6. The MarkLab toolbar displaced MarkEdit's original editing cluster with Open/Save buttons.
+   - Impact: the first-viewport native UI looked like a generic prototype editor rather than original MarkEdit with collaboration added on top.
+   - Resolution: restored the MarkEdit-style table-of-contents, heading, bold/italic, and list toolbar cluster, then appended the collaboration controls to the right as the additive layer.
+
+7. MarkEdit syntax styling regressed while trying to copy the original theme.
+   - Impact: an attempted highlighter used MarkEdit-only custom tag names that do not exist in the smaller local editor bundle, causing the live WebView to render blank.
+   - Resolution: kept the MarkEdit spacing and color CSS, and reintroduced syntax highlighting only with standard CodeMirror tags for heading, quote, strong, emphasis, link, and URL styling.
+
+8. Removing prototype toolbar buttons also removed visible Open/Save access.
+   - Impact: matching MarkEdit's toolbar shape by deleting Open/Save buttons would have made local file open/save commands harder to discover and could strand local edits without a native Save command.
+   - Resolution: moved Open and Save to the native File menu with Command-O and Command-S shortcuts, preserving MarkEdit-like toolbar chrome without dropping file commands.
+
+9. The restored MarkEdit formatting toolbar initially used disabled placeholder controls.
+   - Impact: the UI looked closer to MarkEdit but violated the contract because headings, bold/italic, list commands, and table-of-contents navigation did not actually affect the editor.
+   - Resolution: added a native-to-CodeMirror editor command bridge for heading, bold, italic, list, task-list, and goto-line actions; toolbar controls now dispatch real commands for the local editor.
+
+10. Operational status feedback was hidden by the line/column-only status pill.
+    - Impact: open/save/share/link/revoke/conflict failures still updated `model.statusText`, but users could no longer see those messages after the full-width status bar was removed.
+    - Resolution: kept the MarkEdit-style line/column pill at bottom right and added a second floating operational status pill only for non-routine status messages.
+
+11. MarkEdit default sizing was applied as a forced resize instead of a restorable initial frame.
+    - Impact: document windows could be reopened at `720x480` even after the user resized them, and the autosave name was ineffective.
+    - Resolution: initial sizing now restores the autosaved `MarkEditDocument` frame first, falls back to the MarkEdit `720x480` default only when no saved frame exists, and saves frames on resize.
+
+12. Launch-file handling had two independent open paths.
+    - Impact: a command-line file could be loaded by the normal SwiftUI window and then opened again by the delayed AppDelegate fallback.
+    - Resolution: added a launch-file claim coordinator so the SwiftUI path and fallback share one consumption gate.
+
+13. Restored formatting controls inserted Markdown instead of toggling it like MarkEdit.
+    - Impact: Bold/italic could nest markers, heading/list controls could only force a style, and todo commands did not follow MarkEdit's unchecked -> checked -> plain cycle.
+    - Resolution: changed the local editor command bridge to toggle surrounding inline marks, heading levels, unordered lists, ordered lists, and todo list state in the same behavioral shape as MarkEdit's command tests.
+
+14. The Heading toolbar menu exposed only levels 1 through 3.
+    - Impact: half of MarkEdit's heading command surface was missing even though the bridge accepted levels through 6.
+    - Resolution: expanded the Heading menu to levels 1 through 6.
+
+15. The normal SwiftUI launch path kept the window title as `MarkLab`.
+    - Impact: launch behavior depended on which open path won; fallback windows showed the file name, while normal SwiftUI windows did not identify the opened document.
+    - Resolution: the document shell now applies the loaded file URL and filename to the hosting `NSWindow`.
+
+16. Launch fallback still depended on visible window count.
+    - Impact: an empty titled SwiftUI shell could suppress the fallback even when the launch file had not been consumed.
+    - Resolution: fallback now checks the shared launch-file claim state and opens the file if no path has consumed it.
+
+17. Table of contents parsing treated indented code as headings and missed Setext/CR-only headings.
+    - Impact: the restored ToC control could navigate to fake headings or miss headings MarkEdit recognizes.
+    - Resolution: ToC extraction now handles ATX and Setext headings, normalizes CRLF/LF/CR, and skips tab/4-space-indented code and fenced code blocks.
+
+18. Shared-mode native UI still replaced the MarkEdit editor surface with the hosted collaboration WebView.
+    - Impact: after sharing, MarkLab stopped looking and behaving like MarkEdit because the local editor disappeared and the hosted browser editor became the primary surface.
+    - Resolution: shared mode now presents the Y.Text-bound hosted editor visibly inside the MarkEdit-derived native document shell, with native-shell styling that removes browser top chrome/preview and keeps the collaboration engine, remote cursors, and disk-ingestion bridge on the user-facing editor surface.
+
+19. Empty-caret bold and italic commands inserted duplicate markers inside existing marks.
+    - Impact: pressing Bold or Italic in already-bold/already-italic text could create nested Markdown markers instead of toggling the active style off like MarkEdit.
+    - Resolution: the local editor command bridge now searches surrounding standalone markers at the caret and removes the active pair before falling back to marker insertion.
+
+20. Heading removal dropped indentation.
+    - Impact: toggling a heading command off on an indented heading stripped the line indentation along with the heading marker.
+    - Resolution: heading removal now preserves the leading indentation capture while removing only the heading marker and following space.
+
+21. Fenced-code parsing did not respect indented code precedence or long fence lengths.
+    - Impact: an indented code line beginning with backticks could incorrectly toggle fenced-code state, and a three-backtick close could terminate a four-backtick fence too early.
+    - Resolution: ToC extraction now skips tab/four-space indented code before fence handling and tracks fence marker plus opening length so only a matching marker of equal or greater length closes the fence.
+
+22. Nested list toolbar toggles dropped indentation.
+    - Impact: turning an indented list item back into plain text through the restored toolbar could flatten nested Markdown structure.
+    - Resolution: list parsing now tracks indentation separately from the list marker, preserves it when removing markers, and reuses it when applying unordered, ordered, or task-list markers.
+
+23. Hidden shared-editor bridge lost visible Y.Text binding and remote cursor decorations.
+    - Impact: the app preserved a MarkEdit-looking local mirror, but the only real collaborative CodeMirror/Y.Text binding and remote cursor extension lived in an invisible WKWebView.
+    - Resolution: the first-party app editor URL now requests `nativeShell=markedit`; collab-web renders a single MarkEdit-styled source editor without browser topbar/preview, and MarkLab.app displays that WKWebView as the shared document editor inside the native toolbar/status/inspector shell.
+
+24. Native text replacement reset the local editor caret to the top of the file.
+    - Impact: any programmatic Markdown replacement could move the caret to byte 0 and make the next keystroke land at the beginning of the file.
+    - Resolution: the local editor now maps the current selection through whole-document replacements using common-prefix/common-suffix offsets instead of unconditionally moving the cursor to the start.
+
+25. Shared-mode local editor changes bypassed the existing debounced provider-to-disk projection path.
+    - Impact: every native keystroke could save to disk and apply into the hidden provider bridge immediately, rather than using the shared editor's Y.Text binding plus the existing approximately two-second native projection debounce.
+    - Resolution: removed the hidden-local-editor typing path for shared documents; shared typing now happens in the visible Y.Text-bound hosted editor and reaches disk through `receiveSharedMarkdownSnapshot` / `flushPendingSharedProjection`.
+
+26. Visual comparison against original MarkEdit showed MarkLab-specific toolbar spread.
+    - Impact: even after the editor body matched MarkEdit, the native toolbar still looked like a MarkLab control strip because B/I were split into separate buttons and collaboration occupied multiple primary toolbar controls.
+    - Resolution: collapsed collaboration into one additive toolbar menu and kept the visible primary toolbar order aligned to MarkEdit's default table-of-contents, heading, bold/italic, and list controls.
+
+27. Native hosted WebView security rejected MarkLab's own MarkEdit shell URL.
+    - Impact: the native app generated `/collab` URLs with `nativeShell=markedit`, but the WebView navigation allowlist still rejected that query key, so the shared editor could be cancelled before loading.
+    - Resolution: added `nativeShell` to the exact-query allowlist and updated the security regression to accept only the expected `nativeShell=markedit` value.
+
+28. Native conflict state did not make the hosted shared editor read-only.
+    - Impact: while the conflict inspector asked the user to review before resolving, direct typing in the visible hosted Y.Text editor could still mutate the conflicted document.
+    - Resolution: added a native editability bridge; MarkLab.app sends `isEditable=false` during conflicts, and collab-web blocks local transactions, native disk ingestion, and toolbar commands while still allowing provider/Yjs updates to render.
+
+29. Shared-mode toolbar commands could be dropped while the hosted editor was loading.
+    - Impact: the native shell marked a command sequence as applied before the `/collab` page had installed `window.__marklabRunEditorCommand`, so early formatting commands could silently no-op and never retry.
+    - Resolution: hosted editor commands now require a `true` bridge acknowledgement before advancing the applied sequence and retry while the bridge is not ready.
+
+30. Native conflict read-only mode also blocked approved conflict resolution.
+    - Impact: the hosted shared editor correctly became read-only during conflict review, but native conflict actions also use the hosted bridge to apply the chosen resolution after baseline validation, so conflicts could become unresolvable.
+    - Resolution: direct user edits and toolbar commands remain blocked while conflict review is open, but native disk-ingestion/resolution bridge calls are allowed to apply through the baseline-checked Y.Text path.
+
+31. Rehydrated conflict URLs could miss the native MarkEdit shell parameter.
+    - Impact: older persisted conflict URLs without `nativeShell=markedit` could reopen inside the native app using the browser editor chrome/preview instead of the MarkEdit-derived shell.
+    - Resolution: conflict URL loading and conflict URL persistence now normalize `/collab` URLs to include `nativeShell=markedit` and strip fragments.
+
+## Unfixed Stop Point
+
+1. `apps/collab-web` test harness now fails on the new native read-only conflict regression.
+   - Status: unfixed by request.
+   - Evidence: `npx -y pnpm@10.0.0 --filter @marklab/collab-web test` reports 24 passing tests but exits 1 due an unhandled `ReferenceError: indexedDB is not defined`.
+   - Trigger: `apps/collab-web/src/App.test.tsx` added a render-level regression for native conflict resolution while read-only. Rendering `CollaborativeMarkdownEditor` constructs `IndexeddbPersistence`, and jsdom does not provide `indexedDB`.
+   - Likely fix: mock `y-indexeddb` or provide a test-only `indexedDB` shim for this test, or move the native editability/ingestion assertion into a lower-level bridge/unit test that does not mount the full collaborative editor.
+   - Current related gates: `swift test --package-path apps/marklab-macos` passes with 39 tests, and `npx -y pnpm@10.0.0 --filter @marklab/collab-web typecheck` passes.

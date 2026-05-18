@@ -85,6 +85,7 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
       URLQueryItem(name: "branchId", value: document.branchId),
       URLQueryItem(name: "mode", value: "edit"),
       URLQueryItem(name: "clientKind", value: "app"),
+      URLQueryItem(name: "nativeShell", value: "markedit"),
     ]
     if let localDocId, !localDocId.isEmpty {
       queryItems.append(URLQueryItem(name: "localDocId", value: localDocId))

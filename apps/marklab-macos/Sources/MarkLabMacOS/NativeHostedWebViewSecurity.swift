@@ -45,7 +45,7 @@ public func nativeHostedWebViewURLIsAllowed(_ url: URL, expectedURL: URL) -> Boo
 
 private func nativeHostedWebViewQueryValues(_ url: URL) -> [String: String]? {
   let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-  let allowedKeys = Set(["docId", "branchId", "token", "mode", "clientKind", "localDocId"])
+  let allowedKeys = Set(["docId", "branchId", "token", "mode", "clientKind", "localDocId", "nativeShell"])
   var seen = Set<String>()
   var values: [String: String] = [:]
   for item in queryItems {

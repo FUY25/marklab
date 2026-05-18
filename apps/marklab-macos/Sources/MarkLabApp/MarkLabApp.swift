@@ -6,10 +6,92 @@ import MarkLabMacOS
 
 @main
 struct MarkLabApp: App {
+  @NSApplicationDelegateAdaptor(MarkLabAppDelegate.self) private var appDelegate
+  private let launchFileURL = MarkLabLaunchFile.url(from: CommandLine.arguments)
+
   var body: some Scene {
     WindowGroup("MarkLab") {
-      MarkLabRootView(model: MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: true))
+      MarkLabRootView(
+        model: MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: true),
+        launchFileURL: launchFileURL
+      )
     }
+    .defaultSize(
+      width: MarkEditShellDescriptor.current.defaultWindowMetrics.width,
+      height: MarkEditShellDescriptor.current.defaultWindowMetrics.height
+    )
+    .commands {
+      MarkLabFileCommands()
+    }
+  }
+}
+
+struct MarkLabFileCommands: Commands {
+  @FocusedValue(\.markEditShellActions) private var shellActions
+
+  var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      Button("Open...") {
+        shellActions?.open()
+      }
+      .keyboardShortcut("o", modifiers: .command)
+      .disabled(shellActions == nil)
+    }
+
+    CommandGroup(replacing: .saveItem) {
+      Button("Save") {
+        shellActions?.save()
+      }
+      .keyboardShortcut("s", modifiers: .command)
+      .disabled(shellActions?.canSave != true)
+    }
+  }
+}
+
+final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+      guard let launchFileURL = MarkLabLaunchFile.url(from: CommandLine.arguments) else { return }
+      guard !MarkLabLaunchFileCoordinator.isClaimed(launchFileURL) else { return }
+      if case .opened = MarkEditDocumentWindowCoordinator.shared.openDocumentWindow(fileURL: launchFileURL) {
+        _ = MarkLabLaunchFileCoordinator.claim(launchFileURL)
+      }
+    }
+  }
+}
+
+enum MarkLabLaunchFile {
+  private static let supportedMarkdownExtensions = Set(["md", "markdown", "mdown", "mkd"])
+
+  static func url(from arguments: [String]) -> URL? {
+    arguments.dropFirst().lazy.compactMap { argument -> URL? in
+      guard !argument.hasPrefix("-") else { return nil }
+      let url = URL(fileURLWithPath: argument)
+      guard supportedMarkdownExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+      return url
+    }.first
+  }
+}
+
+@MainActor
+enum MarkLabLaunchFileCoordinator {
+  private static var claimedPath: String?
+
+  static func claim(_ url: URL) -> Bool {
+    guard claimedPath != url.path else { return false }
+    claimedPath = url.path
+    return true
+  }
+
+  static func isClaimed(_ url: URL) -> Bool {
+    claimedPath == url.path
+  }
+
+  static func resetForTesting() {
+    claimedPath = nil
   }
 }
 
@@ -95,6 +177,17 @@ final class MarkLabAppModel: ObservableObject {
       && resolvedConflictConfirmation == "APPLY RESOLVED"
   }
 
+  static func markEditNativeShellURL(_ url: URL?) -> URL? {
+    guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+    guard components.path == "/collab" else { return url }
+    var queryItems = components.queryItems ?? []
+    queryItems.removeAll { $0.name == "nativeShell" }
+    queryItems.append(URLQueryItem(name: "nativeShell", value: "markedit"))
+    components.queryItems = queryItems
+    components.percentEncodedFragment = nil
+    return components.url ?? url
+  }
+
   func openFile() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [.plainText]
@@ -132,8 +225,9 @@ final class MarkLabAppModel: ObservableObject {
       pendingSharedMarkdown = nil
       lastProjectedMarkdown = (try? baselineStore.loadBaseline(fileURL: url))?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
-        embeddedCollabURL = persistedConflict.sharedEditorURL
-        setConflict(persistedConflict, status: "Conflict: review required before syncing resumes.")
+        let normalizedConflict = persistedConflict.withSharedEditorURL(Self.markEditNativeShellURL(persistedConflict.sharedEditorURL))
+        embeddedCollabURL = normalizedConflict.sharedEditorURL
+        setConflict(normalizedConflict, status: "Conflict: review required before syncing resumes.")
       } else {
         clearConflictState()
         statusText = "Editing \(url.lastPathComponent)."
@@ -407,7 +501,7 @@ final class MarkLabAppModel: ObservableObject {
   private func ensureConflictSharedEditorAvailable() -> Bool {
     if embeddedCollabURL != nil { return true }
     if let url = conflict?.sharedEditorURL {
-      embeddedCollabURL = url
+      embeddedCollabURL = Self.markEditNativeShellURL(url)
       return true
     }
     return false
@@ -559,7 +653,11 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   private func storableConflictSharedEditorURL(_ url: URL?) -> URL? {
-    guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+    guard let url = Self.markEditNativeShellURL(url),
+          var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else {
+      return nil
+    }
     components.percentEncodedFragment = nil
     return components.url
   }
@@ -672,10 +770,26 @@ final class MarkLabAppModel: ObservableObject {
 }
 
 struct MarkLabRootView: View {
-  @StateObject var model: MarkLabAppModel
+  @StateObject private var model: MarkLabAppModel
+  private let launchFileURL: URL?
+  @State private var didLoadLaunchFile = false
+
+  init(model: MarkLabAppModel, launchFileURL: URL? = nil) {
+    _model = StateObject(wrappedValue: model)
+    self.launchFileURL = launchFileURL
+  }
 
   var body: some View {
     MarkEditDocumentShellView(model: model)
+      .onAppear {
+        guard !didLoadLaunchFile, let launchFileURL else { return }
+        didLoadLaunchFile = true
+        guard !MarkLabLaunchFileCoordinator.isClaimed(launchFileURL) else { return }
+        model.loadFile(launchFileURL)
+        if model.filePath == launchFileURL.path {
+          _ = MarkLabLaunchFileCoordinator.claim(launchFileURL)
+        }
+      }
   }
 }
 
@@ -683,6 +797,8 @@ struct HostedCollabWebView: NSViewRepresentable {
   let url: URL
   let diskIngestion: PendingDiskIngestion?
   let nativeBearerToken: String?
+  let command: MarkEditLocalEditorCommand?
+  let isEditable: Bool
   let onMarkdownSnapshot: (String) -> Void
   let onDiskIngestionResult: (DiskIngestionBridgeResult) -> Void
 
@@ -718,6 +834,10 @@ struct HostedCollabWebView: NSViewRepresentable {
     if let diskIngestion,
        context.coordinator.lastAppliedDiskIngestionRevision != diskIngestion.revision {
       context.coordinator.applyDiskIngestion(diskIngestion, in: webView)
+    }
+    context.coordinator.applyEditorEditability(isEditable, in: webView)
+    if let command {
+      context.coordinator.applyEditorCommand(command, in: webView)
     }
   }
 
@@ -764,6 +884,22 @@ struct HostedCollabWebView: NSViewRepresentable {
     return current == expected
   }
 
+  static func editorCommandJavaScriptForTesting(_ command: MarkEditLocalEditorCommand) -> String {
+    editorCommandJavaScript(command)
+  }
+
+  static func nativeEditableJavaScriptForTesting(_ isEditable: Bool) -> String {
+    nativeEditableJavaScript(isEditable)
+  }
+
+  fileprivate static func editorCommandJavaScript(_ command: MarkEditLocalEditorCommand) -> String {
+    "typeof window.__marklabRunEditorCommand === 'function' && window.__marklabRunEditorCommand(\(command.action.javascriptPayload)) === true;"
+  }
+
+  fileprivate static func nativeEditableJavaScript(_ isEditable: Bool) -> String {
+    "typeof window.__marklabSetNativeEditable === 'function' && window.__marklabSetNativeEditable(\(isEditable ? "true" : "false")) === true;"
+  }
+
   final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private let onMarkdownSnapshot: (String) -> Void
     private let onDiskIngestionResult: (DiskIngestionBridgeResult) -> Void
@@ -771,6 +907,13 @@ struct HostedCollabWebView: NSViewRepresentable {
     var expectedOrigin: NativeHostedWebViewOrigin
     var lastAppliedDiskIngestionRevision = 0
     private var retryCounts: [Int: Int] = [:]
+    private var lastAppliedEditorCommandSequence = 0
+    private var editorCommandRetryCounts: [Int: Int] = [:]
+    private var inFlightEditorCommandSequence: Int?
+    private var desiredEditorEditable = true
+    private var lastAppliedEditorEditable: Bool?
+    private var inFlightEditorEditable: Bool?
+    private var editorEditableRetryCount = 0
 
     init(
       expectedURL: URL,
@@ -859,6 +1002,53 @@ struct HostedCollabWebView: NSViewRepresentable {
       }
     }
 
+    func applyEditorCommand(_ command: MarkEditLocalEditorCommand, in webView: WKWebView) {
+      guard
+        command.sequence > lastAppliedEditorCommandSequence,
+        inFlightEditorCommandSequence != command.sequence
+      else {
+        return
+      }
+      inFlightEditorCommandSequence = command.sequence
+      webView.evaluateJavaScript(
+        HostedCollabWebView.editorCommandJavaScript(command)
+      ) { [weak self, weak webView] value, error in
+        guard let self else { return }
+        self.inFlightEditorCommandSequence = nil
+        if error == nil, value as? Bool == true {
+          self.lastAppliedEditorCommandSequence = command.sequence
+          self.editorCommandRetryCounts.removeValue(forKey: command.sequence)
+          return
+        }
+        self.retryEditorCommand(command, in: webView)
+      }
+    }
+
+    func applyEditorEditability(_ isEditable: Bool, in webView: WKWebView) {
+      desiredEditorEditable = isEditable
+      guard lastAppliedEditorEditable != isEditable, inFlightEditorEditable != isEditable else { return }
+      inFlightEditorEditable = isEditable
+      webView.evaluateJavaScript(
+        HostedCollabWebView.nativeEditableJavaScript(isEditable)
+      ) { [weak self, weak webView] value, error in
+        guard let self else { return }
+        self.inFlightEditorEditable = nil
+        if error == nil, value as? Bool == true {
+          self.lastAppliedEditorEditable = isEditable
+          self.editorEditableRetryCount = 0
+          if self.desiredEditorEditable != isEditable, let webView {
+            self.applyEditorEditability(self.desiredEditorEditable, in: webView)
+          }
+          return
+        }
+        if self.desiredEditorEditable == isEditable {
+          self.retryEditorEditability(isEditable, in: webView)
+        } else if let webView {
+          self.applyEditorEditability(self.desiredEditorEditable, in: webView)
+        }
+      }
+    }
+
     private func retryDiskIngestion(_ diskIngestion: PendingDiskIngestion, in webView: WKWebView?, reason: String) {
       let attempts = (retryCounts[diskIngestion.revision] ?? 0) + 1
       retryCounts[diskIngestion.revision] = attempts
@@ -876,6 +1066,29 @@ struct HostedCollabWebView: NSViewRepresentable {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak webView] in
         guard let self, let webView else { return }
         self.applyDiskIngestion(diskIngestion, in: webView)
+      }
+    }
+
+    private func retryEditorCommand(_ command: MarkEditLocalEditorCommand, in webView: WKWebView?) {
+      let attempts = (editorCommandRetryCounts[command.sequence] ?? 0) + 1
+      editorCommandRetryCounts[command.sequence] = attempts
+      guard attempts < 20, let webView else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak webView] in
+        guard let self, let webView else { return }
+        self.applyEditorCommand(command, in: webView)
+      }
+    }
+
+    private func retryEditorEditability(_ isEditable: Bool, in webView: WKWebView?) {
+      editorEditableRetryCount += 1
+      guard editorEditableRetryCount < 20, let webView else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak webView] in
+        guard let self, let webView else { return }
+        guard self.desiredEditorEditable == isEditable else {
+          self.applyEditorEditability(self.desiredEditorEditable, in: webView)
+          return
+        }
+        self.applyEditorEditability(isEditable, in: webView)
       }
     }
   }

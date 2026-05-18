@@ -31,7 +31,7 @@ struct NativeControlPlaneShareTests {
     try await controller.revokeLink(grantId: editLink.grantId)
 
     #expect(document.docId == "doc_hosted")
-    #expect(appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&mode=edit&clientKind=app&localDocId=\(localDocId)")
+    #expect(appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)")
     #expect(!appEditorURL.absoluteString.contains("token="))
     #expect(appEditorURL.fragment == nil)
     #expect(editLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_edit&mode=edit")

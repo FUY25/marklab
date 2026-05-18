@@ -28,6 +28,10 @@ import {
   type YTextCodeMirrorBinding,
 } from '@marklab/collab-editor';
 import {
+  runMarkdownEditorCommand,
+  type MarkdownEditorCommand,
+} from '@marklab/collab-editor/markdown-commands';
+import {
   clearPersistedEditSession,
   loadPersistedEditSession,
   persistEditSession,
@@ -45,6 +49,14 @@ export interface CollaborativeMarkdownEditorProps {
   token?: string | undefined;
   displayName?: string | undefined;
   clientKind?: CollabClientKind | undefined;
+  nativeShell?: 'markedit' | undefined;
+}
+
+declare global {
+  interface Window {
+    __marklabRunEditorCommand?: (command: MarkdownEditorCommand) => boolean;
+    __marklabSetNativeEditable?: (editable: boolean) => boolean;
+  }
 }
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'unavailable';
@@ -141,6 +153,7 @@ export function CollaborativeMarkdownEditor({
   token,
   displayName = 'Guest',
   clientKind = 'browser',
+  nativeShell,
 }: CollaborativeMarkdownEditorProps) {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
@@ -165,6 +178,7 @@ export function CollaborativeMarkdownEditor({
     let persistence: IndexeddbPersistence | null = null;
     let awareness: Awareness | null = null;
     let unavailable = false;
+    let nativeEditable = true;
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('contents');
     const editableCompartment = new Compartment();
@@ -173,17 +187,21 @@ export function CollaborativeMarkdownEditor({
     const activeSessionRef: { current: EditorSession | null } = { current: null };
     const storageKeyInput = { docId, branchId, token };
 
+    function reconfigureEditability() {
+      view?.dispatch({
+        effects: [
+          editableCompartment.reconfigure(EditorView.editable.of(!unavailable && nativeEditable)),
+          readOnlyCompartment.reconfigure(EditorState.readOnly.of(unavailable || !nativeEditable)),
+        ],
+      });
+    }
+
     function markUnavailable(reason: string) {
       if (disposed) return;
       unavailable = true;
       clearPersistedEditSession(storageKeyInput);
       provider?.terminate();
-      view?.dispatch({
-        effects: [
-          editableCompartment.reconfigure(EditorView.editable.of(false)),
-          readOnlyCompartment.reconfigure(EditorState.readOnly.of(true)),
-        ],
-      });
+      reconfigureEditability();
       if (refreshTimer) clearTimeout(refreshTimer);
       setConnectionState('unavailable');
       setUnavailableReason(reason);
@@ -367,10 +385,10 @@ export function CollaborativeMarkdownEditor({
             history(),
             keymap.of([...defaultKeymap, ...historyKeymap]),
             EditorView.lineWrapping,
-            editableCompartment.of(EditorView.editable.of(true)),
-            readOnlyCompartment.of(EditorState.readOnly.of(false)),
+            editableCompartment.of(EditorView.editable.of(nativeEditable)),
+            readOnlyCompartment.of(EditorState.readOnly.of(!nativeEditable)),
             EditorState.transactionFilter.of((transaction) => {
-              if (unavailable && transaction.docChanged && !transaction.annotation(ySyncAnnotation)) return [];
+              if ((unavailable || !nativeEditable) && transaction.docChanged && !transaction.annotation(ySyncAnnotation)) return [];
               return transaction;
             }),
             createRemoteCursorExtension({ awareness, ytext, localClientId: ydoc.clientID }),
@@ -394,6 +412,16 @@ export function CollaborativeMarkdownEditor({
           baseline,
         )
       );
+      window.__marklabRunEditorCommand = (command: MarkdownEditorCommand) => {
+        if (!view || unavailable || !nativeEditable) return false;
+        runMarkdownEditorCommand(view, command);
+        return true;
+      };
+      window.__marklabSetNativeEditable = (editable: boolean) => {
+        nativeEditable = editable;
+        reconfigureEditability();
+        return true;
+      };
       if (import.meta.env.DEV) {
         (window as unknown as { __marklabEditorView?: EditorView }).__marklabEditorView = view;
       }
@@ -415,6 +443,12 @@ export function CollaborativeMarkdownEditor({
       if (window.__marklabNativeApplyDiskMarkdown) {
         delete window.__marklabNativeApplyDiskMarkdown;
       }
+      if (window.__marklabRunEditorCommand) {
+        delete window.__marklabRunEditorCommand;
+      }
+      if (window.__marklabSetNativeEditable) {
+        delete window.__marklabSetNativeEditable;
+      }
       binding?.destroy();
       view?.destroy();
       if (import.meta.env.DEV) {
@@ -427,15 +461,19 @@ export function CollaborativeMarkdownEditor({
     };
   }, [branchId, client, displayName, docId, token]);
 
+  const usesMarkEditNativeShell = nativeShell === 'markedit';
+
   return (
-    <main className="collab-shell">
-      <header className="collab-topbar">
-        <div>
-          <h1>MarkLab</h1>
-          <p>Edit session</p>
-        </div>
-        <span className={`connection-pill ${connectionState}`}>{connectionLabel(connectionState)}</span>
-      </header>
+    <main className={`collab-shell${usesMarkEditNativeShell ? ' markedit-native-shell' : ''}`}>
+      {!usesMarkEditNativeShell ? (
+        <header className="collab-topbar">
+          <div>
+            <h1>MarkLab</h1>
+            <p>Edit session</p>
+          </div>
+          <span className={`connection-pill ${connectionState}`}>{connectionLabel(connectionState)}</span>
+        </header>
+      ) : null}
       {unavailableReason ? (
         <section className="unavailable-banner" role="status">
           {unavailableReason}
@@ -450,18 +488,20 @@ export function CollaborativeMarkdownEditor({
           ref={editorHostRef}
         >
         </div>
-        <aside className="preview-pane" aria-label="Live preview">
-          {remoteCursors.length > 0 ? (
-            <div className="presence-strip" aria-label="Collaborators">
-              {remoteCursors.map((cursor) => (
-                <span key={cursor.clientId} style={{ borderColor: cursor.color }}>
-                  {cursor.name}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="markdown-rendered-view">{renderMarkdownSnapshot(markdownPreview)}</div>
-        </aside>
+        {!usesMarkEditNativeShell ? (
+          <aside className="preview-pane" aria-label="Live preview">
+            {remoteCursors.length > 0 ? (
+              <div className="presence-strip" aria-label="Collaborators">
+                {remoteCursors.map((cursor) => (
+                  <span key={cursor.clientId} style={{ borderColor: cursor.color }}>
+                    {cursor.name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="markdown-rendered-view">{renderMarkdownSnapshot(markdownPreview)}</div>
+          </aside>
+        ) : null}
       </section>
     </main>
   );

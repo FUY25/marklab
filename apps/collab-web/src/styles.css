@@ -97,6 +97,63 @@ textarea {
   padding: 24px;
 }
 
+.markedit-native-shell {
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+.markedit-native-shell .editor-grid {
+  display: block;
+  min-height: 100vh;
+}
+
+.markedit-native-shell .codemirror-source-pane,
+.markedit-native-shell .codemirror-source-pane .cm-editor {
+  height: 100vh;
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+.markedit-native-shell .codemirror-source-pane .cm-editor {
+  border-right: 0;
+}
+
+.markedit-native-shell .codemirror-source-pane .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.58;
+}
+
+.markedit-native-shell .codemirror-source-pane .cm-content {
+  min-height: 100vh;
+  padding-top: 2px;
+  padding-right: 12px;
+  padding-bottom: 50vh;
+}
+
+.markedit-native-shell .codemirror-source-pane .cm-gutters {
+  border-right: 0;
+  background: #ffffff;
+  color: #8c959f;
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+
+.markedit-native-shell .cm-foldGutter {
+  padding: 0 4px;
+  opacity: 0;
+}
+
+.markedit-native-shell .cm-foldGutter,
+.markedit-native-shell .cm-foldPlaceholder {
+  color: #24292f66;
+  font-family: monospace !important;
+  transform: translateY(-0.1em);
+}
+
+.markedit-native-shell .cm-activeLine,
+.markedit-native-shell .cm-activeLineGutter {
+  background: #eaeef27f;
+}
+
 .unavailable-banner {
   border-bottom: 1px solid #e7c3bd;
   padding: 10px 20px;

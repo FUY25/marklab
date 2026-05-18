@@ -1,8 +1,11 @@
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState, Compartment, EditorSelection } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, historyKeymap } from '@codemirror/commands';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
+import { tags } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
+import { runMarkdownEditorCommand, type MarkdownEditorCommand } from '@marklab/collab-editor/markdown-commands';
 
 type NativeMessageHandler = {
   postMessage(message: unknown): void;
@@ -16,6 +19,7 @@ type MarkLabWindow = Window & {
   };
   __marklabSetMarkdown?: (markdown: string, lineSeparator: string) => void;
   __marklabSetEditable?: (editable: boolean) => void;
+  __marklabRunEditorCommand?: (command: MarkdownEditorCommand) => void;
 };
 
 const root = document.getElementById('editor');
@@ -26,6 +30,7 @@ const lineSeparatorCompartment = new Compartment();
 let applyingFromNative = false;
 let currentLineSeparator = '\n';
 let currentLineEndings: string[] = [];
+let lastSelectionStatus = '';
 
 function editableExtensions(isEditable: boolean) {
   return [
@@ -78,9 +83,67 @@ function editorMarkdown(view: EditorView): string {
   return markdownWithStoredLineEndings(view.state.doc.toString());
 }
 
+function selectionStatus(view: EditorView): string {
+  const range = view.state.selection.main;
+  const headLine = view.state.doc.lineAt(range.head);
+  const column = range.head - headLine.from + 1;
+  const selected = Math.abs(range.to - range.from);
+  const lineColumn = `Ln ${headLine.number}, Col ${column}`;
+  return selected > 0 ? `${lineColumn} (${selected})` : lineColumn;
+}
+
+function postSelectionStatus(view: EditorView) {
+  const status = selectionStatus(view);
+  if (status === lastSelectionStatus) return;
+  lastSelectionStatus = status;
+  (window as MarkLabWindow).webkit?.messageHandlers?.marklabLocalEditor?.postMessage({
+    type: 'selection-change',
+    status,
+    editor: 'codemirror',
+  });
+}
+
 function lineSeparatorExtension(lineSeparator: string) {
   return EditorState.lineSeparator.of(lineSeparator === '\r\n' ? '\r\n' : '\n');
 }
+
+function mapPositionAcrossReplacement(oldText: string, newText: string, position: number): number {
+  const prefixLength = commonPrefixLength(oldText, newText);
+  const suffixLength = commonSuffixLength(
+    oldText.slice(prefixLength),
+    newText.slice(prefixLength),
+  );
+  if (position <= prefixLength) return position;
+  if (position >= oldText.length - suffixLength) {
+    return Math.max(prefixLength, Math.min(newText.length, position + newText.length - oldText.length));
+  }
+  return Math.min(newText.length - suffixLength, prefixLength);
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) return index;
+  }
+  return length;
+}
+
+function commonSuffixLength(left: string, right: string): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left[left.length - 1 - index] !== right[right.length - 1 - index]) return index;
+  }
+  return length;
+}
+
+const markEditHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, color: '#0550ae', fontWeight: '700', textDecoration: 'none' },
+  { tag: tags.quote, color: '#1a7f37', fontStyle: 'italic' },
+  { tag: tags.strong, fontWeight: '700' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.link, color: '#0a3069', textDecoration: 'underline' },
+  { tag: tags.url, color: '#24292f', textDecoration: 'none' },
+]);
 
 const view = new EditorView({
   parent: root,
@@ -93,12 +156,16 @@ const view = new EditorView({
       lineSeparatorCompartment.of(lineSeparatorExtension(currentLineSeparator)),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      syntaxHighlighting(markEditHighlightStyle),
       EditorView.theme({
         '&': {
           height: '100%',
-          backgroundColor: 'transparent',
-          color: 'CanvasText',
+          backgroundColor: '#ffffff',
+          color: '#24292f',
           fontSize: '14px',
+        },
+        '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+          backgroundColor: '#add6ff !important',
         },
         '.cm-scroller': {
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
@@ -106,17 +173,34 @@ const view = new EditorView({
         },
         '.cm-content': {
           minHeight: '100vh',
-          padding: '22px 28px 48px',
+          paddingTop: '2px',
+          paddingRight: '12px',
+          paddingBottom: '50vh',
         },
         '.cm-gutters': {
-          backgroundColor: 'transparent',
-          borderRightColor: 'color-mix(in srgb, CanvasText 12%, transparent)',
+          color: '#8c959f',
+          backgroundColor: '#ffffff',
+          borderRight: 'none',
+          fontFamily: 'SF Mono, ui-monospace, monospace',
+        },
+        '.cm-lineNumbers > .cm-activeLineGutter': {
+          color: '#24292f',
+        },
+        '.cm-foldGutter': {
+          padding: '0 4px',
+          opacity: '0',
+        },
+        '.cm-foldGutter, .cm-foldPlaceholder': {
+          color: '#24292f66',
+          fontFamily: 'monospace !important',
+          transform: 'translateY(-0.1em)',
         },
         '.cm-activeLine, .cm-activeLineGutter': {
-          backgroundColor: 'color-mix(in srgb, CanvasText 6%, transparent)',
+          backgroundColor: '#eaeef27f',
         },
       }),
       EditorView.updateListener.of((update) => {
+        if (update.docChanged || update.selectionSet) postSelectionStatus(update.view);
         if (!update.docChanged || applyingFromNative) return;
         (window as MarkLabWindow).webkit?.messageHandlers?.marklabLocalEditor?.postMessage({
           type: 'markdown-change',
@@ -136,6 +220,10 @@ const view = new EditorView({
     lineSeparator === '\r\n' || lineSeparator === '\r' || lineSeparator === '\n'
   ) ? lineSeparator : dominantLineSeparator(currentLineEndings);
   applyingFromNative = true;
+  const oldText = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const nextAnchor = mapPositionAcrossReplacement(oldText, markdown, selection.anchor);
+  const nextHead = mapPositionAcrossReplacement(oldText, markdown, selection.head);
   if (normalizedLineSeparator !== currentLineSeparator) {
     currentLineSeparator = normalizedLineSeparator;
     view.dispatch({
@@ -144,6 +232,8 @@ const view = new EditorView({
   }
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: markdown },
+    selection: EditorSelection.range(nextAnchor, nextHead),
+    scrollIntoView: true,
   });
   applyingFromNative = false;
 };
@@ -154,4 +244,13 @@ const view = new EditorView({
   });
 };
 
+(window as MarkLabWindow).__marklabRunEditorCommand = (command: MarkdownEditorCommand) => {
+  runMarkdownEditorCommand(view, command);
+};
+
 document.body.dataset.marklabEditor = 'codemirror';
+postSelectionStatus(view);
+(window as MarkLabWindow).webkit?.messageHandlers?.marklabLocalEditor?.postMessage({
+  type: 'editor-ready',
+  editor: 'codemirror',
+});

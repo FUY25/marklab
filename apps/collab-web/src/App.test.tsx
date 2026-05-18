@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
-import { App, collabClientKindFromParam } from './App';
+import { App, collabClientKindFromParam, collabNativeShellFromParam } from './App';
 
 vi.mock('@y-sweet/client', async () => {
   const actual = await vi.importActual<typeof import('@y-sweet/client')>('@y-sweet/client');
@@ -61,6 +61,36 @@ function downgradedNativeEditSessionResponse(): Response {
   });
 }
 
+function nativeEditSessionResponse(): Response {
+  return new Response(JSON.stringify({
+    mode: 'edit',
+    session: {
+      sessionId: 'session_app',
+      clientKind: 'app',
+      displayName: 'MarkLab.app',
+      refreshToken: 'refresh_session_secret',
+    },
+    providerToken: {
+      providerDocId: 'ml_doc_1',
+      sessionId: 'session_app',
+      authorization: 'full',
+      validForSeconds: 600,
+      issuedAt: '2026-05-15T12:00:00.000Z',
+      expiresAt: '2026-05-15T12:10:00.000Z',
+      clientToken: {
+        docId: 'ml_doc_1',
+        url: 'memory://ml_doc_1',
+        baseUrl: 'memory://ml_doc_1',
+        token: 'memory_token',
+        authorization: 'full',
+      },
+    },
+  }), {
+    status: 201,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 describe('App routing', () => {
   beforeEach(() => {
     window.history.pushState({}, '', '/?mode=view&docId=doc_1&branchId=branch_1&token=view_token');
@@ -69,6 +99,9 @@ describe('App routing', () => {
 
   afterEach(() => {
     delete window.__marklabNativeApp;
+    delete window.__marklabNativeApplyDiskMarkdown;
+    delete window.__marklabRunEditorCommand;
+    delete window.__marklabSetNativeEditable;
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -94,6 +127,12 @@ describe('App routing', () => {
     expect(collabClientKindFromParam(null)).toBe('browser');
   });
 
+  it('uses MarkEdit native shell styling only inside the native wrapper', () => {
+    expect(collabNativeShellFromParam('markedit', true)).toBe('markedit');
+    expect(collabNativeShellFromParam('markedit', false)).toBeUndefined();
+    expect(collabNativeShellFromParam(null, true)).toBeUndefined();
+  });
+
   it('marks native embedded edit unavailable when the server downgrades clientKind', async () => {
     window.__marklabNativeApp = true;
     window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app');
@@ -103,5 +142,24 @@ describe('App routing', () => {
 
     expect(await screen.findByText('invalid_edit_session_client_kind')).toBeTruthy();
     expect(ySweetClient.createYjsProvider).not.toHaveBeenCalled();
+  });
+
+  it('keeps native conflict resolution ingestion available while native direct editing is read-only', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeEditSessionResponse()));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.__marklabSetNativeEditable).toBeTypeOf('function');
+      expect(window.__marklabNativeApplyDiskMarkdown).toBeTypeOf('function');
+    });
+
+    expect(window.__marklabSetNativeEditable?.(false)).toBe(true);
+    expect(window.__marklabNativeApplyDiskMarkdown?.('Resolved\n', '')).toEqual({
+      ok: true,
+      markdown: 'Resolved\n',
+    });
   });
 });

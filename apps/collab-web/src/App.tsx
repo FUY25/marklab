@@ -16,6 +16,10 @@ export function collabClientKindFromParam(value: string | null, nativeApp = wind
   return value === 'app' && nativeApp ? 'app' : 'browser';
 }
 
+export function collabNativeShellFromParam(value: string | null, nativeApp = window.__marklabNativeApp === true): 'markedit' | undefined {
+  return value === 'markedit' && nativeApp ? 'markedit' : undefined;
+}
+
 export function App() {
   const path = window.location.pathname;
 
@@ -29,10 +33,11 @@ export function App() {
   const branchId = searchParam('branchId') ?? '';
   const token = searchParam('token') ?? undefined;
   const clientKind = collabClientKindFromParam(searchParam('clientKind'));
+  const nativeShell = collabNativeShellFromParam(searchParam('nativeShell'));
 
   if (mode === 'view') {
     return <ReadOnlyMarkdownView docId={docId} branchId={branchId} token={token} />;
   }
 
-  return <CollaborativeMarkdownEditor docId={docId} branchId={branchId} token={token} clientKind={clientKind} />;
+  return <CollaborativeMarkdownEditor docId={docId} branchId={branchId} token={token} clientKind={clientKind} nativeShell={nativeShell} />;
 }

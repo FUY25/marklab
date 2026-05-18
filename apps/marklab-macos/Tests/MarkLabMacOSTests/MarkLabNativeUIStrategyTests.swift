@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MarkLabApp
 
@@ -25,14 +26,36 @@ struct MarkLabNativeUIStrategyTests {
     ])
   }
 
+  @Test("keeps the MarkEdit editor surface primary and collaboration chrome additive")
+  func keepsMarkEditEditorSurfacePrimary() {
+    let descriptor = MarkEditShellDescriptor.current
+
+    #expect(descriptor.windowChrome == .nativeDocumentToolbar)
+    #expect(descriptor.windowSizing == .markEditDefaultDocument)
+    #expect(descriptor.editorSurfacePresentation == .edgeToEdgeEditor)
+    #expect(descriptor.statusPresentation == .floatingEditorStatusPill)
+    #expect(descriptor.collaborationInspectorBehavior == .hiddenUntilToggledOrRequired)
+    #expect(descriptor.collaborationToolbarPlacement == .nativeToolbarMenu)
+    #expect(descriptor.preservesMarkEditFormattingToolbar)
+    #expect(descriptor.fileCommandPlacement == .nativeFileMenuKeyboardShortcut)
+    #expect(descriptor.collaborationSurfaceMode == .localEditorForUnsharedFilesVisibleHostedEditorForSharedFiles)
+    #expect(descriptor.defaultWindowMetrics == .markEditDefault)
+    #expect(descriptor.defaultWindowMetrics.width == 720)
+    #expect(descriptor.defaultWindowMetrics.height == 480)
+  }
+
   @Test("bundles a real CodeMirror local editor instead of a textarea")
   @MainActor
   func bundlesCodeMirrorLocalEditor() throws {
     let contract = try MarkEditLocalMarkdownEditorView.bundledEditorContract()
 
     #expect(contract.htmlContainsCodeMirrorRoot)
+    #expect(contract.htmlUsesClassicBundledScript)
     #expect(contract.scriptContainsCodeMirrorRuntime)
     #expect(contract.scriptContainsNativeBridge)
+    #expect(contract.scriptContainsSelectionStatusBridge)
+    #expect(contract.scriptPostsEditorReady)
+    #expect(contract.scriptContainsFormattingCommandBridge)
   }
 
   @Test("keeps CRLF as the local editor line separator for unshared files")
@@ -91,5 +114,97 @@ struct MarkLabNativeUIStrategyTests {
 
     #expect(model.filePath == file.path)
     #expect(model.shouldOpenSelectedFileInNewDocumentWindow)
+  }
+
+  @Test("launch arguments can open a Markdown file directly into the editor shell")
+  func launchArgumentsOpenMarkdownFile() {
+    let markdownURL = URL(fileURLWithPath: "/tmp/README.md")
+
+    #expect(MarkLabLaunchFile.url(from: ["MarkLabApp", markdownURL.path]) == markdownURL)
+    #expect(MarkLabLaunchFile.url(from: ["MarkLabApp", "--flag", markdownURL.path]) == markdownURL)
+    #expect(MarkLabLaunchFile.url(from: ["MarkLabApp", "/tmp/image.png"]) == nil)
+    #expect(MarkLabLaunchFile.url(from: ["MarkLabApp"]) == nil)
+  }
+
+  @Test("launch file is consumed once across SwiftUI and fallback launch paths")
+  @MainActor
+  func launchFileClaimedOnce() {
+    let markdownURL = URL(fileURLWithPath: "/tmp/README.md")
+
+    MarkLabLaunchFileCoordinator.resetForTesting()
+
+    #expect(!MarkLabLaunchFileCoordinator.isClaimed(markdownURL))
+    #expect(MarkLabLaunchFileCoordinator.claim(markdownURL))
+    #expect(MarkLabLaunchFileCoordinator.isClaimed(markdownURL))
+    #expect(!MarkLabLaunchFileCoordinator.claim(markdownURL))
+  }
+
+  @Test("MarkEdit shell keeps operational status feedback visible without replacing line-column status")
+  @MainActor
+  func operationalStatusFeedback() {
+    #expect(
+      MarkEditDocumentShellView.operationalStatusTextForTesting(
+        "Editing note.md.",
+        filePath: "/tmp/note.md"
+      ) == nil
+    )
+    #expect(
+      MarkEditDocumentShellView.operationalStatusTextForTesting(
+        "Unable to save Markdown file.",
+        filePath: "/tmp/note.md"
+      ) == "Unable to save Markdown file."
+    )
+  }
+
+  @Test("MarkEdit shell exposes real local editor commands for restored toolbar controls")
+  func markEditToolbarCommandsAreReal() {
+    #expect(MarkEditLocalEditorCommandAction.heading(2).javascriptPayload.contains(#""heading""#))
+    #expect(MarkEditLocalEditorCommandAction.heading(6).javascriptPayload.contains(#""level":6"#))
+    #expect(MarkEditLocalEditorCommandAction.bold.javascriptPayload.contains(#""bold""#))
+    #expect(MarkEditLocalEditorCommandAction.orderedList.javascriptPayload.contains(#""orderedList""#))
+  }
+
+  @Test("hosted MarkEdit shell editor commands and editability require bridge acknowledgements")
+  @MainActor
+  func hostedEditorBridgeRequiresAcknowledgements() {
+    let command = MarkEditLocalEditorCommand(sequence: 1, action: .bold)
+    let commandJavaScript = HostedCollabWebView.editorCommandJavaScriptForTesting(command)
+    let readOnlyJavaScript = HostedCollabWebView.nativeEditableJavaScriptForTesting(false)
+
+    #expect(commandJavaScript.contains("typeof window.__marklabRunEditorCommand === 'function'"))
+    #expect(commandJavaScript.contains(#""bold""#))
+    #expect(commandJavaScript.contains("=== true"))
+    #expect(readOnlyJavaScript.contains("typeof window.__marklabSetNativeEditable === 'function'"))
+    #expect(readOnlyJavaScript.contains("__marklabSetNativeEditable(false) === true"))
+  }
+
+  @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")
+  @MainActor
+  func tableOfContentsHeadingBehavior() {
+    let headings = MarkEditDocumentShellView.markdownHeadingsForTesting(
+      """
+      # ATX
+
+      Setext One
+      ==========
+
+          # Code
+          ```
+          # Indented Fence Code
+          ```
+      ## ATX Two ##
+      \t# Tab Code
+      ````markdown
+      # Fenced Code
+      ```
+      # Still Fenced Code
+      ````
+      # ATX Three
+      Setext Two\r----------\r
+      """
+    )
+
+    #expect(headings.map(\.title) == ["ATX", "Setext One", "ATX Two", "ATX Three", "Setext Two"])
+    #expect(headings.map(\.level) == [1, 1, 2, 1, 2])
   }
 }

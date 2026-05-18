@@ -43,12 +43,12 @@ private final class MarkEditDocumentWindowController: NSWindowController, NSWind
     let window = NSWindow(contentViewController: hostingController)
     window.title = model.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "MarkLab"
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-    window.backgroundColor = .controlBackgroundColor
-    window.setContentSize(NSSize(width: 1060, height: 720))
-    window.minSize = NSSize(width: 840, height: 560)
+    window.toolbarStyle = .unified
+    window.backgroundColor = .textBackgroundColor
+    MarkEditDocumentWindowSizer.configureInitialFrame(for: window, display: false)
     super.init(window: window)
     window.delegate = self
-    windowFrameAutosaveName = "MarkEditDocument"
+    windowFrameAutosaveName = MarkEditDocumentWindowSizer.autosaveName
     shouldCascadeWindows = true
   }
 
@@ -59,5 +59,33 @@ private final class MarkEditDocumentWindowController: NSWindowController, NSWind
 
   func windowWillClose(_ notification: Notification) {
     onClose(self)
+  }
+
+  func windowDidResize(_ notification: Notification) {
+    window?.saveFrame(usingName: MarkEditDocumentWindowSizer.autosaveName)
+  }
+}
+
+@MainActor
+enum MarkEditDocumentWindowSizer {
+  static let autosaveName = "MarkEditDocument"
+
+  static func configureInitialFrame(for window: NSWindow, display: Bool = true) {
+    let metrics = MarkEditShellDescriptor.current.defaultWindowMetrics
+    window.toolbarStyle = .unified
+    window.titleVisibility = .visible
+    window.titlebarAppearsTransparent = false
+    window.backgroundColor = .textBackgroundColor
+    window.setFrameAutosaveName(autosaveName)
+    window.minSize = NSSize(width: 360, height: 260)
+    guard !window.setFrameUsingName(autosaveName) else { return }
+    let currentFrame = window.frame
+    let frame = NSRect(
+      x: currentFrame.minX,
+      y: currentFrame.maxY - metrics.height,
+      width: metrics.width,
+      height: metrics.height
+    )
+    window.setFrame(frame, display: display)
   }
 }

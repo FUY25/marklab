@@ -31,8 +31,12 @@ struct MarkLabAppModelTests {
 
     model.loadFile(fileURL)
 
-    #expect(model.conflict?.sharedEditorURL == sharedEditorURL)
-    #expect(model.embeddedCollabURL == sharedEditorURL)
+    let normalizedURL = try #require(MarkLabAppModel.markEditNativeShellURL(sharedEditorURL))
+    #expect(model.conflict?.sharedEditorURL == normalizedURL)
+    #expect(model.embeddedCollabURL == normalizedURL)
+    #expect(URLComponents(url: normalizedURL, resolvingAgainstBaseURL: false)?.queryItems?.contains(
+      URLQueryItem(name: "nativeShell", value: "markedit")
+    ) == true)
     #expect(model.canResolveConflictThroughSharedEditor)
   }
 

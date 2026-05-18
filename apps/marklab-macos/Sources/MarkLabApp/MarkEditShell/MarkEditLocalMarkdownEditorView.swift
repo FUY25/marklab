@@ -9,10 +9,12 @@ import WebKit
 
 struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
   @Binding var text: String
+  @Binding var selectionStatusText: String
   let isEditable: Bool
+  let command: MarkEditLocalEditorCommand?
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(text: $text)
+    Coordinator(text: $text, selectionStatusText: $selectionStatusText)
   }
 
   func makeNSView(context: Context) -> WKWebView {
@@ -21,15 +23,17 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
     let webView = MarkEditLocalEditorWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = context.coordinator
     webView.setValue(false, forKey: "drawsBackground")
+    context.coordinator.webView = webView
     context.coordinator.loadInitialDocument(in: webView, text: text, isEditable: isEditable)
     return webView
   }
 
   func updateNSView(_ webView: WKWebView, context: Context) {
-    context.coordinator.update(webView: webView, text: text, isEditable: isEditable)
+    context.coordinator.update(webView: webView, text: text, isEditable: isEditable, command: command)
   }
 
   static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    coordinator.webView = nil
     nsView.navigationDelegate = nil
     nsView.configuration.userContentController.removeScriptMessageHandler(forName: "marklabLocalEditor")
   }
@@ -41,8 +45,12 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
     let script = try String(contentsOf: scriptURL, encoding: .utf8)
     return MarkEditLocalEditorResourceContract(
       htmlContainsCodeMirrorRoot: html.contains("id=\"editor\"") && !html.contains("<textarea"),
+      htmlUsesClassicBundledScript: html.contains("<script src=\"./local-editor.js\"></script>") && !html.contains("type=\"module\""),
       scriptContainsCodeMirrorRuntime: script.contains("codemirror") || script.contains("marklabEditor=\"codemirror\""),
-      scriptContainsNativeBridge: script.contains("__marklabSetMarkdown") && script.contains("markdown-change")
+      scriptContainsNativeBridge: script.contains("__marklabSetMarkdown") && script.contains("markdown-change"),
+      scriptContainsSelectionStatusBridge: script.contains("selection-change"),
+      scriptPostsEditorReady: script.contains("editor-ready"),
+      scriptContainsFormattingCommandBridge: script.contains("__marklabRunEditorCommand")
     )
   }
 
@@ -60,20 +68,27 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
 
   final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var text: Binding<String>
+    private var selectionStatusText: Binding<String>
     private var loaded = false
-    private var documentReady = false
+    private var editorReady = false
     private var lastRenderedText = ""
     private var lastEditable = true
     private var pendingText: String?
     private var pendingEditable: Bool?
+    private var pendingCommand: MarkEditLocalEditorCommand?
+    private var bridgeReadyPolls = 0
+    private var lastAppliedCommandSequence = 0
+    weak var webView: WKWebView?
 
-    init(text: Binding<String>) {
+    init(text: Binding<String>, selectionStatusText: Binding<String>) {
       self.text = text
+      self.selectionStatusText = selectionStatusText
     }
 
     func loadInitialDocument(in webView: WKWebView, text: String, isEditable: Bool) {
       loaded = true
-      documentReady = false
+      editorReady = false
+      bridgeReadyPolls = 0
       lastRenderedText = text
       lastEditable = isEditable
       guard
@@ -87,7 +102,12 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
       webView.loadFileURL(indexURL, allowingReadAccessTo: resourceRootURL)
     }
 
-    func update(webView: WKWebView, text: String, isEditable: Bool) {
+    func update(
+      webView: WKWebView,
+      text: String,
+      isEditable: Bool,
+      command: MarkEditLocalEditorCommand?
+    ) {
       guard loaded else {
         loadInitialDocument(in: webView, text: text, isEditable: isEditable)
         return
@@ -108,10 +128,19 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
           pending: { pendingEditable = isEditable }
         )
       }
+      if let command, command.sequence != lastAppliedCommandSequence {
+        applyEditorCommand(command, in: webView)
+      }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-      documentReady = true
+      bridgeReadyPolls = 0
+      waitForEditorBridge(in: webView)
+    }
+
+    private func markEditorReady(in webView: WKWebView) {
+      guard !editorReady else { return }
+      editorReady = true
       if let pendingText {
         webView.evaluateJavaScript("window.__marklabSetMarkdown(\(Self.javascriptString(pendingText)), \(Self.javascriptString(Self.preferredLineSeparator(for: pendingText))));")
         self.pendingText = nil
@@ -120,13 +149,46 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
         webView.evaluateJavaScript("window.__marklabSetEditable(\(pendingEditable ? "true" : "false"));")
         self.pendingEditable = nil
       }
+      if let pendingCommand {
+        applyEditorCommand(pendingCommand, in: webView)
+        self.pendingCommand = nil
+      }
+    }
+
+    private func waitForEditorBridge(in webView: WKWebView) {
+      webView.evaluateJavaScript("typeof window.__marklabSetMarkdown === 'function' && typeof window.__marklabSetEditable === 'function' && typeof window.__marklabRunEditorCommand === 'function'") { [weak self, weak webView] result, _ in
+        guard let self, let webView else { return }
+        if result as? Bool == true {
+          self.markEditorReady(in: webView)
+          return
+        }
+        guard self.bridgeReadyPolls < 20 else { return }
+        self.bridgeReadyPolls += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak webView] in
+          guard let self, let webView else { return }
+          self.waitForEditorBridge(in: webView)
+        }
+      }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
       guard
         message.name == "marklabLocalEditor",
         let body = message.body as? [String: Any],
-        body["type"] as? String == "markdown-change",
+        let type = body["type"] as? String
+      else {
+        return
+      }
+      if type == "editor-ready", let webView {
+        markEditorReady(in: webView)
+        return
+      }
+      if type == "selection-change", let status = body["status"] as? String {
+        selectionStatusText.wrappedValue = status
+        return
+      }
+      guard
+        type == "markdown-change",
         let markdown = body["markdown"] as? String
       else {
         return
@@ -141,11 +203,21 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
     }
 
     private func applyOrQueue(webView: WKWebView, javascript: String, pending: () -> Void) {
-      guard documentReady else {
+      guard editorReady else {
         pending()
         return
       }
       webView.evaluateJavaScript(javascript)
+    }
+
+    private func applyEditorCommand(_ command: MarkEditLocalEditorCommand, in webView: WKWebView) {
+      lastAppliedCommandSequence = command.sequence
+      let javascript = "window.__marklabRunEditorCommand(\(command.action.javascriptPayload));"
+      applyOrQueue(
+        webView: webView,
+        javascript: javascript,
+        pending: { pendingCommand = command }
+      )
     }
 
     fileprivate static func preferredLineSeparator(for text: String) -> String {
@@ -235,10 +307,48 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
   }
 }
 
+struct MarkEditLocalEditorCommand: Equatable {
+  let sequence: Int
+  let action: MarkEditLocalEditorCommandAction
+}
+
+enum MarkEditLocalEditorCommandAction: Equatable {
+  case gotoLine(Int)
+  case heading(Int)
+  case bold
+  case italic
+  case unorderedList
+  case orderedList
+  case taskList
+
+  var javascriptPayload: String {
+    switch self {
+    case let .gotoLine(line):
+      return #"{"type":"gotoLine","line":\#(max(1, line))}"#
+    case let .heading(level):
+      return #"{"type":"heading","level":\#(min(6, max(1, level)))}"#
+    case .bold:
+      return #"{"type":"bold"}"#
+    case .italic:
+      return #"{"type":"italic"}"#
+    case .unorderedList:
+      return #"{"type":"unorderedList"}"#
+    case .orderedList:
+      return #"{"type":"orderedList"}"#
+    case .taskList:
+      return #"{"type":"taskList"}"#
+    }
+  }
+}
+
 struct MarkEditLocalEditorResourceContract: Equatable {
   let htmlContainsCodeMirrorRoot: Bool
+  let htmlUsesClassicBundledScript: Bool
   let scriptContainsCodeMirrorRuntime: Bool
   let scriptContainsNativeBridge: Bool
+  let scriptContainsSelectionStatusBridge: Bool
+  let scriptPostsEditorReady: Bool
+  let scriptContainsFormattingCommandBridge: Bool
 }
 
 private enum MarkEditLocalEditorResources {
