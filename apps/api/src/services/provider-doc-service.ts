@@ -301,7 +301,7 @@ export async function findActiveProviderTokenSession(pool: DbExecutor, input: {
       where pti.doc_id = $1
         and pti.branch_id = $2
         and pti.session_id = $3
-        and pti.authorization = 'full'
+        and pti."authorization" = 'full'
         and pti.status in ('issued', 'revoked')
       order by case when pti.status = 'revoked' then 0 else 1 end,
                pti.issued_at desc,
@@ -347,7 +347,7 @@ export async function countOtherActiveGuestEditSessions(pool: DbExecutor, input:
             where pti.doc_id = s.doc_id
               and pti.branch_id = s.branch_id
               and pti.session_id = s.id
-              and pti.authorization = 'full'
+              and pti."authorization" = 'full'
               and pti.status in ('pending', 'issued', 'revoked')
             order by pti.issued_at desc,
                      case when pti.status = 'revoked' then 0 else 1 end,
@@ -515,7 +515,7 @@ export async function recordProviderTokenIssuance(pool: DbExecutor, input: {
   // Audit identity comes from validated control-plane session state, never from client-authored Y.PermanentUserData.
   const inserted = await pool.query<{ id: string }>(
     `insert into provider_token_issuances
-       (doc_id, branch_id, workspace_id, folder_id, provider_doc_id, session_id, client_kind, actor_type, actor_id, actor_grant_id, authorization, valid_for_seconds, status)
+       (doc_id, branch_id, workspace_id, folder_id, provider_doc_id, session_id, client_kind, actor_type, actor_id, actor_grant_id, "authorization", valid_for_seconds, status)
      select d.id, $2, d.workspace_id, d.folder_id, $3, $4, $5, $6, $7, $8, $9, $10, $11
        from documents d
       where d.id = $1
@@ -606,7 +606,7 @@ export async function providerTokenIssuanceCanIssue(pool: DbExecutor, input: {
            where revoked.doc_id = $2
              and revoked.branch_id = $3
              and revoked.session_id = $4
-             and revoked.authorization = 'full'
+             and revoked."authorization" = 'full'
              and revoked.status = 'revoked'
         )
         and (
@@ -669,7 +669,7 @@ export async function providerTokenIssuanceDenyReason(pool: DbExecutor, input: {
                  where revoked.doc_id = $2
                    and revoked.branch_id = $3
                    and revoked.session_id = $4
-                   and revoked.authorization = 'full'
+                   and revoked."authorization" = 'full'
                    and revoked.status = 'revoked'
               ) then 'provider_token_revoked'
               when exists (
@@ -736,7 +736,7 @@ export async function markProviderTokenIssuanceIssuedIfSessionActive(pool: DbExe
            where revoked.doc_id = $2
              and revoked.branch_id = $3
              and revoked.session_id = $4
-             and revoked.authorization = 'full'
+             and revoked."authorization" = 'full'
              and revoked.status = 'revoked'
         )
         and (

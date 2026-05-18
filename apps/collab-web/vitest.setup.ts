@@ -1,73 +1,111 @@
 // Vitest setup: install a working `localStorage` / `sessionStorage` shim
-// inside the jsdom environment.
+// inside the jsdom environment, but only when the broken-state signature
+// is detected. This file is loaded by both the root and the per-package
+// Vitest config, so it must be a strict no-op when:
+//   - running in a node-only environment (no window),
+//   - running under a real browser-like environment where storage already
+//     works (Object.getPrototypeOf(window.localStorage) is Storage.prototype).
 //
 // Why this file exists: under `vitest@3.2.4` + `jsdom@27`, vitest invokes
-// jsdom's `--localstorage-file` option without a valid path, jsdom emits
-// `Warning: --localstorage-file was provided without a valid path`, and
-// `window.localStorage` ends up as a null-prototype empty `{}` instead of a
-// real `Storage` instance. That breaks `localStorage.getItem`,
-// `localStorage.setItem`, `localStorage.clear`, `vi.spyOn(Storage.prototype,
-// 'setItem')`, and `vi.spyOn(window, 'localStorage', 'get')`.
-//
-// The real `Storage` constructor and `Storage.prototype` are intact (jsdom
-// installs them); the only broken bit is the instance on `window`. So we:
-//   1. install per-instance backing-store methods on `Storage.prototype`
-//      (so `vi.spyOn(Storage.prototype, 'setItem')` works);
-//   2. install a real `Object.create(Storage.prototype)` instance as
-//      `window.localStorage` / `window.sessionStorage` via a configurable
-//      getter (so `vi.spyOn(window, 'localStorage', 'get')` works).
-//
-// This setup is test-only. Production code paths still go through the real
-// browser `localStorage` / `sessionStorage`.
+// jsdom with `--localstorage-file` but no path, and jsdom returns a
+// null-prototype empty `{}` for `window.localStorage`. The `Storage`
+// constructor and prototype are intact, so the fix is to bind a real
+// `Object.create(Storage.prototype)` instance to `window.localStorage`
+// and provide WeakMap-backed methods on `Storage.prototype` that work
+// even when called on a plain instance.
 
-const STORAGE_BACKING = new WeakMap<object, Map<string, string>>();
-
-function backingStore(instance: object): Map<string, string> {
-  let store = STORAGE_BACKING.get(instance);
-  if (!store) {
-    store = new Map<string, string>();
-    STORAGE_BACKING.set(instance, store);
-  }
-  return store;
+function isBrokenStorage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return true;
+  // Working Storage instances inherit from Storage.prototype.
+  return Object.getPrototypeOf(value) === null;
 }
 
-function installStorageProto(): void {
-  if (typeof Storage === 'undefined') return;
-  Storage.prototype.getItem = function getItem(this: Storage, key: string): string | null {
-    const store = backingStore(this);
-    return store.has(String(key)) ? store.get(String(key))! : null;
+function shouldInstallShim(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof (globalThis as { Storage?: unknown }).Storage === 'undefined') return false;
+  try {
+    return isBrokenStorage(window.localStorage) || isBrokenStorage(window.sessionStorage);
+  } catch {
+    return true;
+  }
+}
+
+if (shouldInstallShim()) {
+  const STORAGE_BACKING = new WeakMap<object, Map<string, string>>();
+
+  const backingStore = (instance: object): Map<string, string> => {
+    let store = STORAGE_BACKING.get(instance);
+    if (!store) {
+      store = new Map<string, string>();
+      STORAGE_BACKING.set(instance, store);
+    }
+    return store;
   };
-  Storage.prototype.setItem = function setItem(this: Storage, key: string, value: string): void {
-    backingStore(this).set(String(key), String(value));
+
+  const tryDefine = (target: object, prop: string, descriptor: PropertyDescriptor): void => {
+    try {
+      Object.defineProperty(target, prop, descriptor);
+    } catch {
+      // Some host environments (Node 22 built-in Storage) mark members as
+      // non-configurable. Leave them as-is; the per-instance methods we
+      // install will still take precedence because `window.localStorage`
+      // gets replaced wholesale below.
+    }
   };
-  Storage.prototype.removeItem = function removeItem(this: Storage, key: string): void {
-    backingStore(this).delete(String(key));
-  };
-  Storage.prototype.clear = function clear(this: Storage): void {
-    backingStore(this).clear();
-  };
-  Storage.prototype.key = function key(this: Storage, index: number): string | null {
-    return Array.from(backingStore(this).keys())[index] ?? null;
-  };
-  Object.defineProperty(Storage.prototype, 'length', {
+
+  tryDefine(Storage.prototype, 'getItem', {
+    configurable: true,
+    writable: true,
+    value: function getItem(this: Storage, key: string): string | null {
+      const store = backingStore(this);
+      return store.has(String(key)) ? store.get(String(key))! : null;
+    },
+  });
+  tryDefine(Storage.prototype, 'setItem', {
+    configurable: true,
+    writable: true,
+    value: function setItem(this: Storage, key: string, value: string): void {
+      backingStore(this).set(String(key), String(value));
+    },
+  });
+  tryDefine(Storage.prototype, 'removeItem', {
+    configurable: true,
+    writable: true,
+    value: function removeItem(this: Storage, key: string): void {
+      backingStore(this).delete(String(key));
+    },
+  });
+  tryDefine(Storage.prototype, 'clear', {
+    configurable: true,
+    writable: true,
+    value: function clear(this: Storage): void {
+      backingStore(this).clear();
+    },
+  });
+  tryDefine(Storage.prototype, 'key', {
+    configurable: true,
+    writable: true,
+    value: function key(this: Storage, index: number): string | null {
+      return Array.from(backingStore(this).keys())[index] ?? null;
+    },
+  });
+  tryDefine(Storage.prototype, 'length', {
     configurable: true,
     get(this: Storage) {
       return backingStore(this).size;
     },
   });
-}
 
-function installWindowStorage(propName: 'localStorage' | 'sessionStorage'): void {
-  if (typeof window === 'undefined' || typeof Storage === 'undefined') return;
-  const instance = Object.create(Storage.prototype) as Storage;
-  Object.defineProperty(window, propName, {
-    configurable: true,
-    get() {
-      return instance;
-    },
-  });
-}
+  const installWindowStorage = (propName: 'localStorage' | 'sessionStorage'): void => {
+    const instance = Object.create(Storage.prototype) as Storage;
+    tryDefine(window, propName, {
+      configurable: true,
+      get() {
+        return instance;
+      },
+    });
+  };
 
-installStorageProto();
-installWindowStorage('localStorage');
-installWindowStorage('sessionStorage');
+  installWindowStorage('localStorage');
+  installWindowStorage('sessionStorage');
+}

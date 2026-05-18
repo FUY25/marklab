@@ -50,7 +50,11 @@ struct MarkEditLocalMarkdownEditorView: NSViewRepresentable {
       scriptContainsNativeBridge: script.contains("__marklabSetMarkdown") && script.contains("markdown-change"),
       scriptContainsSelectionStatusBridge: script.contains("selection-change"),
       scriptPostsEditorReady: script.contains("editor-ready"),
-      scriptContainsFormattingCommandBridge: script.contains("__marklabRunEditorCommand")
+      scriptContainsFormattingCommandBridge: script.contains("__marklabRunEditorCommand"),
+      scriptContainsMarkEditMarkdownVisualTheme: script.contains("#0550ae")
+        && script.contains("#1a7f37")
+        && script.contains("19px")
+        && script.contains("cm-lineNumbers")
     )
   }
 
@@ -349,25 +353,36 @@ struct MarkEditLocalEditorResourceContract: Equatable {
   let scriptContainsSelectionStatusBridge: Bool
   let scriptPostsEditorReady: Bool
   let scriptContainsFormattingCommandBridge: Bool
+  let scriptContainsMarkEditMarkdownVisualTheme: Bool
 }
 
 private enum MarkEditLocalEditorResources {
+  private static let resourceBundleName = "MarkLabMacOS_MarkLabApp.bundle"
+
   static func rootURL() throws -> URL {
-    guard let resourceURL = Bundle.module.resourceURL else {
-      throw MarkEditLocalEditorResourceError.missingRoot
+    let fileManager = FileManager.default
+    let candidates = [
+      Bundle.main.resourceURL?.appending(path: resourceBundleName, directoryHint: .isDirectory),
+      Bundle.main.bundleURL.appending(path: resourceBundleName, directoryHint: .isDirectory),
+      Bundle.module.resourceURL,
+    ].compactMap { $0 }
+    if let resourceURL = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) {
+      return resourceURL
     }
-    return resourceURL
+    throw MarkEditLocalEditorResourceError.missingRoot
   }
 
   static func indexHTMLURL() throws -> URL {
-    guard let url = Bundle.module.url(forResource: "index", withExtension: "html") else {
+    let url = try rootURL().appending(path: "index.html", directoryHint: .notDirectory)
+    guard FileManager.default.fileExists(atPath: url.path) else {
       throw MarkEditLocalEditorResourceError.missingIndexHTML
     }
     return url
   }
 
   static func scriptURL() throws -> URL {
-    guard let url = Bundle.module.url(forResource: "local-editor", withExtension: "js") else {
+    let url = try rootURL().appending(path: "local-editor.js", directoryHint: .notDirectory)
+    guard FileManager.default.fileExists(atPath: url.path) else {
       throw MarkEditLocalEditorResourceError.missingScript
     }
     return url

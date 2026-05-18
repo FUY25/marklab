@@ -48,11 +48,35 @@ const repoRoot = existsSync(resolve(workspaceRoot, 'pnpm-workspace.yaml'))
 const cliPath = fileURLToPath(import.meta.url);
 const defaultApiPort = 3011;
 const defaultWebPort = 5175;
+const legacyCliOptInEnv = 'MARKLAB_ENABLE_LEGACY_CLI';
+const legacyLocalDaemonCommands = new Set([
+  'open',
+  'share',
+  'share-state',
+  'create-link',
+  'revoke-link',
+  'join',
+  'status',
+  'recent',
+  'wait',
+  'save-version',
+  'versions',
+  'conflict',
+  'doctor',
+  'agent',
+  'stop',
+  '__serve',
+]);
 
 export function printUsage() {
   console.log(`Usage:
+  marklab CLI local-daemon commands are legacy and disabled by default.
+  Use MarkLab.app with the hosted /collab relay/Y-Sweet pilot.
+  For archived compatibility testing only, set ${legacyCliOptInEnv}=1.
+
   marklab open <file.md> [--background]
   marklab share <file.md> [--json]
+  marklab join <https://.../collab?...mode=edit> [--json]
   marklab join <edit-link> <file.md>
   marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir] [--background]
   marklab join <edit-link> --pick-dir [--background]
@@ -70,6 +94,27 @@ export function printUsage() {
   marklab agent install --target codex --write AGENTS.md [--force]
   marklab stop <file.md>
   marklab stop --all`);
+}
+
+export function legacyCliEnabled(env = process.env) {
+  return env[legacyCliOptInEnv] === '1';
+}
+
+export function legacyCliRequired(command) {
+  return legacyLocalDaemonCommands.has(command);
+}
+
+function assertLegacyCliEnabled(input, env = process.env) {
+  if (input.command === 'join' && input.link && isCollabURL(input.link)) {
+    parseHostedCollabLink(input.link);
+    return;
+  }
+  if (!legacyCliRequired(input.command) || legacyCliEnabled(env)) return;
+  throw new AgentCommandError(
+    'legacy_cli_disabled',
+    `marklab ${input.command} is disabled by default because this CLI drives the archived local-daemon workflow. Use MarkLab.app with the hosted /collab relay/Y-Sweet pilot. Set ${legacyCliOptInEnv}=1 only for archived compatibility testing.`,
+    { command: input.command, optInEnv: legacyCliOptInEnv },
+  );
 }
 
 export function printCommandUsage(command) {
@@ -90,11 +135,12 @@ Start sharing a local Markdown file. Foreground sharing stops when this terminal
   }
   if (command === 'join') {
     console.log(`Usage:
+  marklab join <https://.../collab?...mode=edit> [--json]
   marklab join <edit-link> <file.md>
   marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir] [--background]
   marklab join <edit-link> --pick-dir [--background]
 
-Join an edit link as a local Markdown mirror. Use --pick-dir to choose the destination folder with a system dialog. Foreground mode keeps the terminal attached; background mode keeps syncing until marklab stop. View links and host-offline links are rejected before directories, files, watchers, or daemons are created.`);
+Open a hosted /collab edit link in MarkLab.app. Archived /relay links still require ${legacyCliOptInEnv}=1 and use the old local mirror daemon path.`);
     return;
   }
   printUsage();
@@ -176,6 +222,7 @@ export function parseCliArgs(argv) {
       cancel: rest.includes('--cancel'),
       background: rest.includes('--background'),
       pickDir: rest.includes('--pick-dir'),
+      json,
     };
   }
 
@@ -426,6 +473,73 @@ function openBrowser(url) {
     return;
   }
   spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+}
+
+function openExternalURL(url) {
+  if (process.env.MARKLAB_NO_OPEN === 'true') return false;
+  if (process.platform === 'darwin') {
+    spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+    return true;
+  }
+  if (process.platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
+    return true;
+  }
+  spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+  return true;
+}
+
+export function parseHostedCollabLink(link) {
+  let url;
+  try {
+    url = new URL(link);
+  } catch {
+    throw new AgentCommandError('invalid_target', 'join requires a valid MarkLab /collab edit link.');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new AgentCommandError('invalid_target', 'join requires a hosted MarkLab /collab edit link.');
+  }
+  if (url.pathname !== '/collab') {
+    throw new AgentCommandError('invalid_target', 'join requires a MarkLab /collab edit link.');
+  }
+  const docId = url.searchParams.get('docId');
+  const branchId = url.searchParams.get('branchId');
+  const mode = url.searchParams.get('mode') ?? 'edit';
+  if (!docId) throw new AgentCommandError('invalid_target', 'join link is missing docId.');
+  if (!branchId) throw new AgentCommandError('invalid_target', 'join link is missing branchId.');
+  if (mode !== 'edit') throw new AgentCommandError('invalid_target', 'View links stay browser-only. Ask for an edit link to join in MarkLab.app.');
+  return {
+    url,
+    docId,
+    branchId,
+    token: url.searchParams.get('token'),
+    mode,
+  };
+}
+
+export function isHostedCollabLink(link) {
+  try {
+    parseHostedCollabLink(link);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCollabURL(link) {
+  try {
+    const url = new URL(link);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.pathname === '/collab';
+  } catch {
+    return false;
+  }
+}
+
+export function buildNativeJoinDeepLink(link) {
+  const parsed = parseHostedCollabLink(link);
+  const deepLink = new URL('marklab://join');
+  deepLink.searchParams.set('url', parsed.url.toString());
+  return deepLink.toString();
 }
 
 export function buildLocalUrls(apiPort, webPort, token) {
@@ -1139,6 +1253,27 @@ export function safeRelayJoinFilename(name) {
 
 async function joinCommand(input) {
   if (!input.link) throw new Error('join requires an edit link');
+  if (isCollabURL(input.link)) {
+    const deepLink = buildNativeJoinDeepLink(input.link);
+    const opened = openExternalURL(deepLink);
+    if (input.json) {
+      writeAgentJson(agentSuccess({
+        link: input.link,
+        nativeJoinUrl: deepLink,
+        opened,
+        nextStep: opened
+          ? 'MarkLab.app should prompt for a local Markdown file.'
+          : 'Open the nativeJoinUrl in MarkLab.app or paste the edit link into File > Open Shared Link.',
+      }));
+      return;
+    }
+    console.log('Opening MarkLab.app for shared document join.');
+    console.log(`Native join URL: ${deepLink}`);
+    if (!opened) {
+      console.log('MARKLAB_NO_OPEN=true; paste the edit link into File > Open Shared Link in MarkLab.app.');
+    }
+    return;
+  }
   const link = parseRelayLink(input.link);
   const accessResponse = await fetch(`${link.apiUrl}/api/relay/rooms/${encodeURIComponent(link.relayRoomId)}/access?token=${encodeURIComponent(link.token)}`);
   const accessBody = await accessResponse.text();
@@ -1273,6 +1408,7 @@ export async function main(argv = process.argv.slice(2)) {
     await forbiddenAgentWriteCommand(input);
     return;
   }
+  assertLegacyCliEnabled(input);
 
   if (input.command === 'open' && input.file) {
     if (input.background) await openBackground(input.file);

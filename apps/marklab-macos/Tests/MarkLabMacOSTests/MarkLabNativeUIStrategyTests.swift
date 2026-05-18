@@ -56,6 +56,7 @@ struct MarkLabNativeUIStrategyTests {
     #expect(contract.scriptContainsSelectionStatusBridge)
     #expect(contract.scriptPostsEditorReady)
     #expect(contract.scriptContainsFormattingCommandBridge)
+    #expect(contract.scriptContainsMarkEditMarkdownVisualTheme)
   }
 
   @Test("keeps CRLF as the local editor line separator for unshared files")
@@ -154,6 +155,25 @@ struct MarkLabNativeUIStrategyTests {
         filePath: "/tmp/note.md"
       ) == "Unable to save Markdown file."
     )
+    #expect(
+      MarkEditDocumentShellView.operationalStatusTextForTesting(
+        "Projected shared Markdown to note.md.",
+        filePath: "/tmp/note.md"
+      ) == nil
+    )
+    #expect(
+      MarkEditDocumentShellView.operationalStatusTextForTesting(
+        "Shared note.md as doc_1. App editor connected as workspace user.",
+        filePath: "/tmp/note.md"
+      ) == nil
+    )
+    #expect(
+      MarkEditDocumentShellView.statusSummaryTextForTesting(
+        filePath: "/tmp/note.md",
+        hasConflict: false,
+        selectionStatus: "Ln 2, Col 4"
+      ) == "Ln 2, Col 4"
+    )
   }
 
   @Test("MarkEdit shell exposes real local editor commands for restored toolbar controls")
@@ -176,6 +196,22 @@ struct MarkLabNativeUIStrategyTests {
     #expect(commandJavaScript.contains("=== true"))
     #expect(readOnlyJavaScript.contains("typeof window.__marklabSetNativeEditable === 'function'"))
     #expect(readOnlyJavaScript.contains("__marklabSetNativeEditable(false) === true"))
+  }
+
+  @Test("native collaboration inspector models collaborators separately from access links")
+  func collaborationInspectorSeparatesPresenceFromLinks() {
+    let collaborator = NativeCollaboratorPresence.fromBridgePayload([
+      "clientId": 42,
+      "name": "Guest",
+      "color": "#0891b2",
+      "colorLight": "#cffafe",
+      "kind": "human",
+      "clientKind": "browser",
+    ])
+
+    #expect(collaborator?.name == "Guest")
+    #expect(collaborator?.clientTypeLabel == "Browser")
+    #expect(collaborator?.roleLabel == "Edit")
   }
 
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")

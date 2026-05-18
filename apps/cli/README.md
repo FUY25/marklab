@@ -1,24 +1,39 @@
 # MarkLab CLI
 
-Alpha CLI package for running MarkLab's local-first Markdown collaboration flow.
+CLI helper package for MarkLab. The current non-legacy command surface is limited to opening hosted `/collab` edit links in MarkLab.app; the old local-daemon Markdown mirror commands remain archived compatibility commands.
+
+The new MarkLab pilot uses MarkLab.app with the hosted `/collab` control-plane/Y-Sweet path:
 
 ```sh
-npx -y @marklab/cli open README.md --background
-npx -y @marklab/cli create-link README.md --role edit
-npx -y @marklab/cli join '<edit-link>' --pick-dir --background
+npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
+```
+
+That command opens `marklab://join?...` so MarkLab.app can ask where to create or attach the local Markdown file. View links stay browser-only.
+
+The legacy local-daemon CLI commands are disabled by default. For archived compatibility testing only, opt in explicitly:
+
+```sh
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab status
+```
+
+```sh
+MARKLAB_ENABLE_LEGACY_CLI=1 npx -y @marklab/cli open README.md --background
+MARKLAB_ENABLE_LEGACY_CLI=1 npx -y @marklab/cli create-link README.md --role edit
+MARKLAB_ENABLE_LEGACY_CLI=1 npx -y @marklab/cli join '<legacy-relay-link>' --pick-dir --background
 ```
 
 ## Requirements
 
 - Node.js 20.19 or newer, Node.js 22.12 or newer, or Node.js 24 or newer.
 - A modern browser.
-- The npm package includes the CLI runtime for `open`, `share`, and `join`. Developers working from the repository checkout can still use pnpm for local development.
+- The npm package includes the CLI runtime for hosted `/collab` link opening plus archived compatibility commands. Developers working from the repository checkout can still use pnpm for local development.
 
 Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pnpm, Git, or a specific Markdown editor.
 
 ## Commands
 
 ```sh
+marklab join <https://.../collab?...mode=edit>
 marklab open <file.md>
 marklab open <file.md> --background
 marklab create-link <file.md> --role edit
@@ -32,11 +47,13 @@ marklab stop <file.md>
 marklab stop --all
 ```
 
-Use `marklab --help`, `marklab open --help`, `marklab create-link --help`, `marklab share --help`, or `marklab join --help` for command help.
+Use `marklab --help`, `marklab open --help`, `marklab create-link --help`, `marklab share --help`, or `marklab join --help` for command help. Except for hosted `/collab` edit-link opening, the commands above require `MARKLAB_ENABLE_LEGACY_CLI=1` until Plan 6 replaces the archived local-daemon command surface.
 
-## Host Online Behavior
+## Archived Daemon Behavior
 
-Host online means the MarkLab daemon is running and connected.
+The following behavior applies only when `MARKLAB_ENABLE_LEGACY_CLI=1` is set.
+
+Host online means the archived MarkLab daemon is running and connected.
 
 Use persistent background hosting for normal collaboration:
 
@@ -49,27 +66,35 @@ Hosting continues after the terminal command exits until you run `marklab stop <
 
 `marklab share <file.md>` is temporary foreground sharing. Closing that terminal stops hosting, so use it for quick tests rather than persistent collaboration.
 
-Browser edit and view links work without installing MarkLab. A pure web link cannot install or run a local CLI, create local files, or inspect whether local software is available, because browsers do not have that access. The current safe alpha path is one relay link plus a copyable one-line `npx` command for collaborators who want a local mirror.
-
-Edit links can be used in the browser or with `marklab join`. View links are browser-only and cannot create local mirrors. To choose the destination folder with a system dialog and create a background local Markdown mirror, use an edit link:
+Browser edit and view links work without installing MarkLab. A pure web link cannot install or run local software, create local files, or inspect whether MarkLab.app is available, because browsers do not have that access. The current safe alpha path is one hosted `/collab` edit link plus optional native app opening through `marklab join`.
 
 ```sh
-marklab join <edit-link> --pick-dir --background
+marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
+```
+
+The app then prompts for the local Markdown file. It validates the link before creating a file and refuses view links.
+
+The archived legacy relay mirror path is still available only when explicitly enabled.
+
+Legacy edit links can be used in the browser or with `marklab join`. View links are browser-only and cannot create local mirrors. To choose the destination folder with a system dialog and create a background local Markdown mirror, use an edit link:
+
+```sh
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab join <legacy-relay-link> --pick-dir --background
 ```
 
 The collaborator can also type a folder instead:
 
 ```sh
-marklab join <edit-link> --dir ./docs --create-dir --background
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab join <legacy-relay-link> --dir ./docs --create-dir --background
 ```
 
 The collaborator chooses the destination folder; MarkLab uses the host file name from the edit link. Background join opens the local browser URL, then returns after the mirror daemon starts. Omit `--background` for foreground join and keep the terminal open while you want the mirror to sync. Stop a background mirror with `marklab stop ./docs/README.md`, or stop every local MarkLab daemon with `marklab stop --all`.
 
 `marklab join` rejects view links and host-offline links before creating directories, writing files, starting a watcher, or connecting a daemon.
 
-## Relay URL Configuration
+## Archived Relay URL Configuration
 
-The packaged alpha CLI defaults share links to the hosted Fly relay:
+These variables apply to archived daemon compatibility commands:
 
 ```text
 MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
@@ -77,7 +102,7 @@ MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
 MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
 ```
 
-Normal users do not need to set those variables. Operators and self-hosted testers can override the public relay URLs by setting all three values together:
+Normal new-pilot users do not need to set those variables. Operators and self-hosted testers can override the archived public relay URLs by setting all three values together:
 
 ```sh
 MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev \
@@ -88,7 +113,7 @@ marklab share README.md
 
 When public URLs are configured, MarkLab requires all three values together and rejects loopback public URLs. Production relay WebSocket URLs must use `wss://`.
 
-To force local loopback relay URLs while developing from this repository, set:
+To force local loopback relay URLs while testing archived daemon behavior from this repository, set:
 
 ```sh
 MARKLAB_RELAY_MODE=development

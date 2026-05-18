@@ -20,6 +20,7 @@ const remoteUser: MarkLabAwarenessUser = {
   color: '#dc2626',
   colorLight: '#fee2e2',
   kind: 'human',
+  clientKind: 'browser',
 };
 
 let mountedViews: EditorView[] = [];
@@ -58,6 +59,7 @@ describe('remote cursor rendering', () => {
       color: '#dc2626',
       colorLight: '#fee2e2',
       kind: 'human',
+      clientKind: 'browser',
     }]);
   });
 
@@ -87,6 +89,7 @@ describe('remote cursor rendering', () => {
       color: '#dc2626',
       colorLight: '#fee2e2',
       kind: 'human',
+      clientKind: 'browser',
     }]);
   });
 
@@ -103,6 +106,7 @@ describe('remote cursor rendering', () => {
       color: '#dc2626',
       colorLight: '#fee2e2',
       kind: 'human',
+      clientKind: 'browser',
       anchor: 13,
       head: 18,
     }]);

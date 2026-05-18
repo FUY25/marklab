@@ -33,6 +33,7 @@ struct MarkEditDocumentShellView: View {
       \.markEditShellActions,
       MarkEditShellActions(
         open: { model.openFile() },
+        openSharedLink: { model.openSharedLink() },
         save: { model.saveFileFromUI() },
         canSave: model.filePath != nil && model.conflict == nil
       )
@@ -76,6 +77,8 @@ struct MarkEditDocumentShellView: View {
           command: editorCommand,
           isEditable: model.conflict == nil,
           onMarkdownSnapshot: { markdown in model.projectSharedMarkdownFromWebView(markdown) },
+          onSelectionStatus: { status in editorSelectionStatus = status },
+          onCollaboratorsChange: { collaborators in model.receiveActiveCollaborators(collaborators) },
           onDiskIngestionResult: { result in model.handleDiskIngestionBridgeResult(result) }
         )
       } else {
@@ -98,7 +101,11 @@ struct MarkEditDocumentShellView: View {
   }
 
   private var hasCollaborationInspectorContent: Bool {
-    model.latestLink != nil || model.localDaemonContext != nil || model.conflict != nil
+    model.hasSharedDocument
+      || !model.managedAccessLinks.isEmpty
+      || !model.activeCollaborators.isEmpty
+      || model.localDaemonContext != nil
+      || model.conflict != nil
   }
 
   private var tableOfContentsToolbarMenu: some View {
@@ -165,41 +172,43 @@ struct MarkEditDocumentShellView: View {
 
   private var collaborationToolbarMenu: some View {
     Menu {
-      Button { model.startSharing() } label: {
-        Label("Start Sharing", systemImage: "person.2")
+      if !model.hasSharedDocument {
+        Button { model.startSharing() } label: {
+          Label("Start Sharing", systemImage: "person.2")
+        }
+        .disabled(!model.canStartSharing)
       }
-      .disabled(!model.actionsEnabled)
 
-      Divider()
+      if model.hasSharedDocument {
+        Button {} label: {
+          Label("Sharing On", systemImage: "checkmark.circle")
+        }
+        .disabled(true)
 
-      Button { model.createLink(role: .edit) } label: {
-        Label("Create Edit Link", systemImage: "pencil")
+        Button { model.stopSharing() } label: {
+          Label("Stop Sharing", systemImage: "xmark.circle")
+        }
+        .disabled(!model.canStopSharing)
+
+        Divider()
+
+        Button { model.createLink(role: .edit) } label: {
+          Label("Create Edit Link", systemImage: "pencil")
+        }
+        .disabled(!model.canCreateSharingLink)
+
+        Button { model.createLink(role: .view) } label: {
+          Label("Create View Link", systemImage: "eye")
+        }
+        .disabled(!model.canCreateSharingLink)
+
+        Button {
+          collaborationInspectorPresented.toggle()
+        } label: {
+          Label("Show Collaboration", systemImage: "sidebar.right")
+        }
+        .disabled(!hasCollaborationInspectorContent)
       }
-      .disabled(!model.actionsEnabled)
-
-      Button { model.createLink(role: .view) } label: {
-        Label("Create View Link", systemImage: "eye")
-      }
-      .disabled(!model.actionsEnabled)
-
-      Button { model.copyLatestLink() } label: {
-        Label("Copy Link", systemImage: "doc.on.doc")
-      }
-      .disabled(model.latestLink == nil)
-
-      Button { model.revokeLatestLink() } label: {
-        Label("Revoke Link", systemImage: "xmark.circle")
-      }
-      .disabled(model.latestGrantId == nil)
-
-      Divider()
-
-      Button {
-        collaborationInspectorPresented.toggle()
-      } label: {
-        Label("Show Collaboration", systemImage: "sidebar.right")
-      }
-      .disabled(!hasCollaborationInspectorContent)
     } label: {
       Label("Collaboration", systemImage: "link")
     }
@@ -230,15 +239,54 @@ struct MarkEditDocumentShellView: View {
       VStack(alignment: .leading, spacing: 14) {
         Text("Collaboration")
           .font(.headline)
-        if let latestLink = model.latestLink {
-          inspectorSection("Browser Link") {
-            Text(latestLink)
+        if model.hasSharedDocument {
+          inspectorSection("Access Links") {
+            HStack {
+              Button("Create Edit Link") { model.createLink(role: .edit) }
+                .disabled(!model.canCreateSharingLink)
+              Button("Create View Link") { model.createLink(role: .view) }
+                .disabled(!model.canCreateSharingLink)
+            }
+            if model.managedAccessLinks.isEmpty {
+              Text("No access links created.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(model.managedAccessLinks) { link in
+                accessLinkRow(link)
+              }
+            }
+          }
+
+          inspectorSection("Active Collaborators") {
+            if model.activeCollaborators.isEmpty {
+              Text("No other connected sessions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(model.activeCollaborators) { collaborator in
+                collaboratorRow(collaborator)
+              }
+            }
+          }
+
+          inspectorSection("Local Sync") {
+            Text(localSyncSummary)
               .font(.caption)
-              .textSelection(.enabled)
+              .foregroundStyle(.secondary)
+            if let filePath = model.filePath {
+              Text(filePath)
+                .font(.caption)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            }
+            Button("Stop Sharing") { model.stopSharing() }
+              .disabled(!model.canStopSharing)
           }
         }
         if let context = model.localDaemonContext {
-          inspectorSection("Local Daemon") {
+          inspectorSection("Legacy Local Daemon") {
             Text("\(context.shareState.hostOnline ? "online" : "offline") · versions \(context.versions.count)")
               .font(.caption)
               .foregroundStyle(.secondary)
@@ -253,6 +301,63 @@ struct MarkEditDocumentShellView: View {
       .padding(14)
     }
     .background(.regularMaterial)
+  }
+
+  private func accessLinkRow(_ link: NativeManagedAccessLink) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Text(link.role.rawValue.capitalized)
+          .font(.caption.weight(.semibold))
+        Text(link.status.label)
+          .font(.caption2)
+          .foregroundStyle(link.status == .active ? .green : .secondary)
+        Spacer()
+        Button("Copy") { model.copyAccessLink(link) }
+        Button("Revoke") { model.revokeAccessLink(link) }
+          .disabled(link.status != .active)
+      }
+      if let createdAt = link.createdAt {
+        Text("Created \(createdAt)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
+      if let expiresAt = link.expiresAt {
+        Text("Expires \(expiresAt)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
+      Text(link.url)
+        .font(.caption2)
+        .lineLimit(2)
+        .truncationMode(.middle)
+        .textSelection(.enabled)
+    }
+    .padding(8)
+    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+  }
+
+  private func collaboratorRow(_ collaborator: NativeCollaboratorPresence) -> some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(Color(nsColor: NSColor(hexString: collaborator.color) ?? .controlAccentColor))
+        .frame(width: 10, height: 10)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(collaborator.name)
+          .font(.caption.weight(.semibold))
+          .lineLimit(1)
+        Text("\(collaborator.roleLabel) · \(collaborator.clientTypeLabel)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+    }
+  }
+
+  private var localSyncSummary: String {
+    if model.conflict != nil { return "Conflict requires review." }
+    if model.hasSharedDocument { return "Projecting shared Markdown to the local file." }
+    if model.filePath != nil { return "Local Markdown file." }
+    return "No local file."
   }
 
   private var editorStatusOverlay: some View {
@@ -283,10 +388,11 @@ struct MarkEditDocumentShellView: View {
   }
 
   private var statusSummary: String {
-    if model.conflict != nil { return "Sync Paused" }
-    if model.embeddedCollabURL != nil { return "Collaborating" }
-    if model.filePath != nil { return editorSelectionStatus }
-    return "No File"
+    Self.statusSummaryTextForTesting(
+      filePath: model.filePath,
+      hasConflict: model.conflict != nil,
+      selectionStatus: editorSelectionStatus
+    )
   }
 
   private var operationalStatus: String? {
@@ -300,8 +406,20 @@ struct MarkEditDocumentShellView: View {
     if let filePath {
       let filename = URL(fileURLWithPath: filePath).lastPathComponent
       if trimmed == "Editing \(filename)." { return nil }
+      if trimmed == "Projected shared Markdown to \(filename)." { return nil }
+      if trimmed.hasPrefix("Shared \(filename) as ") { return nil }
     }
     return trimmed
+  }
+
+  static func statusSummaryTextForTesting(
+    filePath: String?,
+    hasConflict: Bool,
+    selectionStatus: String
+  ) -> String {
+    if hasConflict { return "Sync Paused" }
+    if filePath != nil { return selectionStatus }
+    return "No File"
   }
 
   static func markdownHeadingsForTesting(_ markdown: String) -> [MarkEditMarkdownHeading] {
@@ -435,6 +553,7 @@ struct MarkEditMarkdownHeading: Identifiable, Equatable {
 
 struct MarkEditShellActions {
   let open: () -> Void
+  let openSharedLink: () -> Void
   let save: () -> Void
   let canSave: Bool
 }
@@ -447,6 +566,21 @@ extension FocusedValues {
   var markEditShellActions: MarkEditShellActions? {
     get { self[MarkEditShellActionsKey.self] }
     set { self[MarkEditShellActionsKey.self] = newValue }
+  }
+}
+
+private extension NSColor {
+  convenience init?(hexString: String) {
+    let trimmed = hexString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("#") else { return nil }
+    let hex = String(trimmed.dropFirst())
+    guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
+    self.init(
+      red: CGFloat((value >> 16) & 0xff) / 255,
+      green: CGFloat((value >> 8) & 0xff) / 255,
+      blue: CGFloat(value & 0xff) / 255,
+      alpha: 1
+    )
   }
 }
 

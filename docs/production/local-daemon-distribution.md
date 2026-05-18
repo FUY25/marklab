@@ -1,91 +1,74 @@
-# Local Daemon Distribution
+# Archived Local Daemon Distribution
 
-Plan 04A distribution is an alpha CLI flow. It does not include Homebrew distribution, a signed standalone app, a menubar manager, a native Markdown editor, or a workspace/sidebar product.
+This page is archived compatibility documentation.
 
-## Alpha Command Shape
+The current pilot uses MarkLab.app plus the hosted `/collab` control-plane/Y-Sweet path. Normal users should not start or depend on the old local daemon route.
 
-The supported alpha commands are:
+## Current Default
 
-```bash
-npx -y @marklab/cli open README.md
-npx -y @marklab/cli share README.md
-npx -y @marklab/cli join <edit-link> --dir ./docs --name README.md
-```
+Use MarkLab.app:
 
-If the npm package name changes before alpha, update README examples, CLI docs, smoke tests, and release notes together.
+1. Open a local `.md` file.
+2. Click `Start Sharing`.
+3. Create an edit or view link.
+4. Browser collaborators open `/collab?...mode=edit|view`.
+5. App collaborators open the same edit link in MarkLab.app.
 
-## Product Model
-
-The local Markdown file is canonical. The daemon watches and writes that file. The browser UI is an editor surface over the daemon. The hosted relay coordinates identity, permissions, host-online state, and websocket routing only when sharing is enabled.
-
-There is no Plan 04A cloud document workspace. Do not add:
-
-- Homebrew install docs as implemented behavior;
-- signed app install docs;
-- native Markdown editor docs;
-- menubar lifecycle docs;
-- hosted AI write/edit API docs;
-- second restore/version/collaboration paths.
-
-## Foreground And Background Hosting
-
-Foreground hosting stays attached to the terminal:
+Use the CLI only to route hosted edit links into the app:
 
 ```bash
-marklab open README.md
-marklab share README.md
+marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
-Closing that terminal stops the daemon and makes hosted relay sharing go offline.
+The command opens a `marklab://join?...` deep link. View links remain browser-only.
 
-Background hosting uses the Plan 01 daemon supervisor:
+## Archived Compatibility Opt-In
+
+The old daemon CLI commands are disabled by default.
+
+For archived compatibility testing only:
 
 ```bash
-marklab open README.md --background
-marklab status README.md
-marklab stop README.md
-marklab stop --all
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab status
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab open README.md --background
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab create-link README.md --role edit
+MARKLAB_ENABLE_LEGACY_CLI=1 marklab stop --all
 ```
 
-Background mode must reuse the existing daemon registry and metadata paths. It must not create a second supervisor, workspace database, or native app lifecycle.
-
-## Join Behavior
-
-Exact target path:
+The native app also keeps its legacy local daemon boundary disabled unless explicitly enabled:
 
 ```bash
-marklab join <edit-link> ./README.md
+MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1
 ```
 
-Directory with relay-derived safe filename:
+Do not enable that boundary for the new relay/native pilot unless you are testing archived behavior.
 
-```bash
-marklab join <edit-link> --dir ./docs
+## Why This Is Archived
+
+The daemon path had two problems for the pilot:
+
+- It made localhost URLs and daemon state look like part of the normal product.
+- It created a second collaboration route beside the new hosted `/collab` path.
+
+The new product route is cleaner:
+
+```text
+Local .md file
+  -> MarkLab.app
+  -> Start Sharing
+  -> hosted control plane + Y-Sweet provider
+  -> /collab browser/app sessions
 ```
-
-Directory with exact filename:
-
-```bash
-marklab join <edit-link> --dir ./docs --name shared-notes.md
-```
-
-For AI agents, this is the supported collaboration path:
-
-```bash
-marklab join <edit-link> --dir ./docs --name README.md
-```
-
-Agents then edit the local file directly and use MarkLab commands to check status, wait for sync, save versions, and inspect conflicts.
-
-## Host-Offline Behavior
-
-Host online means the daemon is running and connected. If the host is offline:
-
-- browser edit links must not commit writes;
-- local mirror joins must not create files or start watchers before validating access;
-- agents must not bypass the relay with hosted content mutation APIs;
-- existing local files must remain unchanged unless the user explicitly resolves a pending join/conflict.
 
 ## Future Distribution
 
-Homebrew, signed standalone packaging, auto-update behavior, and a menubar daemon manager are future Plan 04B surfaces. They can be designed after Plan 04A proves the alpha CLI and hosted relay path.
+Future production distribution should focus on:
+
+- Signed and notarized MarkLab.app.
+- A normal installer or DMG.
+- Optional Homebrew cask if it improves pilot distribution.
+- Hosted login/workspace onboarding.
+- Server-backed access-link listing so the app can revoke all active grants after relaunch.
+- Native hosted Versions UI.
+
+Do not revive the old daemon as the normal distribution path.

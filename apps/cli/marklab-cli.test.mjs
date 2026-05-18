@@ -7,7 +7,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildLocalUrls, chooseLocalPorts, choosePort, parseCliArgs, pickJoinDirectory, safeRelayJoinFilename } from './marklab.mjs';
+import {
+  buildLocalUrls,
+  buildNativeJoinDeepLink,
+  chooseLocalPorts,
+  choosePort,
+  legacyCliEnabled,
+  parseCliArgs,
+  parseHostedCollabLink,
+  pickJoinDirectory,
+  safeRelayJoinFilename,
+} from './marklab.mjs';
 import { createDaemonEntry, writeDaemonRegistry } from './daemon-supervisor.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -113,7 +123,7 @@ async function startNativeOwnedDaemonServer(expectedToken) {
 function runCli(args, env, timeoutMs = 90000) {
   const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, MARKLAB_ENABLE_LEGACY_CLI: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -145,7 +155,7 @@ function runCli(args, env, timeoutMs = 90000) {
 function runCliUntilOutput(args, env, pattern, timeoutMs = 90000) {
   const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, MARKLAB_ENABLE_LEGACY_CLI: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -195,6 +205,59 @@ function expectCliOk(result) {
 }
 
 describe('marklab CLI', () => {
+  it('keeps legacy local-daemon commands disabled unless explicitly opted in', async () => {
+    expect(legacyCliEnabled({})).toBe(false);
+    expect(legacyCliEnabled({ MARKLAB_ENABLE_LEGACY_CLI: '1' })).toBe(true);
+
+    const result = await runCli(['status', '--json'], { MARKLAB_ENABLE_LEGACY_CLI: '0' }, 30000);
+    expect(result.code).toBe(8);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'legacy_cli_disabled',
+    });
+  });
+
+  it('opens hosted collab edit links in MarkLab.app without enabling the legacy daemon CLI', async () => {
+    const editLink = 'https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access_edit&mode=edit';
+
+    expect(parseHostedCollabLink(editLink)).toMatchObject({
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      token: 'ml_access_edit',
+      mode: 'edit',
+    });
+    expect(buildNativeJoinDeepLink(editLink)).toBe(
+      'marklab://join?url=https%3A%2F%2Fapp.example.test%2Fcollab%3FdocId%3Ddoc_1%26branchId%3Dbranch_1%26token%3Dml_access_edit%26mode%3Dedit',
+    );
+
+    const result = await runCli(['join', editLink, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+    expectCliOk(result);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      link: editLink,
+      nativeJoinUrl: buildNativeJoinDeepLink(editLink),
+      opened: false,
+    });
+  });
+
+  it('keeps hosted view links browser-only instead of routing them into local app join', async () => {
+    const viewLink = 'https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access_view&mode=view';
+    const result = await runCli(['join', viewLink, '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'invalid_target',
+      message: 'View links stay browser-only. Ask for an edit link to join in MarkLab.app.',
+    });
+  });
+
   it('parses foreground, background, status, and stop commands', () => {
     expect(parseCliArgs(['open', 'README.md'])).toEqual({
       command: 'open',
@@ -241,6 +304,7 @@ describe('marklab CLI', () => {
       cancel: false,
       background: false,
       pickDir: false,
+      json: false,
     });
     expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir', '--background'])).toEqual({
       command: 'join',
@@ -254,6 +318,7 @@ describe('marklab CLI', () => {
       cancel: false,
       background: true,
       pickDir: false,
+      json: false,
     });
     expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--pick-dir', '--background'])).toEqual({
       command: 'join',
@@ -267,6 +332,7 @@ describe('marklab CLI', () => {
       cancel: false,
       background: true,
       pickDir: true,
+      json: false,
     });
     expect(parseCliArgs(['share-state', 'README.md', '--json'])).toEqual({
       command: 'share-state',

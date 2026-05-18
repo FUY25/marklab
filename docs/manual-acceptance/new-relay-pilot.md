@@ -1,0 +1,174 @@
+# New Relay/Y-Sweet Pilot Runbook
+
+This runbook is for the new MarkLab app path:
+
+- Browser entry: `/collab?docId=...&branchId=...&mode=edit|view`
+- Control plane: `/api/auth/*`, `/api/workspaces/*`, `/api/docs/*`, `/api/docs/:docId/branches/:branchId/collab/session`
+- Provider: API-root Y-Sweet routes such as `/d/<providerDocId>/ws/<providerDocId>`
+- Native app: MarkLab.app embeds `/collab` with `clientKind=app` and same-origin native bearer injection
+
+It is not the old host-gated `/local#token=...` daemon route. The legacy local daemon bridge is disabled by default and only runs when `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set. The old local-daemon CLI command surface is also disabled by default and requires `MARKLAB_ENABLE_LEGACY_CLI=1` for archived compatibility testing.
+
+## Can We Use The Current Fly.io + Neon Alpha?
+
+Use Fly.io + Neon for the pilot, but redeploy the new stack first. The live `https://marklab-relay-alpha.fly.dev` deployment currently looks like the older hosted-relay alpha, not the new control-plane/Y-Sweet app:
+
+- `/healthz` reports `process`, `database`, `schema`, and `relay`, but no `provider` block.
+- `/api/auth/dev-login` and `/api/auth/session` return `404`.
+- `/collab` serves a static page, but the required new auth/control-plane routes are not deployed behind it.
+
+Before using Fly/Neon for an external pilot, the deployment must include:
+
+- Latest API build with `createAuthRoutes`, workspace routes, access grants, collab-session routes, and provider proxy routes.
+- Built `apps/collab-web/dist` mounted through `MARKLAB_COLLAB_WEB_DIST_DIR`.
+- Neon schema applied from `apps/api/src/db/schema.sql`.
+- `MARKLAB_REQUIRE_AUTH=true`.
+- A real login path, normally OIDC env vars, because `NODE_ENV=production` disables `/api/auth/dev-login`.
+- Y-Sweet process mode:
+  - `MARKLAB_YSWEET_PROVIDER_MODE=process`
+  - `MARKLAB_YSWEET_PUBLIC_URL_PREFIX=https://<fly-app>.fly.dev`
+  - `MARKLAB_YSWEET_STORE_PATH=/data/ysweet`
+  - `MARKLAB_YSWEET_AUTH=<private key from y-sweet gen-auth>`
+  - `MARKLAB_YSWEET_SERVER_TOKEN=<server token from y-sweet gen-auth>`
+- A Fly volume mounted at `/data/ysweet`.
+- `/healthz` must return `ok: true` and include `provider.ready: true` plus `provider.storeReady: true`.
+
+## Local Pilot Setup
+
+Use this for same-machine manual acceptance before production redeploy.
+
+1. Create or choose a local/Postgres database:
+
+```bash
+createdb marklab_new_relay_pilot
+psql "postgres://postgres:postgres@127.0.0.1:5432/marklab_new_relay_pilot" \
+  -v ON_ERROR_STOP=1 \
+  -f apps/api/src/db/schema.sql
+```
+
+2. Build the browser collaborator app:
+
+```bash
+npx -y pnpm@10.0.0 --filter @marklab/collab-web build
+```
+
+3. Generate Y-Sweet auth:
+
+```bash
+npx -y pnpm@10.0.0 --filter @marklab/api exec y-sweet gen-auth --json
+```
+
+4. Start the local API/control-plane/provider stack. Substitute the generated auth values:
+
+```bash
+mkdir -p .marklab-provider-data/pilot-ysweet
+
+DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/marklab_new_relay_pilot" \
+PORT=3181 \
+MARKLAB_HOST=127.0.0.1 \
+MARKLAB_REQUIRE_AUTH=true \
+MARKLAB_ENABLE_DEV_AUTH=true \
+MARKLAB_PUBLIC_WEB_URL=http://127.0.0.1:3181 \
+MARKLAB_PUBLIC_API_URL=http://127.0.0.1:3181 \
+MARKLAB_PUBLIC_RELAY_WS_URL=ws://127.0.0.1:3181/relay \
+MARKLAB_ALLOWED_ORIGINS=http://127.0.0.1:3181 \
+MARKLAB_YSWEET_PROVIDER_MODE=process \
+MARKLAB_YSWEET_SERVER_URL=http://127.0.0.1:3182 \
+MARKLAB_YSWEET_PUBLIC_URL_PREFIX=http://127.0.0.1:3181 \
+MARKLAB_YSWEET_STORE_PATH=.marklab-provider-data/pilot-ysweet \
+MARKLAB_YSWEET_AUTH="<private_key>" \
+MARKLAB_YSWEET_SERVER_TOKEN="<server_token>" \
+MARKLAB_YSWEET_PORT=3182 \
+MARKLAB_COLLAB_WEB_DIST_DIR="$PWD/apps/collab-web/dist" \
+npx -y pnpm@10.0.0 --filter @marklab/api start
+```
+
+5. Confirm readiness:
+
+```bash
+curl -fsS http://127.0.0.1:3181/healthz | jq .
+```
+
+Required local signal:
+
+```json
+{
+  "ok": true,
+  "provider": {
+    "required": true,
+    "ready": true,
+    "storeReady": true
+  }
+}
+```
+
+6. Seed a pilot workspace/document/link set:
+
+```bash
+API=http://127.0.0.1:3181
+
+SESSION=$(curl -fsS -X POST "$API/api/auth/dev-login" \
+  -H 'content-type: application/json' \
+  --data '{"email":"pilot-owner@example.com","name":"Pilot Owner"}')
+USER_TOKEN=$(printf '%s' "$SESSION" | jq -r .token)
+
+WORKSPACE=$(curl -fsS -X POST "$API/api/workspaces" \
+  -H "authorization: Bearer $USER_TOKEN" \
+  -H 'content-type: application/json' \
+  --data '{"name":"New Relay Pilot"}')
+WORKSPACE_ID=$(printf '%s' "$WORKSPACE" | jq -r .workspace.workspaceId)
+
+# Local pilot only: give this workspace enough concurrent guest edit seats for
+# browser-browser-app manual testing without stale sessions exhausting the free quota.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c "update subscriptions set plan_id = 'dev', status = 'manual', current_period_end = null where workspace_id = '$WORKSPACE_ID'::uuid"
+
+DOC=$(curl -fsS -X POST "$API/api/docs/import" \
+  -H "authorization: Bearer $USER_TOKEN" \
+  -H 'content-type: application/json' \
+  --data "$(jq -n --arg workspaceId "$WORKSPACE_ID" \
+    '{title:"pilot.md", markdown:"# New relay pilot\n\nStart here.\n", workspaceId:$workspaceId}')")
+DOC_ID=$(printf '%s' "$DOC" | jq -r .docId)
+BRANCH_ID=$(printf '%s' "$DOC" | jq -r .branchId)
+
+EDIT_GRANT=$(curl -fsS -X POST "$API/api/docs/$DOC_ID/branches/$BRANCH_ID/access-grants" \
+  -H "authorization: Bearer $USER_TOKEN" \
+  -H 'content-type: application/json' \
+  --data '{"role":"edit"}')
+VIEW_GRANT=$(curl -fsS -X POST "$API/api/docs/$DOC_ID/branches/$BRANCH_ID/access-grants" \
+  -H "authorization: Bearer $USER_TOKEN" \
+  -H 'content-type: application/json' \
+  --data '{"role":"view"}')
+
+EDIT_TOKEN=$(printf '%s' "$EDIT_GRANT" | jq -r .token)
+VIEW_TOKEN=$(printf '%s' "$VIEW_GRANT" | jq -r .token)
+
+echo "Browser edit: $API/collab?docId=$DOC_ID&branchId=$BRANCH_ID&token=$EDIT_TOKEN&mode=edit"
+echo "Browser view: $API/collab?docId=$DOC_ID&branchId=$BRANCH_ID&token=$VIEW_TOKEN&mode=view"
+echo "Native env:"
+echo "  MARKLAB_CONTROL_PLANE_API_URL=$API"
+echo "  MARKLAB_PUBLIC_WEB_URL=$API"
+echo "  MARKLAB_USER_TOKEN=$USER_TOKEN"
+echo "  MARKLAB_WORKSPACE_ID=$WORKSPACE_ID"
+```
+
+## Manual Acceptance Pass
+
+Run these against the seeded new `/collab` links:
+
+| Spec criterion | Concrete repro |
+| --- | --- |
+| Browser-browser convergence | Open the browser edit link in two tabs, type in each, verify both converge. |
+| App-browser convergence | Launch MarkLab.app with the native env above, open a local `.md`, Start Sharing, then open an edit link in browser. |
+| Guest editing while host app offline | Quit MarkLab.app, keep browser edit session open, continue editing. |
+| Host reconnect picks up guest changes | Reopen MarkLab.app with the same env and file, verify the hosted `/collab` content appears. |
+| Cursor 3-way | Browser-to-browser, app-to-browser, and browser-to-app cursor/selection. |
+| Selection anchors after inserts | Select text in one client, insert before it from another client. |
+| Cursor disappears on disconnect | Close one tab and watch the other. |
+| View link cannot write | Open browser view link, verify no editor mounts and typing does nothing. |
+| Revoked edit link unavailable within TTL | Revoke the edit grant through API/native UI and verify active edit session becomes unavailable by next provider-token refresh. |
+| Provider token refresh transparent | Wait past the refresh margin and edit again without flicker or state loss. |
+| Missing local file pauses | Delete/rename the local `.md` while MarkLab.app is open and verify projection pauses. |
+| Disk + provider both diverge | Edit in browser and edit the local file externally before native reconciliation; verify conflict UI. |
+
+Record only the remaining visual/native GUI observations manually. The old `/local#token=...` path is not part of this pilot acceptance pass.

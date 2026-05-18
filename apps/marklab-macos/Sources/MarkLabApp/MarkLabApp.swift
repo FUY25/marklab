@@ -36,6 +36,11 @@ struct MarkLabFileCommands: Commands {
       }
       .keyboardShortcut("o", modifiers: .command)
       .disabled(shellActions == nil)
+
+      Button("Open Shared Link...") {
+        shellActions?.openSharedLink()
+      }
+      .disabled(shellActions == nil)
     }
 
     CommandGroup(replacing: .saveItem) {
@@ -111,11 +116,98 @@ struct DiskIngestionBridgeResult: Equatable {
   let reason: String?
 }
 
+enum NativeManagedAccessLinkStatus: String, Equatable {
+  case active
+  case revoked
+  case expired
+
+  var label: String {
+    rawValue.capitalized
+  }
+}
+
+struct NativeManagedAccessLink: Identifiable, Equatable {
+  let grantId: String
+  let role: NativeLinkRole
+  let url: String
+  let expiresAt: String?
+  let createdAt: String?
+  var status: NativeManagedAccessLinkStatus
+
+  var id: String { grantId }
+
+  init(link: NativeHostedShareLink) {
+    grantId = link.grantId
+    role = link.role
+    url = link.url.absoluteString
+    expiresAt = link.expiresAt
+    createdAt = link.createdAt
+    status = .active
+  }
+}
+
+struct NativeCollaboratorPresence: Identifiable, Equatable {
+  let clientId: Int
+  let name: String
+  let color: String
+  let colorLight: String
+  let kind: String
+  let clientKind: String?
+
+  var id: Int { clientId }
+
+  var roleLabel: String { "Edit" }
+
+  var clientTypeLabel: String {
+    switch clientKind {
+    case "app":
+      return "App"
+    case "browser", "guest":
+      return "Browser"
+    case "agent":
+      return "Agent"
+    case "daemon":
+      return "Daemon"
+    case "api":
+      return "API"
+    default:
+      return kind == "agent" ? "Agent" : "Collaborator"
+    }
+  }
+
+  static func fromBridgePayload(_ payload: [String: Any]) -> NativeCollaboratorPresence? {
+    let rawClientId = payload["clientId"]
+    let clientId: Int?
+    if let intValue = rawClientId as? Int {
+      clientId = intValue
+    } else if let numberValue = rawClientId as? NSNumber {
+      clientId = numberValue.intValue
+    } else {
+      clientId = nil
+    }
+    guard let clientId else { return nil }
+    let name = (payload["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let color = payload["color"] as? String
+    let colorLight = payload["colorLight"] as? String
+    let kind = payload["kind"] as? String
+    return NativeCollaboratorPresence(
+      clientId: clientId,
+      name: name?.isEmpty == false ? name! : "Guest",
+      color: color?.isEmpty == false ? color! : "#2563eb",
+      colorLight: colorLight?.isEmpty == false ? colorLight! : "#dbeafe",
+      kind: kind?.isEmpty == false ? kind! : "human",
+      clientKind: payload["clientKind"] as? String
+    )
+  }
+}
+
 @MainActor
 final class MarkLabAppModel: ObservableObject {
   @Published var statusText = "Open a Markdown file to start local editing or sharing."
   @Published var latestLink: String?
   @Published var latestGrantId: String?
+  @Published var managedAccessLinks: [NativeManagedAccessLink] = []
+  @Published var activeCollaborators: [NativeCollaboratorPresence] = []
   @Published var embeddedCollabURL: URL?
   @Published var text = ""
   @Published var filePath: String?
@@ -129,6 +221,7 @@ final class MarkLabAppModel: ObservableObject {
   private let hostedShareController: NativeHostedShareController?
   private let baselineStore: NativeProjectionBaselineStore
   private let conflictStore: NativeConflictStore
+  private let sharedDocumentBindingStore: NativeSharedDocumentBindingStore
   let nativeBearerToken: String?
   private let beforeDiskIngestionReplace: (() -> Void)?
   private var nativeShareController: NativeShareController?
@@ -143,6 +236,7 @@ final class MarkLabAppModel: ObservableObject {
     hostedShareController: NativeHostedShareController? = MarkLabAppModel.makeHostedShareControllerFromEnvironment(),
     baselineStore: NativeProjectionBaselineStore = FileNativeProjectionBaselineStore.defaultStore(),
     conflictStore: NativeConflictStore = NativeConflictStore.defaultStore(),
+    sharedDocumentBindingStore: NativeSharedDocumentBindingStore = FileNativeSharedDocumentBindingStore.defaultStore(),
     nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"],
     beforeDiskIngestionReplace: (() -> Void)? = nil,
     opensSelectedFilesInNewDocumentWindow: Bool = false
@@ -150,6 +244,7 @@ final class MarkLabAppModel: ObservableObject {
     self.hostedShareController = hostedShareController
     self.baselineStore = baselineStore
     self.conflictStore = conflictStore
+    self.sharedDocumentBindingStore = sharedDocumentBindingStore
     self.nativeBearerToken = nativeBearerToken
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
@@ -164,6 +259,22 @@ final class MarkLabAppModel: ObservableObject {
 
   var actionsEnabled: Bool {
     hostedShareController != nil && document != nil && conflict == nil
+  }
+
+  var canStartSharing: Bool {
+    actionsEnabled && embeddedCollabURL == nil
+  }
+
+  var canCreateSharingLink: Bool {
+    actionsEnabled && embeddedCollabURL != nil
+  }
+
+  var canStopSharing: Bool {
+    embeddedCollabURL != nil && conflict == nil
+  }
+
+  var hasSharedDocument: Bool {
+    embeddedCollabURL != nil
   }
 
   var canResolveConflictThroughSharedEditor: Bool {
@@ -181,8 +292,11 @@ final class MarkLabAppModel: ObservableObject {
     guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
     guard components.path == "/collab" else { return url }
     var queryItems = components.queryItems ?? []
-    queryItems.removeAll { $0.name == "nativeShell" }
-    queryItems.append(URLQueryItem(name: "nativeShell", value: "markedit"))
+    if let nativeShellIndex = queryItems.firstIndex(where: { $0.name == "nativeShell" }) {
+      queryItems[nativeShellIndex] = URLQueryItem(name: "nativeShell", value: "markedit")
+    } else {
+      queryItems.append(URLQueryItem(name: "nativeShell", value: "markedit"))
+    }
     components.queryItems = queryItems
     components.percentEncodedFragment = nil
     return components.url ?? url
@@ -212,12 +326,15 @@ final class MarkLabAppModel: ObservableObject {
 
   func loadFile(_ url: URL) {
     do {
-      let opened = try LocalMarkdownDocument.open(fileURL: url, shared: false)
+      let sharedBinding = try? sharedDocumentBindingStore.loadBinding(fileURL: url)
+      let opened = try LocalMarkdownDocument.open(fileURL: url, shared: sharedBinding != nil)
       document = opened
       text = opened.text
       filePath = url.path
       latestLink = nil
       latestGrantId = nil
+      managedAccessLinks = []
+      activeCollaborators = []
       embeddedCollabURL = nil
       pendingDiskIngestion = nil
       localDaemonContext = nil
@@ -225,9 +342,16 @@ final class MarkLabAppModel: ObservableObject {
       pendingSharedMarkdown = nil
       lastProjectedMarkdown = (try? baselineStore.loadBaseline(fileURL: url))?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
-        let normalizedConflict = persistedConflict.withSharedEditorURL(Self.markEditNativeShellURL(persistedConflict.sharedEditorURL))
+        let bindingURL = sharedBinding.flatMap { Self.markEditNativeShellURL($0.appEditorURL) }
+        let normalizedConflict = persistedConflict.withSharedEditorURL(
+          Self.markEditNativeShellURL(persistedConflict.sharedEditorURL) ?? bindingURL
+        )
         embeddedCollabURL = normalizedConflict.sharedEditorURL
         setConflict(normalizedConflict, status: "Conflict: review required before syncing resumes.")
+      } else if let sharedBinding {
+        clearConflictState()
+        embeddedCollabURL = Self.markEditNativeShellURL(sharedBinding.appEditorURL)
+        statusText = "Joined shared document \(sharedBinding.docId)."
       } else {
         clearConflictState()
         statusText = "Editing \(url.lastPathComponent)."
@@ -236,6 +360,123 @@ final class MarkLabAppModel: ObservableObject {
     } catch {
       statusText = "Unable to open Markdown file."
     }
+  }
+
+  func openSharedLink() {
+    let alert = NSAlert()
+    alert.messageText = "Open Shared Link"
+    alert.informativeText = "Paste a MarkLab edit link, then choose where this shared document should live as a local Markdown file."
+    alert.addButton(withTitle: "Continue")
+    alert.addButton(withTitle: "Cancel")
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 460, height: 24))
+    field.stringValue = NSPasteboard.general.string(forType: .string) ?? ""
+    field.placeholderString = "https://.../collab?docId=...&branchId=...&token=...&mode=edit"
+    alert.accessoryView = field
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    let linkValue = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    do {
+      let link = try NativeSharedDocumentLink.parse(linkValue)
+      try promptForSharedDocumentTarget(link: link)
+    } catch {
+      statusText = Self.sharedDocumentJoinStatus(for: error)
+    }
+  }
+
+  func openSharedLink(from url: URL) {
+    do {
+      let link = try NativeSharedDocumentLink.parse(url)
+      try promptForSharedDocumentTarget(link: link)
+    } catch {
+      statusText = Self.sharedDocumentJoinStatus(for: error)
+    }
+  }
+
+  private func promptForSharedDocumentTarget(link: NativeSharedDocumentLink) throws {
+    guard link.mode == .edit else {
+      throw NativeSharedDocumentLinkError.localJoinRequiresEditLink
+    }
+    let panel = NSOpenPanel()
+    panel.title = "Choose Folder For Shared Markdown File"
+    panel.message = "MarkLab will create or reuse \(link.localFilename) in the selected folder."
+    panel.prompt = "Join"
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.canCreateDirectories = true
+    guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+    let targetURL = folderURL.appending(path: link.localFilename, directoryHint: .notDirectory)
+    try joinSharedDocument(link: link, localFileURL: targetURL)
+  }
+
+  func joinSharedDocument(linkString: String, localFileURL: URL) throws {
+    try joinSharedDocument(link: NativeSharedDocumentLink.parse(linkString), localFileURL: localFileURL)
+  }
+
+  func joinSharedDocument(link: NativeSharedDocumentLink, localFileURL: URL) throws {
+    guard link.mode == .edit else {
+      throw NativeSharedDocumentLinkError.localJoinRequiresEditLink
+    }
+    let existingBinding = try? sharedDocumentBindingStore.loadBinding(fileURL: localFileURL)
+    if existingBinding?.matches(link) != true && Self.localFileHasUserContent(localFileURL) {
+      throw NativeSharedDocumentLinkError.localFileNotEmpty
+    }
+    try FileManager.default.createDirectory(at: localFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if !FileManager.default.fileExists(atPath: localFileURL.path) {
+      try Data().write(to: localFileURL, options: [.atomic])
+    }
+    let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: localFileURL)
+    let appEditorURL = Self.markEditNativeShellURL(link.appEditorURL(localDocId: localDocId)) ?? link.appEditorURL(localDocId: localDocId)
+    let baselineMarkdown = (try? String(contentsOf: localFileURL, encoding: .utf8)) ?? ""
+    try sharedDocumentBindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: localFileURL,
+        link: link,
+        appEditorURL: appEditorURL,
+        baselineMarkdown: baselineMarkdown
+      ),
+      fileURL: localFileURL
+    )
+    try baselineStore.saveBaseline(
+      NativeProjectionBaselineRecord(
+        markdown: LocalMarkdownDocument.normalizeForSharedSave(baselineMarkdown),
+        providerStateFingerprint: NativeProjectionBaselineRecord.providerYTextFingerprint(
+          LocalMarkdownDocument.normalizeForSharedSave(baselineMarkdown)
+        )
+      ),
+      fileURL: localFileURL
+    )
+    loadFile(localFileURL)
+    embeddedCollabURL = appEditorURL
+    latestLink = link.originalURL.absoluteString
+    latestGrantId = nil
+    managedAccessLinks = []
+    activeCollaborators = []
+    statusText = "Joined shared document \(link.docId). Waiting for shared content."
+  }
+
+  static func sharedDocumentJoinStatus(for error: Error) -> String {
+    switch error {
+    case NativeSharedDocumentLinkError.localJoinRequiresEditLink:
+      return "Open an edit link in MarkLab.app. View links stay browser-only."
+    case NativeSharedDocumentLinkError.localFileNotEmpty:
+      return "Choose an empty file or reopen the existing bound shared file."
+    case NativeSharedDocumentLinkError.unsupportedURL:
+      return "Open a MarkLab /collab edit link."
+    case NativeSharedDocumentLinkError.missingDocId:
+      return "Shared link is missing docId."
+    case NativeSharedDocumentLinkError.missingBranchId:
+      return "Shared link is missing branchId."
+    case NativeSharedDocumentLinkError.invalidMode:
+      return "Shared link has an invalid mode."
+    default:
+      return "Unable to open shared link."
+    }
+  }
+
+  private static func localFileHasUserContent(_ url: URL) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path) else { return false }
+    guard let data = try? Data(contentsOf: url) else { return false }
+    return !data.isEmpty
   }
 
   func saveFile() throws {
@@ -275,6 +516,8 @@ final class MarkLabAppModel: ObservableObject {
         let shared = try await hostedShareController.startSharing(fileURL: fileURL)
         latestLink = nil
         latestGrantId = nil
+        managedAccessLinks = []
+        activeCollaborators = []
         embeddedCollabURL = try hostedShareController.appEditorURL()
         let sharedMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
         try updateProjectionBaseline(sharedMarkdown, fileURL: fileURL)
@@ -297,18 +540,102 @@ final class MarkLabAppModel: ObservableObject {
         let link = try await hostedShareController.createLink(role: role)
         latestLink = link.url.absoluteString
         latestGrantId = link.grantId
-        statusText = "\(role.rawValue.capitalized) link created."
+        upsertManagedAccessLink(NativeManagedAccessLink(link: link))
+        copyLinkToPasteboard(link.url.absoluteString)
+        statusText = Self.linkCopiedStatusText(role: role)
       } catch {
         statusText = "Unable to create \(role.rawValue) link."
       }
     }
   }
 
+  func stopSharing() {
+    Task {
+      await stopSharingAndReturnToLocalEditing()
+    }
+  }
+
+  func stopSharingAndReturnToLocalEditing() async {
+    guard hasSharedDocument else { return }
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before stopping sharing."
+      return
+    }
+
+    let activeLinks = managedAccessLinks.filter { $0.status == .active }
+    let fileURL = document?.fileURL
+    do {
+      try flushPendingSharedProjection()
+      guard conflict == nil else {
+        statusText = "Resolve the conflict before stopping sharing."
+        return
+      }
+    } catch {
+      statusText = "Unable to save shared changes before stopping sharing."
+      return
+    }
+
+    var revokeFailures = 0
+    if let hostedShareController {
+      for link in activeLinks {
+        do {
+          try await hostedShareController.revokeLink(grantId: link.grantId)
+        } catch {
+          revokeFailures += 1
+        }
+      }
+    }
+
+    projectionTask?.cancel()
+    projectionTask = nil
+    pendingSharedMarkdown = nil
+    pendingDiskIngestion = nil
+    embeddedCollabURL = nil
+    latestLink = nil
+    latestGrantId = nil
+    managedAccessLinks = []
+    activeCollaborators = []
+    localDaemonContext = nil
+    nativeShareController = nil
+    lastProjectedMarkdown = nil
+
+    if let fileURL {
+      try? sharedDocumentBindingStore.clearBinding(fileURL: fileURL)
+      try? baselineStore.clearBaseline(fileURL: fileURL)
+      if let localDocument = try? LocalMarkdownDocument.open(fileURL: fileURL, shared: false) {
+        document = localDocument
+        text = localDocument.text
+        filePath = fileURL.path
+      }
+      let filename = fileURL.lastPathComponent
+      statusText = revokeFailures == 0
+        ? "Stopped sharing \(filename)."
+        : "Stopped sharing \(filename), but some links could not be revoked."
+    } else {
+      statusText = revokeFailures == 0
+        ? "Stopped sharing."
+        : "Stopped sharing, but some links could not be revoked."
+    }
+  }
+
   func copyLatestLink() {
     guard let latestLink else { return }
+    copyLinkToPasteboard(latestLink)
+    statusText = "Link copied to clipboard."
+  }
+
+  func copyAccessLink(_ link: NativeManagedAccessLink) {
+    copyLinkToPasteboard(link.url)
+    statusText = "Link copied to clipboard."
+  }
+
+  static func linkCopiedStatusText(role: NativeLinkRole) -> String {
+    "\(role.rawValue.capitalized) link copied to clipboard."
+  }
+
+  private func copyLinkToPasteboard(_ link: String) {
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(latestLink, forType: .string)
-    statusText = "Browser link copied."
+    NSPasteboard.general.setString(link, forType: .string)
   }
 
   func revokeLatestLink() {
@@ -316,6 +643,7 @@ final class MarkLabAppModel: ObservableObject {
     Task {
       do {
         try await hostedShareController.revokeLink(grantId: latestGrantId)
+        self.removeManagedAccessLink(grantId: latestGrantId)
         self.latestGrantId = nil
         self.latestLink = nil
         statusText = "Latest link revoked."
@@ -323,6 +651,32 @@ final class MarkLabAppModel: ObservableObject {
         statusText = "Unable to revoke latest link."
       }
     }
+  }
+
+  func revokeAccessLink(_ link: NativeManagedAccessLink) {
+    guard let hostedShareController else { return }
+    Task {
+      do {
+        try await hostedShareController.revokeLink(grantId: link.grantId)
+        removeManagedAccessLink(grantId: link.grantId)
+        if latestGrantId == link.grantId {
+          latestGrantId = nil
+          latestLink = nil
+        }
+        statusText = "\(link.role.rawValue.capitalized) link revoked."
+      } catch {
+        statusText = "Unable to revoke \(link.role.rawValue) link."
+      }
+    }
+  }
+
+  private func upsertManagedAccessLink(_ link: NativeManagedAccessLink) {
+    managedAccessLinks.removeAll { $0.grantId == link.grantId }
+    managedAccessLinks.insert(link, at: 0)
+  }
+
+  private func removeManagedAccessLink(grantId: String) {
+    managedAccessLinks.removeAll { $0.grantId == grantId }
   }
 
   func restoreLatestVersion() {
@@ -349,6 +703,13 @@ final class MarkLabAppModel: ObservableObject {
 
   func projectSharedMarkdownFromWebView(_ markdown: String) {
     receiveSharedMarkdownSnapshot(markdown)
+  }
+
+  func receiveActiveCollaborators(_ collaborators: [NativeCollaboratorPresence]) {
+    activeCollaborators = collaborators.sorted { left, right in
+      if left.name == right.name { return left.clientId < right.clientId }
+      return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+    }
   }
 
   func receiveSharedMarkdownSnapshot(_ markdown: String) {
@@ -621,7 +982,7 @@ final class MarkLabAppModel: ObservableObject {
 
   private func ensureCLILocalDaemonBoundary(fileURL: URL) {
     let environment = ProcessInfo.processInfo.environment
-    guard environment["MARKLAB_APP_SKIP_LOCAL_DAEMON"] != "1" else { return }
+    guard Self.localDaemonBoundaryEnabled(environment: environment) else { return }
     let command = environment["MARKLAB_CLI_COMMAND"]?.trimmingCharacters(in: .whitespacesAndNewlines)
     let cliCommand = command?.isEmpty == false ? command! : "marklab"
     let registryURL = MarkLabAppModel.daemonRegistryURL(environment: environment)
@@ -639,6 +1000,11 @@ final class MarkLabAppModel: ObservableObject {
         // The hosted collaboration path is still usable if the optional local daemon bridge is unavailable.
       }
     }
+  }
+
+  static func localDaemonBoundaryEnabled(environment: [String: String]) -> Bool {
+    if environment["MARKLAB_APP_SKIP_LOCAL_DAEMON"] == "1" { return false }
+    return environment["MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY"] == "1"
   }
 
   private func setConflict(_ nextConflict: MarkLabConflict, status: String) {
@@ -781,6 +1147,9 @@ struct MarkLabRootView: View {
 
   var body: some View {
     MarkEditDocumentShellView(model: model)
+      .onOpenURL { url in
+        model.openSharedLink(from: url)
+      }
       .onAppear {
         guard !didLoadLaunchFile, let launchFileURL else { return }
         didLoadLaunchFile = true
@@ -800,12 +1169,16 @@ struct HostedCollabWebView: NSViewRepresentable {
   let command: MarkEditLocalEditorCommand?
   let isEditable: Bool
   let onMarkdownSnapshot: (String) -> Void
+  let onSelectionStatus: (String) -> Void
+  let onCollaboratorsChange: ([NativeCollaboratorPresence]) -> Void
   let onDiskIngestionResult: (DiskIngestionBridgeResult) -> Void
 
   func makeCoordinator() -> Coordinator {
     Coordinator(
       expectedURL: url,
       onMarkdownSnapshot: onMarkdownSnapshot,
+      onSelectionStatus: onSelectionStatus,
+      onCollaboratorsChange: onCollaboratorsChange,
       onDiskIngestionResult: onDiskIngestionResult
     )
   }
@@ -902,6 +1275,8 @@ struct HostedCollabWebView: NSViewRepresentable {
 
   final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private let onMarkdownSnapshot: (String) -> Void
+    private let onSelectionStatus: (String) -> Void
+    private let onCollaboratorsChange: ([NativeCollaboratorPresence]) -> Void
     private let onDiskIngestionResult: (DiskIngestionBridgeResult) -> Void
     var expectedURL: URL
     var expectedOrigin: NativeHostedWebViewOrigin
@@ -918,11 +1293,15 @@ struct HostedCollabWebView: NSViewRepresentable {
     init(
       expectedURL: URL,
       onMarkdownSnapshot: @escaping (String) -> Void,
+      onSelectionStatus: @escaping (String) -> Void,
+      onCollaboratorsChange: @escaping ([NativeCollaboratorPresence]) -> Void,
       onDiskIngestionResult: @escaping (DiskIngestionBridgeResult) -> Void
     ) {
       self.expectedURL = expectedURL
       self.expectedOrigin = NativeHostedWebViewOrigin(url: expectedURL)
       self.onMarkdownSnapshot = onMarkdownSnapshot
+      self.onSelectionStatus = onSelectionStatus
+      self.onCollaboratorsChange = onCollaboratorsChange
       self.onDiskIngestionResult = onDiskIngestionResult
     }
 
@@ -939,14 +1318,18 @@ struct HostedCollabWebView: NSViewRepresentable {
       else {
         return
       }
-      guard
-        let body = message.body as? [String: Any],
-        body["type"] as? String == "markdown-snapshot",
-        let markdown = body["markdown"] as? String
-      else {
+      guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+      if type == "markdown-snapshot", let markdown = body["markdown"] as? String {
+        onMarkdownSnapshot(markdown)
         return
       }
-      onMarkdownSnapshot(markdown)
+      if type == "selection-change", let status = body["status"] as? String {
+        onSelectionStatus(status)
+        return
+      }
+      if type == "collaborators-change", let rawCollaborators = body["collaborators"] as? [[String: Any]] {
+        onCollaboratorsChange(rawCollaborators.compactMap(NativeCollaboratorPresence.fromBridgePayload))
+      }
     }
 
     func webView(

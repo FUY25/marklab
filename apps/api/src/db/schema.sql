@@ -271,7 +271,7 @@ create table if not exists provider_token_issuances (
   actor_type text not null default 'user' check (actor_type in ('user', 'agent')),
   actor_id text,
   actor_grant_id text,
-  authorization text not null check (authorization in ('full', 'read-only')),
+  "authorization" text not null check ("authorization" in ('full', 'read-only')),
   valid_for_seconds integer not null,
   status text not null default 'issued' check (status in ('pending', 'issued', 'failed', 'revoked')),
   provider_error text,
@@ -313,7 +313,7 @@ begin
   ) then
     alter table provider_token_issuances
       add constraint provider_token_issuances_authorization_check
-      check (authorization in ('full', 'read-only'));
+      check ("authorization" in ('full', 'read-only'));
   end if;
 
 end
@@ -335,7 +335,7 @@ update collab_sessions s
            session_id,
            issued_at + (valid_for_seconds * interval '1 second') as expires_at
       from provider_token_issuances
-     where authorization = 'full'
+     where "authorization" = 'full'
        and status = 'issued'
      order by doc_id, branch_id, session_id, issued_at desc, id desc
   ) latest

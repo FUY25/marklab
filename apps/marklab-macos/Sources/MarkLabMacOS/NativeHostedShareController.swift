@@ -8,6 +8,7 @@ public final class NativeHostedShareController: @unchecked Sendable {
   private let client: NativeControlPlaneShareClient
   private var document: NativeHostedDocument?
   private var localDocId: String?
+  private var suggestedFilename: String?
 
   public init(client: NativeControlPlaneShareClient) {
     self.client = client
@@ -18,12 +19,17 @@ public final class NativeHostedShareController: @unchecked Sendable {
     let imported = try await client.importMarkdown(fileURL: fileURL, markdown: localDocument.markdownForSave())
     document = imported
     localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
+    suggestedFilename = fileURL.lastPathComponent
     return imported
   }
 
   public func createLink(role: NativeLinkRole) async throws -> NativeHostedShareLink {
     guard let document else { throw NativeHostedShareError.documentNotShared }
-    return try await client.createAccessGrant(document: document, role: role)
+    return try await client.createAccessGrant(
+      document: document,
+      role: role,
+      suggestedFilename: suggestedFilename
+    )
   }
 
   public func appEditorURL() throws -> URL {

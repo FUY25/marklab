@@ -1,8 +1,9 @@
 import type { ReactElement } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-const remarkPlugins = [remarkGfm];
+const remarkPlugins = [remarkGfm, remarkBreaks];
 const markdownComponents: Components = {
   a({ node: _node, href, children, ...props }) {
     const external = typeof href === 'string' && (/^https?:\/\//iu.test(href) || href.startsWith('//'));

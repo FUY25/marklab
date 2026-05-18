@@ -1,49 +1,55 @@
-# Local URL vs Relay URL
+# Local URL vs Shared URL
 
 MarkLab has two different URL concepts. They must stay separate.
 
-## Local URL
+## Local App State
 
-A local URL is printed by the local daemon:
+In the current relay/native pilot, local app state lives inside MarkLab.app and the local Markdown file. Normal users should not receive or share private localhost editor URLs.
+
+Local app state includes:
+
+- the opened `.md` file;
+- the native editor state;
+- the persisted shared-document binding;
+- pending local projection/conflict state.
+
+## Shared `/collab` URL
+
+A shared URL is the normal collaborator URL:
 
 ```text
-http://127.0.0.1:5175/local#token=...
+https://<host>/collab?docId=...&branchId=...&token=...&mode=edit
 ```
 
-It is private to the host machine.
+or:
 
-- It points at a loopback-only web server.
-- It carries daemon access in the URL fragment.
-- The browser stores that token in session storage.
-- It can read and edit the opened local Markdown file.
-- It must not be shared with collaborators.
+```text
+https://<host>/collab?docId=...&branchId=...&token=...&mode=view
+```
 
-The token is scoped to one daemon process and one opened file.
+It represents a control-plane access grant for one document branch.
 
-## Relay URL
+- Edit links can be opened in a browser or in MarkLab.app.
+- View links are browser-only.
+- The URL does not expose local files or localhost app state.
+- The token is permission, not presence. Active collaborator identity and cursor color come from connected sessions.
 
-A relay URL is the shareable collaboration URL introduced after Plan 01.
+## Native Deep Link
 
-- It is safe to send to another person when the host chooses to share.
-- It represents relay identity, permissions, and transport.
-- It does not expose the private local daemon URL.
-- It does not make the host file globally addressable by default.
+The CLI can turn a hosted edit link into a native app deep link:
 
-The relay may coordinate live transport, but the local `.md` file remains canonical for a local-first session.
+```text
+marklab://join?url=<encoded-collab-url>
+```
 
-## View Link
+MarkLab.app validates the embedded edit link before creating or mutating a local file. View links are rejected by the native join flow.
 
-A view link is browser-only.
+## Archived Local URL
 
-- The recipient can inspect the shared document in the browser.
-- It does not grant local mirror participation.
-- It does not grant access to the host's local daemon.
+The old daemon alpha used private URLs like:
 
-## Edit Link
+```text
+http://127.0.0.1:<port>/local#token=...
+```
 
-An edit link can support two collaboration modes in later plans.
-
-- Browser edit: the recipient edits in the browser through relay permissions.
-- Local mirror join: the recipient connects a local Markdown file to the shared session.
-
-Plan 01 implements neither relay link. It only makes the private local URL safe and useful for one host file.
+That path is archived compatibility behavior and is disabled by default. Do not send localhost URLs to collaborators.

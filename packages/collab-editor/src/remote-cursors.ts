@@ -26,6 +26,7 @@ export interface RemoteCursorSummary {
   color: string;
   colorLight: string;
   kind: MarkLabAwarenessUser['kind'];
+  clientKind?: MarkLabAwarenessUser['clientKind'];
 }
 
 export interface ResolvedRemoteCursorSelection extends RemoteCursorSummary {
@@ -59,6 +60,7 @@ export function summarizeRemoteCursors(states: ReadonlyMap<number, MarkLabAwaren
         color: safeAwarenessColor(user.color, '#2563eb'),
         colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
         kind: user.kind,
+        ...(user.clientKind ? { clientKind: user.clientKind } : {}),
       }];
     });
 }
@@ -78,6 +80,7 @@ export function resolveRemoteCursorSelections(
       color: safeAwarenessColor(cursor.user.color, '#2563eb'),
       colorLight: safeAwarenessColor(cursor.user.colorLight, '#dbeafe'),
       kind: cursor.user.kind,
+      ...(cursor.user.clientKind ? { clientKind: cursor.user.clientKind } : {}),
       anchor: cursor.anchor,
       head: cursor.head,
     }];
@@ -127,37 +130,46 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
   },
   '.cm-marklab-remote-caret': {
     position: 'relative',
-    display: 'inline',
+    display: 'inline-block',
+    width: '0',
+    height: '1.35em',
+    verticalAlign: 'text-bottom',
     borderLeft: '2px solid',
     borderRight: '0',
     marginLeft: '-1px',
-    marginRight: '-1px',
+    marginRight: '1px',
     boxSizing: 'border-box',
     color: '#ffffff',
-    zIndex: '2',
+    pointerEvents: 'none',
+    zIndex: '20',
   },
   '.cm-marklab-remote-caret-dot': {
     position: 'absolute',
-    top: '-0.25em',
-    left: '-0.22em',
-    width: '0.45em',
-    height: '0.45em',
+    top: '-2px',
+    left: '-4px',
+    width: '7px',
+    height: '7px',
     borderRadius: '999px',
     backgroundColor: 'inherit',
   },
   '.cm-marklab-remote-caret-label': {
     position: 'absolute',
-    top: '-1.45em',
-    left: '-2px',
-    padding: '2px 5px',
+    bottom: 'calc(100% + 3px)',
+    left: '0',
+    transform: 'translateX(-4px)',
+    padding: '2px 6px',
     borderRadius: '4px',
     backgroundColor: 'inherit',
     color: '#ffffff',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     fontSize: '11px',
-    lineHeight: '1',
+    lineHeight: '14px',
     whiteSpace: 'nowrap',
     pointerEvents: 'none',
+    maxWidth: '120px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.18)',
   },
 });
 

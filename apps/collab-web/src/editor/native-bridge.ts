@@ -1,5 +1,16 @@
 export type NativeBridgeMessage =
-  | { type: 'markdown-snapshot'; markdown: string };
+  | { type: 'markdown-snapshot'; markdown: string }
+  | { type: 'selection-change'; status: string }
+  | { type: 'collaborators-change'; collaborators: NativeCollaboratorSummary[] };
+
+export interface NativeCollaboratorSummary {
+  clientId: number;
+  name: string;
+  color: string;
+  colorLight: string;
+  kind: 'human' | 'agent';
+  clientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest' | 'api' | undefined;
+}
 
 export type NativeDiskMarkdownApplyResult =
   | { ok: true; markdown: string }
@@ -37,6 +48,20 @@ export function postNativeMarkdownSnapshot(markdown: string): boolean {
   const handler = window.webkit?.messageHandlers?.marklabNative;
   if (!handler) return false;
   handler.postMessage({ type: 'markdown-snapshot', markdown });
+  return true;
+}
+
+export function postNativeSelectionStatus(status: string): boolean {
+  const handler = window.webkit?.messageHandlers?.marklabNative;
+  if (!handler) return false;
+  handler.postMessage({ type: 'selection-change', status });
+  return true;
+}
+
+export function postNativeCollaborators(collaborators: NativeCollaboratorSummary[]): boolean {
+  const handler = window.webkit?.messageHandlers?.marklabNative;
+  if (!handler) return false;
+  handler.postMessage({ type: 'collaborators-change', collaborators });
   return true;
 }
 

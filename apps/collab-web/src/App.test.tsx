@@ -176,6 +176,11 @@ describe('App routing', () => {
       expect(window.__marklabSetNativeEditable).toBeTypeOf('function');
       expect(window.__marklabNativeApplyDiskMarkdown).toBeTypeOf('function');
     });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
+      expect(document.querySelector('.markedit-native-shell .cm-lineNumbers')).toBeTruthy();
+    });
+    expect(document.querySelector('.markedit-native-shell .preview-pane')).toBeNull();
 
     expect(window.__marklabSetNativeEditable?.(false)).toBe(true);
     expect(window.__marklabNativeApplyDiskMarkdown?.('Resolved\n', '')).toEqual({

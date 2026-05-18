@@ -1,3 +1,12 @@
+// Archived inactive Playwright spec.
+//
+// This covered the old `/local` Hocuspocus-style browser-to-browser local
+// file sync path. The current relay-backed collaboration strategy keeps
+// `/local` as the host control surface for creating relay links, but relay
+// collaborator behavior is covered by `tests/relay-collaboration.spec.ts`.
+// The `.disabled` suffix intentionally keeps this file out of Playwright
+// discovery and TypeScript test compilation.
+
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';

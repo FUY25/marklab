@@ -11,7 +11,7 @@ describe('shared awareness helpers', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, 'alpha beta gamma');
-    const user = createAwarenessUser({ sessionId: 'session_app_1', displayName: 'MarkLab.app', kind: 'human' });
+    const user = createAwarenessUser({ sessionId: 'session_app_1', displayName: 'MarkLab.app', kind: 'human', clientKind: 'app' });
     const state = createCursorAwareness(ytext, { anchor: 6, head: 10 }, user);
 
     ytext.insert(0, 'intro ');
@@ -24,6 +24,7 @@ describe('shared awareness helpers', () => {
         id: 'session_app_1',
         name: 'MarkLab.app',
         kind: 'human',
+        clientKind: 'app',
       },
     });
   });

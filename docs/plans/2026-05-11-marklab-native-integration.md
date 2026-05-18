@@ -6,7 +6,7 @@
 
 **Architecture:** MarkLab.app is the first-class local-file entry point. It opens a user-owned `.md` file, binds native CodeMirror/MarkEdit editing to `Y.Text("contents")` for shared files, projects provider changes back to disk, ingests local file watcher changes, and exposes share/manage actions through app UI and CLI.
 
-**Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, existing `apps/api` local daemon, existing `apps/cli`.
+**Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, hosted control-plane/Y-Sweet APIs, and legacy `apps/cli`/local-daemon compatibility behind explicit opt-in.
 
 ## Reference Implementations (MIT — OK to copy)
 
@@ -84,7 +84,7 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 ### Task 2: Local File Open And Save
 
 - [ ] Implement native file open for one `.md` file.
-- [ ] Reuse or call existing local daemon APIs for summary, versions, restore, and conflict status.
+- [ ] Use the hosted control-plane/Y-Sweet path by default. Legacy local daemon APIs for summary, versions, restore, and conflict status are compatibility-only and must stay disabled unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set.
 - [ ] Preserve normal local editing when a file is not shared.
 - [ ] Acceptance: opening, editing, saving, closing, and reopening a file preserves exact Markdown bytes except intentional LF normalization for shared files.
 
@@ -98,7 +98,7 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
   - show share state;
   - copy browser link.
 - [ ] On first share, require login, create/select a workspace, and pass `workspaceId` to the document create/import route so the shared document is workspace-owned and appears in workspace document lists.
-- [ ] Connect these actions to local daemon/control-plane APIs rather than directly mutating provider state.
+- [ ] Connect these actions to control-plane APIs rather than directly mutating provider state. Do not fall back to local-daemon link/share routes for the new pilot.
 - [ ] Acceptance: a user can create an edit link from MarkLab.app and join it from `apps/collab-web`.
 
 ### Task 4: Native Collaboration Editing
@@ -118,12 +118,12 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 
 ### Task 6: CLI/App Boundary
 
-- [ ] Ensure `marklab share`, `create-link`, `revoke-link`, `status`, `wait`, `conflict`, and `export` can operate when the native app is running.
-- [ ] Ensure the CLI can start or find the local daemon without stealing focus from the native app.
+- [ ] Ensure `marklab status`, `wait`, `conflict`, and `export` can operate against the native app/control-plane contract without requiring the legacy local-daemon share route.
+- [ ] Keep legacy local-daemon CLI discovery/startup behind `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` and ensure it does not steal focus from the native app when explicitly enabled.
 - [ ] Ensure native edit sessions refresh provider tokens through the same control-plane endpoint as browser edit sessions.
 - [ ] Persist and use the control-plane session refresh token returned by the edit-session route; do not attempt refresh with the original share token or with provider token internals.
 - [ ] Use the `ClientToken` returned by the control plane as the source of provider connection URLs; do not duplicate `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` or provider route construction in native code.
-- [ ] Acceptance command: `node apps/cli/marklab.mjs share README.md --json` returns a usable link while the app owns the file.
+- [ ] Acceptance command: native app Start Sharing creates control-plane `/collab` links while the opened file is owned by the app and does not start the legacy daemon unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is set.
 
 ### Task 7: Native E2E Smoke
 

@@ -1,25 +1,17 @@
 # Cursor: MarkLab Local Agent Rules
 
-MarkLab is local-file-first. The local Markdown file is the source of truth, and MarkLab syncs that file into the browser editor.
+MarkLab is local-file-first. The local Markdown file is the write surface, and MarkLab.app syncs file changes into the shared `/collab` document when sharing is active.
 
-Before editing a watched Markdown file:
+Before editing a shared file, confirm with the user that the file is the intended target.
 
-```bash
-marklab status README.md --json
-```
+During editing:
 
-Before broad edits:
+- Edit the `.md` file directly.
+- Do not call hosted document mutation endpoints.
+- Do not mutate Yjs state or Postgres rows.
+- Do not use access tokens as an agent write API.
+- Stop if MarkLab.app reports paused sync or conflict.
 
-```bash
-marklab save-version README.md --message "Before AI edit: <reason>" --json
-```
+After editing, report the changed file and let the user confirm MarkLab.app sync state.
 
-After local file edits:
-
-```bash
-marklab wait README.md --synced --timeout 10000 --json
-```
-
-If sync is paused or a conflict is open, stop editing the watched file. Use `marklab conflict <file> --json` to inspect state and report it to the user. You may draft a resolution in a separate file, but do not keep mutating the watched conflicted file.
-
-Do not use cloud document mutation endpoints for content changes. Do not mutate Yjs state or Postgres rows yourself. Use the MarkLab CLI only for process control, status, waiting, snapshots, diagnostics, and sharing.
+The old daemon CLI status/wait/version/conflict commands are archived compatibility commands and require `MARKLAB_ENABLE_LEGACY_CLI=1`.

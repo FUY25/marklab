@@ -6,6 +6,8 @@
   "scripts": {
     "build": "swift build",
     "build:local-editor": "esbuild editor-web/markedit-local-editor.ts --bundle --format=esm --target=es2020 --minify --outfile=Sources/MarkLabApp/Resources/MarkEditLocalEditor/local-editor.js",
+    "package:app": "node scripts/package-app.mjs",
+    "verify:package": "node scripts/verify-packaged-app.mjs ../../dist/MarkLab.app",
     "test": "swift test",
     "smoke:native-browser": "tsx smoke/native-browser-smoke.ts"
   },

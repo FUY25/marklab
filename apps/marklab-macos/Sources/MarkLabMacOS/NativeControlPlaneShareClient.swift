@@ -59,7 +59,11 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
     )
   }
 
-  public func createAccessGrant(document: NativeHostedDocument, role: NativeLinkRole) async throws -> NativeHostedShareLink {
+  public func createAccessGrant(
+    document: NativeHostedDocument,
+    role: NativeLinkRole,
+    suggestedFilename: String? = nil
+  ) async throws -> NativeHostedShareLink {
     struct Body: Encodable {
       let role: NativeLinkRole
     }
@@ -72,7 +76,7 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
     return NativeHostedShareLink(
       grantId: grant.grantId,
       role: grant.role,
-      url: browserURL(document: document, grant: grant),
+      url: browserURL(document: document, grant: grant, suggestedFilename: suggestedFilename),
       expiresAt: grant.expiresAt,
       createdAt: grant.createdAt
     )
@@ -103,14 +107,22 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
     _ = try decodeNativeJSON(EmptyNativeResponse.self, from: try await transport.send(request))
   }
 
-  private func browserURL(document: NativeHostedDocument, grant: NativeHostedAccessGrant) -> URL {
+  private func browserURL(
+    document: NativeHostedDocument,
+    grant: NativeHostedAccessGrant,
+    suggestedFilename: String?
+  ) -> URL {
     var components = URLComponents(url: appendPath("/collab", to: webBaseURL), resolvingAgainstBaseURL: false)!
-    components.queryItems = [
+    var queryItems = [
       URLQueryItem(name: "docId", value: document.docId),
       URLQueryItem(name: "branchId", value: document.branchId),
       URLQueryItem(name: "token", value: grant.token),
       URLQueryItem(name: "mode", value: grant.role.rawValue),
     ]
+    if let filename = NativeSharedDocumentLink.safeMarkdownFilename(suggestedFilename, fallback: nil) {
+      queryItems.append(URLQueryItem(name: "filename", value: filename))
+    }
+    components.queryItems = queryItems
     return components.url!
   }
 

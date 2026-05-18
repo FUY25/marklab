@@ -30,7 +30,11 @@ public struct LocalMarkdownDocument: Equatable {
 
   public func markdownForSave() -> String {
     guard shared else { return text }
-    return text
+    return Self.normalizeForSharedSave(text)
+  }
+
+  public static func normalizeForSharedSave(_ markdown: String) -> String {
+    markdown
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
   }

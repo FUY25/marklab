@@ -24,6 +24,8 @@ This plan has no relevant prior art in `Learning resources/`. Stripe integration
 
 For a private free alpha, this plan can run in manual/free mode while preserving the same tables and enforcement paths. For paid public launch, enable payment provider integration and webhook processing before production launch.
 
+Current pilot decision: defer Stripe/paid billing for the private free alpha. Do not block Plan 6 native/package/manual acceptance work on this plan. The launch gate should still smoke deterministic manual/free limits for workspace-owned documents, including browser and native collaborator sessions.
+
 ## Provider Runtime Facts From Plan 1B
 
 - Billing and quota checks remain entirely in the control plane before Y-Sweet token issuance. The API-supervised Y-Sweet provider only validates native document tokens; it has no billing or seat-limit knowledge.

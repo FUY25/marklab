@@ -13,7 +13,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 function runCli(args, env) {
   const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, MARKLAB_ENABLE_LEGACY_CLI: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

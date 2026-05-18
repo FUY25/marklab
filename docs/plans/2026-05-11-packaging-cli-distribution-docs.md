@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Package MarkLab so alpha users and AI agents can install it, share local files, join links, diagnose failures, and follow clear docs without reading source code.
+**Goal:** Package MarkLab so alpha users and AI agents can install it, share local files, join the same edit links in browser or MarkLab.app, diagnose failures, and follow clear docs without reading source code.
 
 **Architecture:** CLI and native app are the local control surface; hosted provider/control plane are defaults for normal users. The CLI controls software actions and never becomes a hosted content write API.
 
@@ -27,11 +27,12 @@ This plan is mostly MarkLab-original packaging and CLI work. The one reference o
 
 ## Scope
 
-This plan does not build billing or production deploy. It makes local installation, CLI operation, and user docs reliable enough for alpha smoke testing.
+This plan does not build billing or the full production launch gate. It does include a Fly.io + Neon pilot connection target for packaged-client smoke testing, because app-to-app collaboration across machines needs a hosted control plane/provider. Production deploy hardening, rollback, launch observability, and final operator runbooks stay in `2026-05-11-production-deploy-alpha-launch.md`.
 
 ## Provider Runtime Facts From Plan 1B
 
 - Packaged hosted defaults should point users at the hosted API/web origin. Edit clients receive provider URLs from Y-Sweet `ClientToken`s; the CLI should not expose or require a separate provider websocket URL for normal users.
+- Packaged pilot builds must support two non-legacy runtime targets: local dev (`127.0.0.1` API/provider) and hosted staging/alpha (Fly.io API/web backed by Neon Postgres). Switching targets must be explicit in config/doctor output so a user can tell whether they are testing local or hosted relay.
 - The hosted API supervises the upstream Y-Sweet child process and proxies public provider document routes at the API root. `marklab doctor --json` should report provider readiness from `/healthz.provider`, not by probing the child provider port directly.
 - Troubleshooting docs should mention `provider.ready`, `provider.storeReady`, provider schema readiness, and the root-mounted `/d/<providerDocId>/...` route shape when diagnosing provider failures.
 
@@ -55,8 +56,11 @@ This plan does not build billing or production deploy. It makes local installati
 - The native app now uses a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local Markdown editor surface, toolbar/status/inspector collaboration layer, and document-scoped conflict panel. Packaging smoke must open the packaged app into that shell; a generic SwiftUI prototype form is no longer the expected UI.
 - The native app embeds the hosted `/collab` editor in a WKWebView for shared editing. Later packaging may bundle a richer/native Yjs runtime, but alpha packaging must include the hosted-collab bridge behavior and its same-origin API authorization injection.
 - The packaged runtime must include workspace links for `packages/shared`, `packages/markdown`, and `packages/collab-editor`. `prepare-package.mjs` already copies `packages/collab-editor`; keep package smokes covering this so clean installs do not fail on `@marklab/collab-editor`.
-- MarkLab.app starts or reuses the local daemon with `marklab share --json --daemon-only`, then reads `/api/local/app-context`. Packaging must preserve that daemon-only boundary and must not create hidden relay grants just to bootstrap app local state.
+- The legacy local daemon boundary (`marklab share --json --daemon-only` plus `/api/local/app-context`) is compatibility-only and disabled by default for the new relay/Y-Sweet pilot. Packaging must not auto-start it unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is set, and it must not create hidden relay grants just to bootstrap app local state.
+- The old `marklab` CLI local-daemon commands are inactive by default and require `MARKLAB_ENABLE_LEGACY_CLI=1` for archived compatibility testing until Task 2 replaces them with the new hosted/control-plane command surface.
 - Native app/browser smoke command is `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. The passing smoke returns shell/runtime gates, app-kind/browser convergence, disk projection, and bidirectional cursor-awareness gates. It does not prove a signed `.app` bundle, notarization, or GUI WKWebView automation; Task 4 and Task 6 must add those packaging-specific checks.
+- True app-to-app/local-to-local collaboration is not proven by app-browser smoke. It requires a native join/open-shared-document flow: the same edit link that opens `/collab?...mode=edit` in a browser must be accepted by MarkLab.app, bound to a user-selected local `.md` file, persisted, and reopened without the legacy local daemon.
+- Agents do not appear as collaborators. Agent edits happen by editing the local `.md`; the active MarkLab.app session ingests those disk changes into the shared document.
 
 ## File Structure
 
@@ -66,6 +70,9 @@ This plan does not build billing or production deploy. It makes local installati
 - Modify `apps/cli/prepare-package.mjs`
 - Modify `apps/cli/*.test.mjs`
 - Modify native packaging files from `2026-05-11-marklab-native-integration.md`.
+- Modify native share/join UI in `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/`.
+- Modify native app model/link persistence in `apps/marklab-macos/Sources/MarkLabApp/MarkLabApp.swift` or a new focused native persistence module.
+- Modify native URL/deep-link handling files if the package registers a `marklab://` join/open URL scheme.
 - Modify `README.md`
 - Modify `docs/product/marklab-alpha-user-guide.md`
 - Modify `docs/production/local-daemon-distribution.md`
@@ -76,24 +83,23 @@ This plan does not build billing or production deploy. It makes local installati
 
 ### Task 1: Hosted Defaults
 
-- [ ] Ensure packaged CLI defaults to hosted alpha API/provider URLs.
-- [ ] Ensure local dev can override URLs with env vars.
-- [ ] Ensure `marklab doctor` prints which runtime source and URLs are active.
-- [ ] Ensure `marklab doctor --json` includes `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready` so provider process, provider storage, and provider schema failures are distinguishable.
-- [ ] Acceptance command: `node apps/cli/marklab.mjs doctor --json` shows hosted/default/local override state.
+- [x] Ensure packaged CLI defaults to hosted alpha API/provider URLs for archived relay compatibility.
+- [x] Ensure local dev can override URLs with env vars for archived relay compatibility.
+- [ ] Replace archived daemon `doctor` with a new relay/native doctor that reports app install state, API/web origin, `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready`.
+- [ ] Acceptance command: new `marklab doctor --json` shows hosted/default/local override state without `MARKLAB_ENABLE_LEGACY_CLI=1`.
 
 ### Task 2: CLI Command Coverage
 
 V1 (alpha launch must-have):
 
-- [ ] `open` — open a local Markdown file in MarkLab.app or a sensible default.
-- [ ] `share` — start sharing a local file (creates document + edit link).
-- [ ] `join` — open a share link (browser fallback if app not installed).
-- [ ] `status` — show current sync/conflict state for a file.
-- [ ] `wait --synced` — block until sync is complete; used by agents.
-- [ ] `conflict` — read current conflict state as JSON for agents.
-- [ ] `doctor` — diagnose install, URLs, daemon connectivity.
-- [ ] `stop` — stop the local daemon cleanly.
+- [x] `join` — open the same `/collab?...mode=edit` share link in MarkLab.app without enabling the archived daemon path.
+- [x] `stop` — stop only explicitly enabled compatibility daemons; it must not imply that the new relay path requires a daemon.
+- [ ] `open` — open a local Markdown file in MarkLab.app or a sensible default without the archived daemon path.
+- [ ] `share` — start sharing a local file through MarkLab.app/control plane, not by creating an archived local-daemon relay link.
+- [ ] `status` — show current native relay sync/conflict state for a file.
+- [ ] `wait --synced` — block until native relay sync is complete; used by agents.
+- [ ] `conflict` — read current native relay conflict state as JSON for agents.
+- [ ] `doctor` — diagnose install, URLs, app URL scheme, and provider readiness without requiring daemon opt-in.
 
 Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
 
@@ -105,60 +111,76 @@ Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
 
 The CLI is not the home for the agent edit `begin/end` protocol described in the spec; that protocol stays out of v1 (see Task 3).
 
-- [ ] Add tests for hosted-default config and local override config.
-- [ ] Add tests proving `share` creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode.
-- [ ] Add tests proving `join` preserves `/collab?...` edit/view URLs and does not rewrite them back to legacy hosted relay routes.
-- [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli`.
+- [x] Add tests proving `join` preserves `/collab?...` edit URLs and does not rewrite them back to legacy hosted relay routes.
+- [x] Add tests proving `join` never falls back to the archived local-daemon route unless `MARKLAB_ENABLE_LEGACY_CLI=1` is explicitly set.
+- [ ] Add tests for new native relay `open/share/status/wait/conflict/doctor` once those commands are rebound.
+- [ ] Add tests proving new native relay `share` creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode.
+- [x] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli` covers the current join/deactivation slice.
 
 ### Task 3: AI Agent Workflow
 
-- [ ] Update `docs/agent/marklab-agent-guide.md`.
-- [ ] Document that AI edits local `.md` files directly. The file watcher ingests changes into shared `Y.Text` automatically when a file is part of an active room; AI does not need a special API.
-- [ ] Document `wait --synced`, `status`, and `conflict` as the v1 control surface for agents. `save-version` is post-alpha.
-- [ ] Document the **deferred** explicit agent edit protocol (`marklab agent edit begin/end`) as post-v1: per `docs/appdesigndoc.md`, v1 relies on file-watcher ingestion alone. If unattended AI rewrites of a shared file produce noisy conflicts, the begin/end protocol gets its own plan; do not ship it in v1.
-- [ ] Add a one-line install/share command for alpha users.
-- [ ] Acceptance: an agent can follow the guide without needing provider internals and without the begin/end protocol.
+- [x] Update `docs/agent/marklab-agent-guide.md`.
+- [x] Document that AI edits local `.md` files directly. The active MarkLab.app file watcher ingests changes into shared state automatically when a file is part of an active room; AI does not need a special API.
+- [x] Document that `wait --synced`, `status`, and `conflict` are deferred until they are rebound to the new native relay session model.
+- [x] Document the **deferred** explicit agent edit protocol (`marklab agent edit begin/end`) as post-v1 by omission from the shipped pilot flow: v1 relies on file-watcher ingestion alone.
+- [x] Add a one-line edit-link open command for alpha app collaborators.
+- [x] Acceptance: an agent can follow the guide without needing provider internals and without the begin/end protocol.
 
 ### Task 4: Native Packaging
 
-- [ ] Package MarkLab.app using the native packaging path selected in `2026-05-11-marklab-native-integration.md`.
-- [ ] Ensure installed app can start local daemon or discover existing daemon.
-- [ ] Ensure packaged app bootstrap uses `marklab share --json --daemon-only` for local daemon discovery/startup and does not mint a hidden local relay edit link.
-- [ ] Ensure packaged CLI/runtime includes `packages/collab-editor` so the installed collab-web and native smoke do not depend on repo-relative source paths.
-- [ ] Ensure normal users do not need Terminal after install.
-- [ ] Acceptance: clean install on a test macOS user profile can open, edit, share, and quit.
+- [x] Package MarkLab.app using the native packaging path selected in `2026-05-11-marklab-native-integration.md`.
+- [x] Ensure installed app can run the hosted `/collab` control-plane/Y-Sweet path without starting a local daemon by default.
+- [x] Register or document a native open-link path for edit links, `marklab://join?url=<encoded-collab-url>`.
+- [x] Ensure packaged app bootstrap only uses `marklab share --json --daemon-only` when `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set and does not mint a hidden local relay edit link.
+- [x] Ensure packaged CLI/runtime includes `packages/collab-editor` so the installed collab-web and native smoke do not depend on repo-relative source paths.
+- [x] Ensure normal app users do not need Terminal after install for open/edit/share/join once env/session is configured.
+- [ ] Acceptance: clean install on a separate macOS user profile can open, edit, share, and quit.
+
+### Task 4A: Native App-To-App Join UX
+
+- [x] Add a native "Join Shared Document..." entry point outside the per-file pre-share inspector. A normal local file window keeps the pre-share toolbar simple: `Start Sharing` is the only collaboration action until sharing starts.
+- [x] After `Start Sharing`, expose the collaboration inspector: create edit/view links, show copied-link feedback, list active human collaborators, list active grants/links known to the app session, and allow revoking each grant. Do not show AI agents as collaborators.
+- [x] When an edit link is opened in MarkLab.app, validate the link before creating or mutating any local file.
+- [x] Let the joining user choose where to create the new local `.md` from the shared document.
+- [ ] Attach the shared document to an existing local `.md` with conflict preview when non-empty or diverged.
+- [x] Persist the binding between local file and shared document: local file path/bookmark, doc id, branch id, access/session identity, provider doc id/session URL, baseline/fingerprint, and last known app editor URL.
+- [x] Reopen restores the hosted `/collab` app session and local file projection from persisted binding without requiring the old daemon.
+- [x] Acceptance: App A opens a local file, starts sharing, creates an edit link, and the link is copied. App B opens the same edit link in MarkLab.app, chooses a local folder/path, coedits with App A, writes its own local `.md`, and reconnects after quit/reopen.
 
 ### Task 5: Distribution Docs
 
-- [ ] Update `README.md` with alpha install path and hosted-default behavior.
-- [ ] Update `docs/product/marklab-alpha-user-guide.md` with host and collaborator flows.
-- [ ] Update `docs/production/local-daemon-distribution.md` with app/CLI lifecycle.
-- [ ] Update troubleshooting for host offline, internal error, token expired, revoked link, conflict required, and sync timeout.
-- [ ] Document the hosted login/workspace requirement for `share`: normal users create or select a workspace, then the CLI creates a workspace-owned document and edit link.
-- [ ] Acceptance: docs include exact commands and no stale Plan 04A relay-only instructions.
+- [x] Update `README.md` with alpha install path and hosted-default behavior.
+- [x] Update `docs/product/marklab-alpha-user-guide.md` with host and collaborator flows.
+- [x] Update `docs/production/local-daemon-distribution.md` as archived compatibility documentation and move normal users to the new relay/native join flow.
+- [x] Update troubleshooting/runbook for host offline, internal error, token expired, revoked link, conflict required, and sync timeout.
+- [x] Document the hosted login/workspace requirement for `share`: normal users create or select a workspace, then the app creates a workspace-owned document and edit/view links.
+- [x] Document the app-to-app flow: one edit link can be opened in the browser or in MarkLab.app; MarkLab.app asks where to create the local `.md`.
+- [ ] Acceptance: stale scan still reports historical plan/archive terms; current README/product/production/agent docs are refreshed for the new relay/native path.
 
 ### Task 6: Package Smoke
 
-- [ ] Run package preparation.
-- [ ] Install packaged CLI into a temporary prefix.
-- [ ] Run install/share/join/status/wait smoke against local or staging provider.
-- [ ] Run `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser` against the packaged runtime or an equivalent clean-install fixture.
-- [ ] Acceptance: package smoke passes without relying on repo-relative source paths.
+- [x] Run package preparation.
+- [x] Install packaged CLI into a temporary prefix.
+- [ ] Run install/share/join/status/wait smoke against the local dev provider after those commands are rebound to the native relay session model.
+- [ ] Run the same package smoke against the Fly.io/Neon pilot target, using a test workspace and disposable document after redeploying the new stack.
+- [x] Run app-to-app smoke manually on the dev native runtime: App A shares a local file, App B opens the same edit link, both coedit, both local files update, and both reconnect after quit/reopen.
+- [x] Run `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser` against the dev native/browser runtime.
+- [x] Acceptance: package verify confirms the app bundle does not rely on repo-relative editor resources.
 
 ### Task 7: Verification
 
-- [ ] Run `npx -y pnpm@10.0.0 test apps/cli`.
-- [ ] Run native package smoke.
-- [ ] Run docs stale scan: `rg -n "Plan 04A|host-gated|MARKLAB_RELAY_MODE|localhost:3011" README.md docs apps/cli`.
-- [ ] Run `git diff --check`.
+- [x] Run `npx -y pnpm@10.0.0 test apps/cli`.
+- [x] Run native package smoke.
+- [x] Run docs stale scan: `rg -n "Plan 04A|host-gated|MARKLAB_RELAY_MODE|localhost:3011" README.md docs apps/cli`.
+- [x] Run `git diff --check`.
 - [ ] Commit with `git commit -m "feat: package marklab alpha cli and docs"`.
 
 ### Task 8: Downstream Plan Refresh
 
-- [ ] Review packaged URLs, CLI command behavior, native app lifecycle, and docs.
-- [ ] Update `docs/appdesigndoc.md` if packaging reveals a product workflow change.
-- [ ] Update these downstream plans:
+- [x] Review packaged URLs, CLI command behavior, native app lifecycle, and docs.
+- [x] Update `docs/appdesigndoc.md` if packaging reveals a product workflow change.
+- [x] Update these downstream plans:
   - `docs/plans/2026-05-11-billing-subscription-seats.md`
   - `docs/plans/2026-05-11-production-deploy-alpha-launch.md`
-- [ ] Run `rg -n "install|share|join|doctor|hosted default|daemon|package|alpha" docs/plans docs/appdesigndoc.md README.md`.
-- [ ] Commit plan refresh with `git commit -m "docs: refresh plans after packaging"`.
+- [x] Run `rg -n "install|share|join|doctor|hosted default|daemon|package|alpha" docs/plans docs/appdesigndoc.md README.md`.
+- [ ] Commit plan refresh with the implementation commit.

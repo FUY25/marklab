@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import { applyNativeDiskMarkdownToText, postNativeMarkdownSnapshot } from './native-bridge';
+import {
+  applyNativeDiskMarkdownToText,
+  postNativeCollaborators,
+  postNativeMarkdownSnapshot,
+  postNativeSelectionStatus,
+} from './native-bridge';
 
 describe('native webview bridge', () => {
   afterEach(() => {
@@ -18,8 +23,45 @@ describe('native webview bridge', () => {
     expect(postMessage).toHaveBeenCalledWith({ type: 'markdown-snapshot', markdown: '# Shared\n' });
   });
 
+  it('posts selection status to MarkLab.app when the WKWebView bridge exists', () => {
+    const postMessage = vi.fn();
+    window.webkit = { messageHandlers: { marklabNative: { postMessage } } };
+
+    expect(postNativeSelectionStatus('Ln 2, Col 4')).toBe(true);
+
+    expect(postMessage).toHaveBeenCalledWith({ type: 'selection-change', status: 'Ln 2, Col 4' });
+  });
+
+  it('posts collaborator summaries to MarkLab.app when remote awareness changes', () => {
+    const postMessage = vi.fn();
+    window.webkit = { messageHandlers: { marklabNative: { postMessage } } };
+
+    expect(postNativeCollaborators([{
+      clientId: 42,
+      name: 'Guest',
+      color: '#0891b2',
+      colorLight: '#cffafe',
+      kind: 'human',
+      clientKind: 'browser',
+    }])).toBe(true);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'collaborators-change',
+      collaborators: [{
+        clientId: 42,
+        name: 'Guest',
+        color: '#0891b2',
+        colorLight: '#cffafe',
+        kind: 'human',
+        clientKind: 'browser',
+      }],
+    });
+  });
+
   it('is a no-op in normal browser sessions', () => {
     expect(postNativeMarkdownSnapshot('# Browser\n')).toBe(false);
+    expect(postNativeSelectionStatus('Ln 1, Col 1')).toBe(false);
+    expect(postNativeCollaborators([])).toBe(false);
   });
 
   it('applies native disk markdown only when provider text still matches the baseline', () => {

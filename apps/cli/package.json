@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.5",
   "private": false,
   "type": "module",
-  "description": "Local-first MarkLab CLI for opening, sharing, and joining Markdown collaboration sessions.",
+  "description": "MarkLab CLI helper for hosted app joins plus archived local-daemon compatibility commands.",
   "bin": {
     "marklab": "marklab.mjs"
   },

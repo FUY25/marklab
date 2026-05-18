@@ -5,25 +5,17 @@ This project uses MarkLab as a local-first Markdown collaboration tool.
 Follow these rules when editing MarkLab-watched Markdown files:
 
 1. Edit the local `.md` file on disk. The filesystem is the content editing surface.
-2. Use `marklab status <file> --json` before edits when a file may be watched.
-3. Use `marklab save-version <file> --message "Before AI edit: <reason>" --json` before broad edits.
-4. After editing, run `marklab wait <file> --synced --timeout 10000 --json`.
-5. If `syncState` is `paused` or `hasConflict` is `true`, stop editing that watched file and report the conflict.
-6. Use `marklab conflict <file> --json` to inspect available conflict state. Do not resolve conflicts unless the user explicitly asks.
-7. You may use MarkLab CLI commands for status, waiting, versions, doctor, sharing, and link management.
-8. Do not call cloud document mutation endpoints for content changes.
-9. Do not mutate Yjs state or Postgres rows yourself.
-10. Do not add MarkLab content mutation commands; keep content writes as local file edits.
+2. Do not call hosted document mutation endpoints for content changes.
+3. Do not mutate Yjs state or Postgres rows.
+4. Do not use share/access tokens as an agent write API.
+5. If MarkLab.app reports paused sync or an open conflict, stop editing the watched file and report the state to the user.
+6. For broad edits, ask the user to create or confirm an external checkpoint such as Git or Time Machine until the native hosted Versions UI is complete.
+7. Do not list yourself as a collaborator. Agents are represented by local file edits, not presence sessions.
 
-Useful workflows:
+The current normal CLI surface only opens hosted edit links in MarkLab.app:
 
 ```bash
-marklab status README.md --json
-marklab wait README.md --synced --timeout 10000 --json
+marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
-```bash
-marklab status README.md --json
-marklab save-version README.md --message "Before AI edit: broad rewrite" --json
-marklab wait README.md --synced --timeout 10000 --json
-```
+The older `status`, `wait`, `save-version`, and `conflict` commands are archived local-daemon compatibility commands unless `MARKLAB_ENABLE_LEGACY_CLI=1` is set.

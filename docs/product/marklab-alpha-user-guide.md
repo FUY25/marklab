@@ -1,325 +1,138 @@
 # MarkLab Alpha User Guide
 
-This guide is for people trying the MarkLab hosted-relay alpha with the public npm CLI.
+This guide describes the new MarkLab relay/native pilot.
 
-Current public package:
-
-```sh
-npx -y @marklab/cli --help
-```
-
-As of this alpha, npm installs `@marklab/cli@0.1.0-alpha.5` from the `latest` tag.
+It does not describe the archived local-daemon alpha. The archived daemon commands are disabled by default and require `MARKLAB_ENABLE_LEGACY_CLI=1` only for compatibility testing.
 
 ## What MarkLab Does
 
-MarkLab lets you share and collaboratively edit a local Markdown file.
+MarkLab lets people coedit Markdown while keeping a normal local `.md` file in the workflow.
 
-The local `.md` file on the host machine is the source of truth. The hosted relay coordinates live collaboration, but it is not a document storage system. If the host daemon is offline, remote editing stops until the host opens MarkLab again.
-
-## MarkLab.app Development Alpha
-
-The native app source now lives in `apps/marklab-macos/` for development builds. It opens and saves local Markdown files in a native source-editing window. Native app share actions use the hosted control plane: they import the local Markdown into a selected workspace, create document access grants, and produce browser `/collab` edit/view links. Edit sessions identify themselves as `clientKind: "app"`, and provider-token refresh uses the control-plane session refresh token rather than share-link or provider-token internals.
-
-The native app is not part of the public npm install flow yet. For this alpha, normal users should still use the CLI commands below. Engineers can verify the native/browser collaboration path with:
-
-```sh
-npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser
-```
+- The native app opens and saves local Markdown files.
+- `Start Sharing` creates a shared relay document for that file.
+- Browser collaborators edit through `/collab`.
+- App collaborators can open the same edit link in MarkLab.app and create their own local file copy.
+- MarkLab projects shared changes back to the local file and stops for conflict review when local disk and provider state both diverge.
 
 ## Requirements
 
-Normal users need:
+Pilot users need:
 
-- Node.js `20.19` or newer, Node.js `22.12` or newer, or Node.js `24` or newer.
-- `npm` and `npx`.
-- A modern browser.
-- Internet access to install the npm package and reach the hosted relay.
+- macOS for MarkLab.app.
+- A modern browser for browser collaborators.
+- Access to the configured MarkLab API/web origin.
+- For development builds, this repository and the commands in the manual runbook.
 
-Docker, Postgres, pnpm, Git, and a specific Markdown editor are not required for normal users.
+Normal browser collaborators do not need Node, pnpm, Postgres, Docker, or Git.
 
-Check Node:
+## Host Flow In MarkLab.app
 
-```sh
-node --version
-npm --version
-```
+1. Open MarkLab.app.
+2. Open or create a Markdown file.
+3. Edit locally as usual.
+4. Click `Start Sharing`.
+5. After sharing starts, use:
+   - `Create Edit Link` for writable browser/app collaborators.
+   - `Create View Link` for read-only browser viewers.
+   - `Show Collaboration` for access links, active collaborators, and local sync state.
+6. Created links are copied to the clipboard automatically.
+7. Use `Stop Sharing` when the session should end.
 
-## Important Terms
+Before sharing, the editor stays local and MarkEdit-style. Sharing controls other than `Start Sharing` stay hidden.
 
-Local browser URL:
+After sharing starts, the persistent state is `Sharing On`. Access-link and collaboration controls appear only then.
 
-- Looks like `http://127.0.0.1:5175/local#token=...`.
-- Works only on the machine running MarkLab.
-- Contains private local daemon access.
-- Do not share it.
+## Collaboration Inspector
 
-Relay edit link:
+`Show Collaboration` has three sections.
 
-- Looks like `https://marklab-relay-alpha.fly.dev/relay/...`.
-- Can be used in the browser for editing.
-- Can also be used with `marklab join` to create a local Markdown mirror.
+Access Links:
 
-Relay view link:
+- Lists active edit/view links known to the app session.
+- Shows role, created time, and copy/revoke actions.
+- Revoked links disappear from the active list.
 
-- Browser-only.
-- Read-only.
-- Cannot create a local mirror with `marklab join`.
+Active Collaborators:
 
-## Host Setup
+- Shows currently connected human browser/app sessions.
+- Shows display name, role, client type, and cursor color.
+- Agents are not listed as collaborators because they edit through the local file.
 
-The host is the person who owns the canonical local Markdown file.
+Local Sync:
 
-The packaged alpha CLI defaults to the hosted relay at `marklab-relay-alpha.fly.dev`. Normal users do not need to export relay URLs before sharing.
+- Shows local file path.
+- Shows projection/sync state.
+- Shows last synced time when available.
+- Shows conflict controls when conflict review is required.
 
-Operators and self-hosted testers can override the public relay URLs:
+## Browser Collaborator Flow
 
-```sh
-export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
-```
+1. Open the edit link in a browser.
+2. Confirm the status says connected.
+3. Type in the editor.
+4. Verify the host app sees the edit.
 
-If you want this override to persist for future terminals:
+View links open a rendered read-only document. A view link should not mount the editor and should not accept typing.
 
-```sh
-cat >> ~/.zshrc <<'EOF'
-export MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_API_URL=https://marklab-relay-alpha.fly.dev
-export MARKLAB_PUBLIC_RELAY_WS_URL=wss://marklab-relay-alpha.fly.dev/relay
-EOF
+## App Collaborator Flow
 
-source ~/.zshrc
-```
+An edit link can also open in MarkLab.app.
 
-## Host A File In Background Mode
-
-Use background mode for normal collaboration. It keeps the host daemon running after the command returns:
+From the CLI:
 
 ```sh
-npx -y @marklab/cli open README.md --background
+npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
-Create an edit link:
+Or open the same link through the app's shared-link entry point.
 
-```sh
-npx -y @marklab/cli create-link README.md --role edit
-```
+Expected behavior:
 
-Create a read-only browser view link:
+- MarkLab validates the edit link before creating or mutating a local file.
+- MarkLab asks for the destination folder.
+- The local filename is the shared document name.
+- If a same-name local file is non-empty or diverged, MarkLab must show a conflict/preview path instead of overwriting silently.
+- Reopen restores the local binding without using the old daemon.
 
-```sh
-npx -y @marklab/cli create-link README.md --role view
-```
+## Saving
 
-Check what is running:
+Local-only windows save like a normal document editor. Use `Cmd+S` or the standard save command.
 
-```sh
-npx -y @marklab/cli status
-```
+Shared windows additionally project remote shared markdown to disk:
 
-Stop hosting one file:
+- Remote/provider changes are queued and written to the local file after a short debounce.
+- `Cmd+S` flushes pending shared projection immediately.
+- If local disk changes and provider changes both diverge, MarkLab pauses projection and opens conflict review.
+- `Stop Sharing` flushes pending shared projection before returning the window to local-only mode.
 
-```sh
-npx -y @marklab/cli stop README.md
-```
+Realtime sync keeps connected editors current. It is not a substitute for version history.
 
-Stop all local MarkLab daemons:
+## Version History
 
-```sh
-npx -y @marklab/cli stop --all
-```
+The API has version routes for manual save, autosave, list, and restore. Those routes flush active collaboration state before saving or restoring.
 
-## Temporary Foreground Sharing
+The new native relay UI does not yet expose a complete hosted Versions panel. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
 
-Use foreground sharing for quick tests only. It installs the CLI if needed, starts MarkLab, creates an edit link, and keeps hosting while that terminal stays open:
+## Links And Revocation
 
-```sh
-npx -y @marklab/cli share README.md
-```
+An access link is a permission grant. A collaborator session is presence. A cursor color belongs to the active collaborator session, not to the link itself.
 
-Copy the printed `Edit link:` and send it to collaborators.
+One edit link can be used by more than one person, so the link list and active collaborator list are intentionally separate.
 
-Keep that terminal open. Closing the terminal stops the host daemon and remote collaborators will be unable to write until the host opens MarkLab again.
+Revoking a link removes that grant. It does not delete local files.
 
-## One-Line Collaborator Join
+`Stop Sharing` revokes active links known to the current app session and returns the document to local-only editing. Historical grants created in another session require the server-backed grant list before the app can revoke all of them after relaunch.
 
-Yes: a collaborator can install the CLI, create the local file, join the shared edit link, and keep a background local mirror running with one command.
+## Missing Files And Conflicts
 
-```sh
-npx -y @marklab/cli join '<edit-link>' --pick-dir --background
-```
+If the local `.md` file is deleted or moved while the app is open, MarkLab should pause projection and show local sync state instead of recreating the file silently.
 
-Replace `<edit-link>` with the relay edit link from the host. MarkLab opens a folder picker so the collaborator can choose where the local file should be created.
+If the local disk file and shared provider state both changed independently, MarkLab should show conflict review before writing either side over the other.
 
-If the collaborator prefers typing the folder path instead of using the picker:
+## Manual Acceptance
 
-```sh
-npx -y @marklab/cli join '<edit-link>' --dir ./docs --create-dir --background
-```
+Run the row-by-row acceptance pass in:
 
-This command:
+[New Relay/Y-Sweet Pilot Runbook](../manual-acceptance/new-relay-pilot.md)
 
-- Installs and runs the CLI through `npx`.
-- Uses the folder selected in the picker, or creates the typed `--dir` folder when `--create-dir` is used.
-- Creates a local Markdown file using the host file name from the edit link.
-- Starts a local MarkLab daemon for that mirror file.
-- Opens the local MarkLab browser URL for that mirror.
-- Returns after the background daemon starts.
-
-To stop that background mirror:
-
-```sh
-npx -y @marklab/cli stop <chosen-folder>/<shared-file-name>.md
-```
-
-To stop all local MarkLab daemons:
-
-```sh
-npx -y @marklab/cli stop --all
-```
-
-Foreground join is also available. Omit `--background` and keep the terminal open while you want the mirror to sync. Press `Ctrl-C` when you want to stop listening.
-
-If a file with the same name already exists in the selected folder and is non-empty, MarkLab rejects the join instead of overwriting it. To intentionally replace it:
-
-```sh
-npx -y @marklab/cli join '<edit-link>' --pick-dir --replace --background
-```
-
-Use `--replace` only when you are sure you want to overwrite the local file.
-
-## Browser Editing
-
-Anyone with an edit link can open the link in a browser and edit while the host is online.
-
-The same edit link can also be used with `marklab join` to create a local Markdown mirror.
-
-Anyone with a view link can open the link in a browser and read, but cannot edit and cannot create a local mirror.
-
-Browser edit and view links work without installing MarkLab. A pure web link cannot install or run a local CLI, create local files, or inspect whether local software is available, because browsers do not have that access. The current safe alpha path is one relay link plus a copyable one-line `npx` command for collaborators who want a local mirror.
-
-## Expected Behavior
-
-Local file is canonical:
-
-- The host's local Markdown file is the source of truth.
-- Browser edits are written back to the local file.
-- AI tools and editors should edit the local Markdown file directly.
-
-Hosted relay is not storage:
-
-- The relay coordinates live collaboration and stores relay metadata/ephemeral sync state.
-- Relay cache expiry is not document deletion.
-- Stopping sharing does not delete local files.
-
-Host offline:
-
-- If the host daemon stops, remote browser writes and local mirror writes reject.
-- Restarting the host daemon restores editing for valid links.
-
-Missing host file:
-
-- If the host local file is moved or deleted while watched, sync pauses.
-- MarkLab does not silently recreate the host file.
-
-Missing collaborator mirror:
-
-- If a collaborator deletes their local mirror file, only that mirror pauses.
-- The host file is not deleted.
-
-Revoked links:
-
-- Revoking a link removes access for sessions using that link.
-- It does not delete local files.
-
-## Useful Commands
-
-Open a local file in persistent background mode:
-
-```sh
-npx -y @marklab/cli open README.md --background
-```
-
-Open a local file in temporary foreground mode:
-
-```sh
-npx -y @marklab/cli open README.md
-```
-
-Create an edit link for an already-open file:
-
-```sh
-npx -y @marklab/cli create-link README.md --role edit
-```
-
-Create a temporary foreground share:
-
-```sh
-npx -y @marklab/cli share README.md
-```
-
-Foreground sharing stops when that terminal closes.
-
-Create a view-only browser link:
-
-```sh
-npx -y @marklab/cli create-link README.md --role view
-```
-
-Show share state:
-
-```sh
-npx -y @marklab/cli share-state README.md
-```
-
-Revoke a link:
-
-```sh
-npx -y @marklab/cli revoke-link README.md <grant-id>
-```
-
-Join an edit link as a local mirror:
-
-```sh
-npx -y @marklab/cli join '<edit-link>' --pick-dir --background
-```
-
-Show running daemons:
-
-```sh
-npx -y @marklab/cli status
-```
-
-Stop all local daemons:
-
-```sh
-npx -y @marklab/cli stop --all
-```
-
-## First-Run Notes
-
-The first `npx -y @marklab/cli ...` command can take a minute because npm downloads the CLI and its runtime dependencies. Later runs are usually faster because npm caches the package.
-
-If a command prints a local `127.0.0.1` browser URL, that URL is for your machine only. Do not send it to another person. Send relay edit/view links only.
-
-Share links created by the packaged alpha should point at `https://marklab-relay-alpha.fly.dev`. Local `localhost` or `127.0.0.1` relay links are for development only.
-
-If you intentionally want local relay links while working from this repository, force development mode:
-
-```sh
-npx -y @marklab/cli stop --all
-export MARKLAB_RELAY_MODE=development
-npx -y @marklab/cli open README.md --background
-```
-
-## Alpha Limits
-
-This is an alpha. Use it for trials and collaboration tests, not sensitive production documents.
-
-Current alpha assumptions:
-
-- No user account is required for collaborators.
-- Anyone with an edit link can edit while the host is online.
-- Anyone with a view link can read in the browser.
-- The host should keep a backup or version-control history for important Markdown files.
-- Windows and Linux should work where Node/npm/browser support is available, but the current manual smoke path has been exercised most heavily on macOS.
+Only the visual/native GUI observations should remain manual after the automated package, Swift, typecheck, Vitest, and smoke suites pass.

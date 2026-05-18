@@ -1,11 +1,8 @@
 import { EditorState, Compartment, EditorSelection } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, historyKeymap } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { markdown } from '@codemirror/lang-markdown';
-import { tags } from '@lezer/highlight';
-import { basicSetup } from 'codemirror';
 import { runMarkdownEditorCommand, type MarkdownEditorCommand } from '@marklab/collab-editor/markdown-commands';
+import { markEditMarkdownEditorExtensions } from '@marklab/collab-editor/markedit-codemirror';
 
 type NativeMessageHandler = {
   postMessage(message: unknown): void;
@@ -136,69 +133,15 @@ function commonSuffixLength(left: string, right: string): number {
   return length;
 }
 
-const markEditHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading, color: '#0550ae', fontWeight: '700', textDecoration: 'none' },
-  { tag: tags.quote, color: '#1a7f37', fontStyle: 'italic' },
-  { tag: tags.strong, fontWeight: '700' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.link, color: '#0a3069', textDecoration: 'underline' },
-  { tag: tags.url, color: '#24292f', textDecoration: 'none' },
-]);
-
 const view = new EditorView({
   parent: root,
   state: EditorState.create({
     doc: '',
     extensions: [
-      basicSetup,
-      markdown(),
+      ...markEditMarkdownEditorExtensions(),
       editableCompartment.of(editableExtensions(true)),
       lineSeparatorCompartment.of(lineSeparatorExtension(currentLineSeparator)),
       keymap.of([...defaultKeymap, ...historyKeymap]),
-      EditorView.lineWrapping,
-      syntaxHighlighting(markEditHighlightStyle),
-      EditorView.theme({
-        '&': {
-          height: '100%',
-          backgroundColor: '#ffffff',
-          color: '#24292f',
-          fontSize: '14px',
-        },
-        '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-          backgroundColor: '#add6ff !important',
-        },
-        '.cm-scroller': {
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-          lineHeight: '1.58',
-        },
-        '.cm-content': {
-          minHeight: '100vh',
-          paddingTop: '2px',
-          paddingRight: '12px',
-          paddingBottom: '50vh',
-        },
-        '.cm-gutters': {
-          color: '#8c959f',
-          backgroundColor: '#ffffff',
-          borderRight: 'none',
-          fontFamily: 'SF Mono, ui-monospace, monospace',
-        },
-        '.cm-lineNumbers > .cm-activeLineGutter': {
-          color: '#24292f',
-        },
-        '.cm-foldGutter': {
-          padding: '0 4px',
-          opacity: '0',
-        },
-        '.cm-foldGutter, .cm-foldPlaceholder': {
-          color: '#24292f66',
-          fontFamily: 'monospace !important',
-          transform: 'translateY(-0.1em)',
-        },
-        '.cm-activeLine, .cm-activeLineGutter': {
-          backgroundColor: '#eaeef27f',
-        },
-      }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged || update.selectionSet) postSelectionStatus(update.view);
         if (!update.docChanged || applyingFromNative) return;

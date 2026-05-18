@@ -1,88 +1,73 @@
 # Local-First User Journeys
 
-MarkLab starts from one local Markdown file. The file on disk is canonical; the browser is a synchronized editor over that file.
+These journeys describe the current relay/native pilot.
 
-## Solo Local File
+## Local Editing
 
-1. The user runs `marklab open README.md`.
-2. MarkLab starts a loopback daemon for the canonical realpath.
-3. The browser opens `/local` with a per-daemon token in the URL fragment.
-4. Browser edits are serialized and written atomically to `README.md`.
-5. Saves from local tools update the browser without refresh.
-6. Manual snapshots and restore stay in local app-support metadata.
+1. User opens a `.md` file in MarkLab.app.
+2. MarkLab shows the MarkEdit-style local editor.
+3. User edits locally.
+4. User saves with `Cmd+S` or the standard save command.
+5. The file remains a normal Markdown file on disk.
+
+No sharing controls appear except `Start Sharing`.
+
+## Start Sharing
+
+1. User clicks `Start Sharing`.
+2. MarkLab imports or creates the shared document through the hosted control plane.
+3. MarkLab opens an app-kind `/collab` session for the same document branch.
+4. The local editor keeps the same visual layer and gains collaboration behavior.
+5. Sharing controls appear: create edit link, create view link, show collaboration, and stop sharing.
 
 ## Browser Collaborator
 
-This is the same local daemon with another browser window on the same machine.
+1. Host creates an edit link.
+2. Browser collaborator opens `/collab?...mode=edit`.
+3. Browser edits converge with the app session through Y-Sweet.
+4. MarkLab.app projects shared markdown to the local `.md` file.
+5. Cursor/presence appears for connected human sessions.
 
-1. The host opens the local URL in a second browser window.
-2. Both browser windows connect to the one local Yjs room.
-3. Edits converge through the daemon.
-4. The daemon writes the converged Markdown back to the canonical file.
+## App Collaborator
 
-The local URL is private to the host machine and should not be shared as a collaboration link.
+1. Host creates an edit link.
+2. Collaborator opens the same link in MarkLab.app.
+3. MarkLab validates the link.
+4. Collaborator chooses a destination folder.
+5. MarkLab creates a local `.md` using the shared document name.
+6. App collaborator and host coedit through the same shared document.
+7. Each app maintains its own local file projection.
 
-## Local Mirror Collaborator
+## View-Only Collaborator
 
-Plan 02 introduces relay-assisted collaboration. A local mirror collaborator should still have a local Markdown file as their own canonical working copy.
+1. Host creates a view link.
+2. Viewer opens `/collab?...mode=view`.
+3. The browser renders a read-only document.
+4. The editable editor must not mount.
+5. The viewer does not appear as editable presence.
 
-1. The host shares a relay edit link.
-2. The collaborator joins with a local mirror file.
-3. Their browser and local file sync through their own daemon.
-4. Relay transport coordinates document updates between host and collaborator.
+## Agent Edit
 
-Plan 01 does not implement this mirror join flow; it only establishes the single-file local daemon that mirror collaboration will reuse.
+1. Agent edits the local `.md` file directly.
+2. MarkLab.app observes the disk change.
+3. If the provider text still matches the expected baseline, MarkLab ingests the file change into shared state.
+4. If disk and provider both diverged, MarkLab opens conflict review.
 
-## Host Offline
+Agents do not appear in the collaborator list.
 
-1. The local daemon continues to sync the host browser and local file without relay access.
-2. External tools can keep editing the file on disk.
-3. Local snapshots remain available.
-4. Remote collaborators cannot receive new host updates until relay connectivity returns.
+## Missing Local File
 
-Offline local work must never depend on a hosted document store.
+1. User deletes or moves the local file while sharing.
+2. MarkLab pauses local projection.
+3. The UI reports local sync state.
+4. MarkLab does not silently recreate the missing file.
 
-## Reconnect Conflict
+## Stop Sharing
 
-Plan 01 only protects against silent overwrite.
+1. User clicks `Stop Sharing`.
+2. MarkLab flushes pending shared projection to disk.
+3. MarkLab revokes active links known to the current app session.
+4. MarkLab clears active collaborator state and shared binding.
+5. The window returns to local-only editing.
 
-1. Browser has unflushed edits.
-2. The disk file changes outside MarkLab.
-3. The daemon refuses to overwrite disk.
-4. The browser draft stays visible.
-5. The disk file stays intact.
-6. The browser shows `File changed outside MarkLab. Review needed.`
-
-Plan 03 owns the full review and choose-side flow.
-
-## AI Agent Editing Local Files
-
-AI agents edit Markdown files directly in the filesystem. That keeps MarkLab aligned with Codex, Claude Code, editors, and shell tools.
-
-1. The user points the agent at the local file.
-2. The agent edits that file with normal local file operations.
-3. The daemon sees the save and updates the browser room.
-4. If the browser also has unsaved edits, MarkLab surfaces the conflict state instead of replacing either side.
-
-Agents do not need a hosted document mutation surface for Plan 01.
-
-See the [MarkLab Agent Guide](../agent/marklab-agent-guide.md) for the CLI contract and target-specific instructions.
-
-## Agent Small Edit
-
-1. The agent runs `marklab status README.md --json`.
-2. The agent edits `README.md` with normal local file operations.
-3. The agent runs `marklab wait README.md --synced --timeout 10000 --json`.
-4. The agent reports the changed file and final sync state.
-
-The local Markdown file remains first; MarkLab only coordinates watching, browser sync, versions, and share state.
-
-## Agent Large Edit
-
-1. The agent runs `marklab status README.md --json`.
-2. The agent runs `marklab save-version README.md --message "Before AI edit: broad update" --json`.
-3. The agent edits `README.md` locally.
-4. The agent runs `marklab wait README.md --synced --timeout 10000 --json`.
-5. The agent reports the version id and sync state.
-
-If `status` reports `syncState: "paused"` or `hasConflict: true`, the agent stops editing the watched file and asks the user to resolve the conflict in MarkLab. It may prepare a separate draft, but it should not keep changing the paused watched file.
+Stopping sharing does not delete local files.

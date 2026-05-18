@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
 import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { EVENT_CONNECTION_STATUS, STATUS_CONNECTED, STATUS_CONNECTING, STATUS_ERROR, STATUS_OFFLINE } from '@y-sweet/client';
 import { Awareness } from 'y-protocols/awareness';
 import { IndexeddbPersistence } from 'y-indexeddb';
@@ -27,6 +25,7 @@ import {
   type RemoteCursorSummary,
   type YTextCodeMirrorBinding,
 } from '@marklab/collab-editor';
+import { markEditMarkdownEditorExtensions } from '@marklab/collab-editor/markedit-codemirror';
 import {
   runMarkdownEditorCommand,
   type MarkdownEditorCommand,
@@ -39,7 +38,12 @@ import {
 } from '../api/edit-session-storage';
 import { createMarkLabYjsProvider, type MarkLabYjsProvider } from '../provider/yjs-provider';
 import { renderMarkdownSnapshot } from './markdown-render';
-import { applyNativeDiskMarkdownToText, postNativeMarkdownSnapshot } from './native-bridge';
+import {
+  applyNativeDiskMarkdownToText,
+  postNativeCollaborators,
+  postNativeMarkdownSnapshot,
+  postNativeSelectionStatus,
+} from './native-bridge';
 
 type CollabClientKind = 'browser' | 'app';
 
@@ -92,6 +96,15 @@ function isConnectedProviderStatus(status: unknown): boolean {
     'status' in status &&
     (status as { status?: unknown }).status === STATUS_CONNECTED
   );
+}
+
+function selectionStatus(view: EditorView): string {
+  const selection = view.state.selection.main;
+  const line = view.state.doc.lineAt(selection.head);
+  const column = selection.head - line.from + 1;
+  const selectedLength = Math.abs(selection.to - selection.from);
+  const base = `Ln ${line.number}, Col ${column}`;
+  return selectedLength > 0 ? `${base} (${selectedLength})` : base;
 }
 
 function bindSessionIdentity(ydoc: Y.Doc, providerToken: IssuedProviderToken): void {
@@ -348,22 +361,27 @@ export function CollaborativeMarkdownEditor({
         sessionId: activeSession.sessionId,
         displayName,
         kind: activeSession.providerToken?.sessionIdentity?.actorType === 'agent' ? 'agent' : 'human',
+        clientKind,
       });
       awareness.setLocalStateField('user', localUser);
       const syncRemoteCursorSummaries = () => {
         if (!awareness) return;
-        setRemoteCursors(summarizeRemoteCursors(
+        const summaries = summarizeRemoteCursors(
           awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>,
           ydoc.clientID,
-        ));
+        );
+        setRemoteCursors(summaries);
+        postNativeCollaborators(summaries);
       };
       awareness.on('change', syncRemoteCursorSummaries);
+      syncRemoteCursorSummaries();
       persistence = new IndexeddbPersistence(
         createIndexedDbPersistenceKey(activeSession.providerDocId, activeSession.sessionId),
         ydoc,
       );
       const publishLocalCursor = () => {
         if (!awareness || !view) return;
+        postNativeSelectionStatus(selectionStatus(view));
         if (!view.hasFocus) {
           awareness.setLocalStateField('cursor', null);
           return;
@@ -381,10 +399,7 @@ export function CollaborativeMarkdownEditor({
         state: EditorState.create({
           doc: ytext.toString(),
           extensions: [
-            markdown(),
-            history(),
-            keymap.of([...defaultKeymap, ...historyKeymap]),
-            EditorView.lineWrapping,
+            ...markEditMarkdownEditorExtensions(),
             editableCompartment.of(EditorView.editable.of(nativeEditable)),
             readOnlyCompartment.of(EditorState.readOnly.of(!nativeEditable)),
             EditorState.transactionFilter.of((transaction) => {
@@ -397,12 +412,16 @@ export function CollaborativeMarkdownEditor({
                 const markdown = update.state.doc.toString();
                 setMarkdownPreview(markdown);
                 postNativeMarkdownSnapshot(markdown);
+                queueMicrotask(() => {
+                  if (!disposed) publishLocalCursor();
+                });
               }
-              if (update.selectionSet || update.focusChanged) publishLocalCursor();
+              if (!update.docChanged && (update.selectionSet || update.focusChanged)) publishLocalCursor();
             }),
           ],
         }),
       });
+      postNativeSelectionStatus(selectionStatus(view));
       binding = createYTextCodeMirrorBinding({ view, ytext, preferInitial: 'ytext' });
       window.__marklabNativeApplyDiskMarkdown = (markdown: string, baseline: string) => (
         unavailable ? { ok: false, reason: 'unavailable' } : applyNativeDiskMarkdownToText(

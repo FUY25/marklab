@@ -6,6 +6,7 @@ export interface MarkLabAwarenessUser {
   color: string;
   colorLight: string;
   kind: 'human' | 'agent';
+  clientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest' | 'api';
 }
 
 export interface MarkLabAwarenessCursor {
@@ -54,15 +55,18 @@ export function createAwarenessUser(input: {
   sessionId: string;
   displayName: string;
   kind: MarkLabAwarenessUser['kind'];
+  clientKind?: MarkLabAwarenessUser['clientKind'];
 }): MarkLabAwarenessUser {
   const [color, colorLight] = colorPairs[hashString(input.sessionId) % colorPairs.length] ?? fallbackColorPair;
-  return {
+  const user: MarkLabAwarenessUser = {
     id: input.sessionId,
     name: input.displayName,
     color,
     colorLight,
     kind: input.kind,
   };
+  if (input.clientKind) user.clientKind = input.clientKind;
+  return user;
 }
 
 export function createCursorAwareness(
@@ -90,7 +94,22 @@ export function normalizeAwarenessUser(value: unknown): MarkLabAwarenessUser | n
   const color = typeof value.color === 'string' ? value.color : fallbackColorPair[0];
   const colorLight = typeof value.colorLight === 'string' ? value.colorLight : fallbackColorPair[1];
   const kind = value.kind === 'agent' ? 'agent' : 'human';
-  return { id, name, color, colorLight, kind };
+  const clientKind = normalizeAwarenessClientKind(value.clientKind);
+  return clientKind ? { id, name, color, colorLight, kind, clientKind } : { id, name, color, colorLight, kind };
+}
+
+function normalizeAwarenessClientKind(value: unknown): MarkLabAwarenessUser['clientKind'] | undefined {
+  switch (value) {
+    case 'browser':
+    case 'app':
+    case 'daemon':
+    case 'agent':
+    case 'guest':
+    case 'api':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function topLevelYTextName(ytext: Y.Text): string | null {

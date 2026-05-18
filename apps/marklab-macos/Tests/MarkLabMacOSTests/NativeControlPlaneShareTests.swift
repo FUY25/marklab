@@ -34,8 +34,8 @@ struct NativeControlPlaneShareTests {
     #expect(appEditorURL.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)")
     #expect(!appEditorURL.absoluteString.contains("token="))
     #expect(appEditorURL.fragment == nil)
-    #expect(editLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_edit&mode=edit")
-    #expect(viewLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_view&mode=view")
+    #expect(editLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_edit&mode=edit&filename=note.md")
+    #expect(viewLink.url.absoluteString == "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main&token=ml_access_view&mode=view&filename=note.md")
     #expect(transport.requests.map(\.percentEncodedPath) == [
       "/api/docs/import",
       "/api/docs/doc_hosted/branches/branch_main/access-grants",
