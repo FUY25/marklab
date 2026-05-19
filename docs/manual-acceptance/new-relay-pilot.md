@@ -186,21 +186,35 @@ echo "  MARKLAB_WORKSPACE_ID=$WORKSPACE_ID"
 
 ## Manual Acceptance Pass
 
-Run these against the seeded new `/collab` links:
+The full operator-driven test script lives in
+[`pilot-acceptance-checklist.md`](./pilot-acceptance-checklist.md).
 
-| Spec criterion | Concrete repro |
+That checklist organizes the spec's testing criteria into a 90-minute
+phased pass (smoke → convergence + presence → permissions + lifecycle
+→ edge cases → native polish) with explicit step-by-step repros,
+pass/fail signatures for each row, a bug-entry template for `bug.md`,
+and escape hatches when a phase is blocked. Run it before inviting
+pilot users and after any deploy that touches the API, collab-web,
+native shell, or schema.
+
+This runbook (above) is the setup half; the checklist is the execution
+half. Read both before starting.
+
+For quick reference, the spec criteria the checklist covers:
+
+| Spec criterion | Checklist row |
 | --- | --- |
-| Browser-browser convergence | Open the browser edit link in two tabs, type in each, verify both converge. |
-| App-browser convergence | Launch MarkLab.app with the native env above, open a local `.md`, Start Sharing, then open an edit link in browser. |
-| Guest editing while host app offline | Quit MarkLab.app, keep browser edit session open, continue editing. |
-| Host reconnect picks up guest changes | Reopen MarkLab.app with the same env and file, verify the hosted `/collab` content appears. |
-| Cursor 3-way | Browser-to-browser, app-to-browser, and browser-to-app cursor/selection. |
-| Selection anchors after inserts | Select text in one client, insert before it from another client. |
-| Cursor disappears on disconnect | Close one tab and watch the other. |
-| View link cannot write | Open browser view link, verify no editor mounts and typing does nothing. |
-| Revoked edit link unavailable within TTL | Revoke the edit grant through API/native UI and verify active edit session becomes unavailable by next provider-token refresh. |
-| Provider token refresh transparent | Wait past the refresh margin and edit again without flicker or state loss. |
-| Missing local file pauses | Delete/rename the local `.md` while MarkLab.app is open and verify projection pauses. |
-| Disk + provider both diverge | Edit in browser and edit the local file externally before native reconciliation; verify conflict UI. |
+| Browser-browser convergence | Phase 2.1 |
+| App-browser convergence | Phase 2.2 |
+| Guest editing while host app offline | Phase 4.1 |
+| Host reconnect picks up guest changes | Phase 4.1 |
+| Cursor 3-way | Phase 2.3 |
+| Selection anchors after inserts | Phase 2.3 |
+| Cursor disappears on disconnect | Phase 2.4 |
+| View link cannot write | Phase 1.2 |
+| Revoked edit link unavailable within TTL | Phase 3.2 |
+| Provider token refresh transparent | Phase 3.1 |
+| Missing local file pauses | Phase 4.3 |
+| Disk + provider both diverge | Phase 4.4 |
 
-Record only the remaining visual/native GUI observations manually. The old `/local#token=...` path is not part of this pilot acceptance pass.
+The old `/local#token=...` path is not part of this pilot acceptance pass.
