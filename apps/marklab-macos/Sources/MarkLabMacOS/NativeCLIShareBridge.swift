@@ -1,6 +1,7 @@
 import Foundation
 
 public enum NativeCLIShareAction: String, Codable, Equatable, Sendable {
+  case join
   case share
 }
 
@@ -10,6 +11,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
   public let action: NativeCLIShareAction
   public let file: String
   public let role: NativeLinkRole
+  public let link: String?
   public let createdAt: String
 
   public init(
@@ -18,6 +20,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
     action: NativeCLIShareAction,
     file: String,
     role: NativeLinkRole,
+    link: String? = nil,
     createdAt: String
   ) {
     self.schemaVersion = schemaVersion
@@ -25,6 +28,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
     self.action = action
     self.file = file
     self.role = role
+    self.link = link
     self.createdAt = createdAt
   }
 }
@@ -65,6 +69,30 @@ public struct NativeCLIShareResponse: Codable, Equatable, Sendable {
       docId: docId,
       branchId: branchId,
       grantId: link.grantId,
+      opened: opened,
+      code: nil,
+      message: nil
+    )
+  }
+
+  public static func joinSuccess(
+    requestId: String,
+    file: String,
+    docId: String,
+    branchId: String,
+    opened: Bool
+  ) -> NativeCLIShareResponse {
+    NativeCLIShareResponse(
+      ok: true,
+      requestId: requestId,
+      action: "native_join_started",
+      file: file,
+      role: .edit,
+      url: nil,
+      copied: false,
+      docId: docId,
+      branchId: branchId,
+      grantId: nil,
       opened: opened,
       code: nil,
       message: nil
@@ -123,9 +151,11 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
   }
 
-  public static func defaultStore(fileManager: FileManager = .default) -> FileNativeCLIShareRequestStore {
-    let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MarkLab", directoryHint: .isDirectory)
+  public static func defaultStore(
+    appSupportDirectory: URL? = nil,
+    fileManager: FileManager = .default
+  ) -> FileNativeCLIShareRequestStore {
+    let appSupport = appSupportDirectory ?? NativeAppSupportDirectory.url(fileManager: fileManager)
     return FileNativeCLIShareRequestStore(appSupportDirectory: appSupport, fileManager: fileManager)
   }
 
@@ -207,6 +237,16 @@ public struct NativeCLIShareServiceRequest: Equatable, Sendable {
   }
 }
 
+public struct NativeCLIJoinServiceRequest: Equatable, Sendable {
+  public let link: String
+  public let fileURL: URL
+
+  public init(link: String, fileURL: URL) {
+    self.link = link
+    self.fileURL = fileURL
+  }
+}
+
 public struct NativeCLIShareServiceResult: Equatable, Sendable {
   public let link: NativeHostedShareLink
   public let docId: String
@@ -229,9 +269,22 @@ public struct NativeCLIShareServiceResult: Equatable, Sendable {
   }
 }
 
+public struct NativeCLIJoinServiceResult: Equatable, Sendable {
+  public let docId: String
+  public let branchId: String
+  public let opened: Bool
+
+  public init(docId: String, branchId: String, opened: Bool) {
+    self.docId = docId
+    self.branchId = branchId
+    self.opened = opened
+  }
+}
+
 @MainActor
 public protocol NativeCLIShareService: AnyObject {
   func createShareLink(for request: NativeCLIShareServiceRequest) async throws -> NativeCLIShareServiceResult
+  func joinSharedDocument(for request: NativeCLIJoinServiceRequest) async throws -> NativeCLIJoinServiceResult
 }
 
 public final class NativeCLIShareRequestProcessor {
@@ -255,20 +308,38 @@ public final class NativeCLIShareRequestProcessor {
     }
 
     do {
-      let result = try await shareService.createShareLink(for: NativeCLIShareServiceRequest(
-        fileURL: URL(fileURLWithPath: request.file),
-        role: request.role
-      ))
-      try store.writeResponse(.success(
-        requestId: request.requestId,
-        file: request.file,
-        role: request.role,
-        link: result.link,
-        docId: result.docId,
-        branchId: result.branchId,
-        copied: result.copied,
-        opened: result.opened
-      ))
+      switch request.action {
+      case .share:
+        let result = try await shareService.createShareLink(for: NativeCLIShareServiceRequest(
+          fileURL: URL(fileURLWithPath: request.file),
+          role: request.role
+        ))
+        try store.writeResponse(.success(
+          requestId: request.requestId,
+          file: request.file,
+          role: request.role,
+          link: result.link,
+          docId: result.docId,
+          branchId: result.branchId,
+          copied: result.copied,
+          opened: result.opened
+        ))
+      case .join:
+        guard let link = request.link, !link.isEmpty else {
+          throw NativeSharedDocumentLinkError.invalidURL
+        }
+        let result = try await shareService.joinSharedDocument(for: NativeCLIJoinServiceRequest(
+          link: link,
+          fileURL: URL(fileURLWithPath: request.file)
+        ))
+        try store.writeResponse(.joinSuccess(
+          requestId: request.requestId,
+          file: request.file,
+          docId: result.docId,
+          branchId: result.branchId,
+          opened: result.opened
+        ))
+      }
     } catch {
       try store.writeResponse(.failure(
         requestId: request.requestId,

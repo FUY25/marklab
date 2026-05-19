@@ -121,11 +121,13 @@ public final class NativeConflictStore {
     self.fileManager = fileManager
   }
 
-  public static func defaultStore(fileManager: FileManager = .default) -> NativeConflictStore {
-    let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-      ?? fileManager.temporaryDirectory
+  public static func defaultStore(
+    appSupportDirectory: URL? = nil,
+    fileManager: FileManager = .default
+  ) -> NativeConflictStore {
+    let appSupport = appSupportDirectory ?? NativeAppSupportDirectory.url(fileManager: fileManager)
     return NativeConflictStore(
-      directoryURL: baseURL.appendingPathComponent("MarkLab/conflicts", isDirectory: true),
+      directoryURL: appSupport.appending(path: "conflicts", directoryHint: .isDirectory),
       fileManager: fileManager
     )
   }

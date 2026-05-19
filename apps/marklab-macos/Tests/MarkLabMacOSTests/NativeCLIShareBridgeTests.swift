@@ -39,6 +39,33 @@ struct NativeCLIShareBridgeTests {
     #expect(try store.loadResponse(requestId: "req_1") == response)
   }
 
+  @Test("native CLI join request store round-trips target file and link")
+  func requestStoreRoundTripsJoinRequestsAndResponses() throws {
+    let directory = try TemporaryDirectory()
+    let store = FileNativeCLIShareRequestStore(appSupportDirectory: directory.url)
+    let request = NativeCLIShareRequest(
+      requestId: "req_join",
+      action: .join,
+      file: "/tmp/Host Notes.md",
+      role: .edit,
+      link: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access&mode=edit",
+      createdAt: "2026-05-19T12:00:00Z"
+    )
+
+    try store.writeRequest(request)
+    #expect(try store.loadRequest(requestId: "req_join") == request)
+
+    let response = NativeCLIShareResponse.joinSuccess(
+      requestId: "req_join",
+      file: "/tmp/Host Notes.md",
+      docId: "doc_1",
+      branchId: "branch_1",
+      opened: false
+    )
+    try store.writeResponse(response)
+    #expect(try store.loadResponse(requestId: "req_join") == response)
+  }
+
   @Test("native CLI share request store ignores stale pending requests")
   func requestStoreIgnoresStalePendingRequests() throws {
     let directory = try TemporaryDirectory()
@@ -140,11 +167,41 @@ struct NativeCLIShareBridgeTests {
     #expect(response.grantId == "grant_edit")
   }
 
+  @Test("native CLI share processor delegates hosted joins and persists the response")
+  @MainActor
+  func processorDelegatesHostedJoinAndPersistsResponse() async throws {
+    let directory = try TemporaryDirectory()
+    let store = FileNativeCLIShareRequestStore(appSupportDirectory: directory.url)
+    let sharer = RecordingNativeCLIShareService()
+    let processor = NativeCLIShareRequestProcessor(store: store, shareService: sharer)
+    let link = "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit"
+    try store.writeRequest(NativeCLIShareRequest(
+      requestId: "req_join",
+      action: .join,
+      file: "/tmp/Host Notes.md",
+      role: .edit,
+      link: link,
+      createdAt: "2026-05-19T12:00:00Z"
+    ))
+
+    try await processor.process(requestId: "req_join")
+
+    #expect(sharer.joinRequests == [
+      NativeCLIJoinServiceRequest(link: link, fileURL: URL(fileURLWithPath: "/tmp/Host Notes.md")),
+    ])
+    let response = try #require(try store.loadResponse(requestId: "req_join"))
+    #expect(response.ok)
+    #expect(response.action == "native_join_started")
+    #expect(response.file == "/tmp/Host Notes.md")
+    #expect(response.docId == "doc_join")
+    #expect(response.branchId == "branch_main")
+  }
+
   @MainActor
   @Test("native CLI share pump processes pending requests without relaunch arguments")
   func pumpProcessesPendingRequestsForAlreadyRunningApp() async throws {
     let directory = try TemporaryDirectory()
-    let store = FileNativeCLIShareRequestStore(appSupportDirectory: directory.url)
+    let store = FileNativeCLIShareRequestStore(appSupportDirectory: directory.url, maximumPendingRequestAge: 0)
     let sharer = RecordingNativeCLIShareService()
     let processor = NativeCLIShareRequestProcessor(store: store, shareService: sharer)
     let pump = NativeCLIShareRequestPump(store: store, processor: processor)
@@ -168,6 +225,7 @@ struct NativeCLIShareBridgeTests {
 
 final class RecordingNativeCLIShareService: NativeCLIShareService {
   private(set) var requests: [NativeCLIShareServiceRequest] = []
+  private(set) var joinRequests: [NativeCLIJoinServiceRequest] = []
 
   func createShareLink(for request: NativeCLIShareServiceRequest) async throws -> NativeCLIShareServiceResult {
     requests.append(request)
@@ -184,5 +242,11 @@ final class RecordingNativeCLIShareService: NativeCLIShareService {
       copied: true,
       opened: false
     )
+  }
+
+  func joinSharedDocument(for request: NativeCLIJoinServiceRequest) async throws -> NativeCLIJoinServiceResult {
+    joinRequests.append(request)
+    let parsed = try NativeSharedDocumentLink.parse(request.link)
+    return NativeCLIJoinServiceResult(docId: parsed.docId, branchId: parsed.branchId, opened: false)
   }
 }

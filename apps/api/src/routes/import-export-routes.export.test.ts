@@ -67,6 +67,7 @@ function createExportPool(options: ExportPoolOptions) {
             title: 'Exported doc',
             branch_slug: 'main',
             version_hash: options.versionHash,
+            version_number: options.versionNumber ?? 7,
           } as Row,
         ],
         rowCount: 1,
@@ -168,6 +169,45 @@ describe('export route version metadata consistency', () => {
     expect(response.text).toBe('# Active export\n');
     expect(response.headers['content-disposition']).toContain('__v0012__');
     expect(response.headers['content-disposition']).toContain(`__sha-${activeHash.slice('sha256:'.length, 15)}__`);
+  });
+
+  it('prefers the live provider snapshot for export when the DB mirror is stale', async () => {
+    const liveHash = sha256Hex('# Live export\n');
+    const staleHash = sha256Hex('# Stale export\n');
+    vi.mocked(flushBranchMarkdownMirror).mockResolvedValue({
+      branchId: 'br_main',
+      markdown: '# Stale export\n',
+      hash: staleHash,
+      versionId: 'ver_003',
+      versionNumber: 3,
+      createdVersion: false,
+    });
+    const { pool } = createExportPool({
+      currentHash: staleHash,
+      versionHash: staleHash,
+      currentMarkdown: '# Stale export\n',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: '# Live export\n',
+            hash: liveHash,
+          };
+        },
+      },
+    });
+
+    const response = await request(app).get('/api/docs/doc_001/branches/br_main/export.md').expect(200);
+
+    expect(response.text).toBe('# Live export\n');
+    expect(response.headers['content-disposition']).toContain('__v0007__');
+    expect(response.headers['content-disposition']).toContain(`__sha-${liveHash.slice('sha256:'.length, 15)}__`);
+    expect(vi.mocked(flushBranchMarkdownMirror)).not.toHaveBeenCalled();
   });
 
   it('exports with the flushed version metadata when flush creates a matching manual_save version', async () => {

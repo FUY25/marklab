@@ -125,6 +125,40 @@ async function startNativeOwnedDaemonServer(expectedToken) {
   };
 }
 
+async function startNativeExportServer(markdownByBranch) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+    const match = /^\/api\/docs\/([^/]+)\/branches\/([^/]+)\/export\.md$/u.exec(req.url ?? '');
+    if (req.method === 'GET' && match?.[1] && match[2]) {
+      const markdown = markdownByBranch.get(`${decodeURIComponent(match[1])}:${decodeURIComponent(match[2])}`);
+      if (markdown === undefined) {
+        res.statusCode = 404;
+        res.end('not found');
+        return;
+      }
+      res.setHeader('content-type', 'text/markdown; charset=utf-8');
+      res.end(markdown);
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') reject(new Error('missing_test_port'));
+      else resolve(address.port);
+    });
+  });
+  return {
+    apiUrl: `http://127.0.0.1:${port}`,
+    requests,
+    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+  };
+}
+
 function runCli(args, env, timeoutMs = 90000) {
   const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
     cwd: repoRoot,
@@ -298,6 +332,105 @@ describe('marklab CLI', () => {
       nativeJoinUrl: buildNativeJoinDeepLink(editLink),
       opened: false,
     });
+  });
+
+  it('joins hosted collab edit links into a chosen folder through the native app request bridge', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-join-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const targetDirectory = join(directory, 'docs');
+    await mkdir(targetDirectory);
+    const editLink = 'https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access_edit&mode=edit&filename=Host%20Notes.md';
+
+    const child = spawn(process.execPath, [
+      'apps/cli/marklab.mjs',
+      'join',
+      editLink,
+      '--dir',
+      targetDirectory,
+      '--background',
+      '--json',
+    ], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        MARKLAB_ENABLE_LEGACY_CLI: '0',
+        MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+        MARKLAB_NO_OPEN: 'true',
+        MARKLAB_NATIVE_CLI_TIMEOUT_MS: '5000',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const request = await waitForNativeShareRequest(appSupportDirectory);
+    const targetFile = await realpath(join(targetDirectory, 'Host Notes.md')).catch(() => join(targetDirectory, 'Host Notes.md'));
+    expect(request).toMatchObject({
+      schemaVersion: 1,
+      action: 'join',
+      file: targetFile,
+      link: editLink,
+      role: 'edit',
+    });
+
+    await mkdir(join(appSupportDirectory, 'cli-responses'), { recursive: true });
+    await writeFile(join(appSupportDirectory, 'cli-responses', `${request.requestId}.json`), JSON.stringify({
+      ok: true,
+      requestId: request.requestId,
+      action: 'native_join_started',
+      file: targetFile,
+      role: 'edit',
+      url: null,
+      copied: false,
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      grantId: null,
+      opened: false,
+    }), 'utf8');
+
+    const result = await new Promise((resolveRun, rejectRun) => {
+      child.once('error', rejectRun);
+      child.once('exit', (code, signal) => resolveRun({ code, signal, stdout, stderr }));
+    });
+    expectCliOk(result);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      action: 'native_join_started',
+      path: targetFile,
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      opened: false,
+    });
+  });
+
+  it('rejects hosted app join replace before writing a native request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-join-replace-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const targetFile = join(directory, 'Host Notes.md');
+    await writeFile(targetFile, '# Existing local notes\n', 'utf8');
+    const editLink = 'https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access_edit&mode=edit&filename=Host%20Notes.md';
+
+    const result = await runCli(['join', editLink, targetFile, '--replace', '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_NO_OPEN: 'true',
+      MARKLAB_NATIVE_CLI_TIMEOUT_MS: '100',
+    }, 30000);
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'invalid_target',
+      message: expect.stringContaining('Replace is not available for hosted app joins yet.'),
+    });
+    await expect(readFile(targetFile, 'utf8')).resolves.toBe('# Existing local notes\n');
+    expect(existsSync(join(appSupportDirectory, 'cli-requests'))).toBe(false);
   });
 
   it('keeps hosted view links browser-only instead of routing them into local app join', async () => {
@@ -553,6 +686,111 @@ describe('marklab CLI', () => {
       hasConflict: false,
       conflict: null,
     });
+  });
+
+  it('keeps native status and wait provider-aware when hosted export verification is configured', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-provider-state-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    await mkdir(appSupportDirectory, { recursive: true });
+    const markdownPath = join(directory, 'shared.md');
+    const localMarkdown = '# Local provider pending\n';
+    await writeFile(markdownPath, localMarkdown, 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+    const localHash = markdownHash(localMarkdown);
+    const staleRemoteMarkdown = '# Remote still stale\n';
+    const exportServer = await startNativeExportServer(new Map([
+      ['doc_native:branch_native', staleRemoteMarkdown],
+    ]));
+
+    await writeFile(join(appSupportDirectory, 'shared-document-bindings.json'), JSON.stringify({
+      schemaVersion: 1,
+      bindings: {
+        [canonicalMarkdownPath]: {
+          schemaVersion: 1,
+          filePath: canonicalMarkdownPath,
+          docId: 'doc_native',
+          branchId: 'branch_native',
+          mode: 'edit',
+          token: null,
+          appEditorURL: 'https://app.example.test/collab?docId=doc_native&branchId=branch_native&mode=edit&clientKind=app&nativeShell=markedit',
+          localDocId: 'local_native',
+          baselineHash: localHash,
+          createdAt: '2026-05-18T12:00:00Z',
+          updatedAt: '2026-05-18T12:00:00Z',
+        },
+      },
+    }), 'utf8');
+    await writeFile(join(appSupportDirectory, 'projection-baselines.json'), JSON.stringify({
+      schemaVersion: 1,
+      baselines: {
+        [canonicalMarkdownPath]: {
+          schemaVersion: 1,
+          lastProjectedMarkdown: localMarkdown,
+          lastProjectedHash: localHash,
+          lastProviderStateFingerprint: `provider-ytext:${localHash}`,
+          updatedAt: '2026-05-18T12:00:00Z',
+        },
+      },
+    }), 'utf8');
+
+    const env = {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_CONTROL_PLANE_API_URL: exportServer.apiUrl,
+      MARKLAB_USER_TOKEN: 'ml_user_session_test',
+    };
+
+    try {
+      const status = await runCli(['status', markdownPath, '--json'], env, 30000);
+      expectCliOk(status);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        ok: true,
+        path: canonicalMarkdownPath,
+        shared: true,
+        syncState: 'provider_pending',
+        observedHash: localHash,
+        providerVerification: {
+          status: 'pending',
+          exportedHash: markdownHash(staleRemoteMarkdown),
+        },
+      });
+
+      const wait = await runCli(['wait', markdownPath, '--synced', '--json', '--timeout', '25'], env, 30000);
+      expect(wait.code).toBe(6);
+      expect(JSON.parse(wait.stdout)).toMatchObject({
+        ok: false,
+        code: 'sync_timeout',
+        details: {
+          syncState: 'provider_pending',
+          observedHash: localHash,
+        },
+      });
+
+      exportServer.requests.length = 0;
+    } finally {
+      await exportServer.close().catch(() => undefined);
+    }
+
+    const matchedExportServer = await startNativeExportServer(new Map([
+      ['doc_native:branch_native', localMarkdown],
+    ]));
+    try {
+      const matched = await runCli(['status', markdownPath, '--json'], {
+        ...env,
+        MARKLAB_CONTROL_PLANE_API_URL: matchedExportServer.apiUrl,
+      }, 30000);
+      expectCliOk(matched);
+      expect(JSON.parse(matched.stdout)).toMatchObject({
+        ok: true,
+        syncState: 'synced',
+        providerVerification: {
+          status: 'verified',
+          exportedHash: localHash,
+        },
+      });
+    } finally {
+      await matchedExportServer.close();
+    }
   });
 
   it('parses foreground, background, status, and stop commands', () => {

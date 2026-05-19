@@ -654,6 +654,24 @@ async function writeNativeShareRequest({ markdownPath, role }, env = process.env
   return { ...paths, request };
 }
 
+async function writeNativeJoinRequest({ link, targetPath }, env = process.env) {
+  const requestId = nativeCliRequestId();
+  const paths = nativeCliRequestPaths(requestId, env);
+  await mkdir(paths.requestsDir, { recursive: true });
+  await mkdir(paths.responsesDir, { recursive: true });
+  const request = {
+    schemaVersion: 1,
+    requestId,
+    action: 'join',
+    file: targetPath,
+    role: 'edit',
+    link,
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(paths.requestPath, JSON.stringify(request, null, 2), { mode: 0o600 });
+  return { ...paths, request };
+}
+
 async function waitForNativeShareResponse(responsePath, timeoutMs) {
   const startedAt = Date.now();
   let lastError;
@@ -716,6 +734,27 @@ async function requestNativeShareLink({ markdownPath, role }, env = process.env)
   return { ...response, opened: Boolean(response.opened ?? opened) };
 }
 
+async function requestNativeJoin({ link, targetPath }, env = process.env) {
+  const pending = await writeNativeJoinRequest({ link, targetPath }, env);
+  let opened = false;
+  let response;
+  try {
+    opened = await openNativeCliRequest(pending.requestId, env);
+    response = await waitForNativeShareResponse(pending.responsePath, nativeCliRequestTimeoutMs(env));
+  } catch (error) {
+    await rm(pending.requestPath, { force: true });
+    throw error;
+  }
+  if (response?.ok !== true) {
+    throw new AgentCommandError(
+      response?.code || 'native_join_failed',
+      response?.message || 'MarkLab.app could not join the shared document.',
+      response?.details ?? { requestId: pending.requestId },
+    );
+  }
+  return { ...response, opened: Boolean(response.opened ?? opened) };
+}
+
 async function readJsonFile(filePath, fallback) {
   try {
     return JSON.parse(await readFile(filePath, 'utf8'));
@@ -751,6 +790,58 @@ function summarizeNativeBinding(binding) {
   };
 }
 
+function providerVerificationConfig(binding, env = process.env) {
+  const apiUrl = env.MARKLAB_CONTROL_PLANE_API_URL?.trim() || env.MARKLAB_PUBLIC_API_URL?.trim() || '';
+  const bearerToken = env.MARKLAB_USER_TOKEN?.trim() || '';
+  if (!apiUrl || !bearerToken || !binding?.docId || !binding?.branchId) return null;
+  return {
+    apiUrl: apiUrl.replace(/\/+$/u, ''),
+    bearerToken,
+    docId: binding.docId,
+    branchId: binding.branchId,
+  };
+}
+
+async function verifyNativeProviderExport(binding, observedHash, env = process.env) {
+  const config = providerVerificationConfig(binding, env);
+  if (!config) return null;
+  const timeoutMs = Number(env.MARKLAB_NATIVE_PROVIDER_VERIFY_TIMEOUT_MS ?? 10000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000);
+  try {
+    const response = await fetch(
+      `${config.apiUrl}/api/docs/${encodeURIComponent(config.docId)}/branches/${encodeURIComponent(config.branchId)}/export.md`,
+      {
+        headers: { Authorization: `Bearer ${config.bearerToken}` },
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) {
+      return {
+        status: 'unavailable',
+        httpStatus: response.status,
+        exportedHash: null,
+      };
+    }
+    const markdown = await response.text();
+    const exportedHash = markdownHash(markdown);
+    return {
+      status: exportedHash === observedHash ? 'verified' : 'pending',
+      httpStatus: response.status,
+      exportedHash,
+    };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      httpStatus: null,
+      exportedHash: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function readNativeRelayState(file, env = process.env) {
   const markdownPath = await resolveMarkdownFile(file);
   const appSupport = nativeAppSupportDir(env);
@@ -770,12 +861,18 @@ async function readNativeRelayState(file, env = process.env) {
   let syncState = shared ? 'pending' : 'local';
   if (hasOpenConflict) syncState = 'conflict';
   else if (shared && baseline?.lastProjectedHash === observedHash) syncState = 'synced';
+  const providerVerification = syncState === 'synced'
+    ? await verifyNativeProviderExport(binding, observedHash, env)
+    : null;
+  if (providerVerification?.status === 'pending') syncState = 'provider_pending';
+  else if (providerVerification?.status === 'unavailable') syncState = 'provider_unknown';
   return {
     path: markdownPath,
     appSupportDir: appSupport,
     shared,
     syncState,
     observedHash,
+    providerVerification,
     docId: binding?.docId ?? null,
     branchId: binding?.branchId ?? null,
     binding: summarizeNativeBinding(binding),
@@ -817,6 +914,7 @@ export function parseHostedCollabLink(link) {
     branchId,
     token,
     mode,
+    suggestedFilename: url.searchParams.get('filename') || url.searchParams.get('name') || null,
   };
 }
 
@@ -1693,9 +1791,85 @@ export function safeRelayJoinFilename(name) {
   return base.toLowerCase().endsWith('.md') ? base : `${base}.md`;
 }
 
+function safeHostedJoinFilename(name, docId) {
+  const candidate = String(name ?? '').trim();
+  const fallback = `shared-${docId}.md`;
+  if (!candidate) return fallback;
+  return safeRelayJoinFilename(candidate);
+}
+
+async function resolveHostedCollabJoinTarget(input, parsed) {
+  if (input.file && (input.dir || input.pickDir)) throw new Error('join accepts either a target file, --dir, or --pick-dir, not more than one.');
+  if (input.dir && input.pickDir) throw new Error('join accepts either --dir or --pick-dir, not both.');
+  if (!input.file && !input.dir && !input.pickDir) return null;
+
+  let target;
+  if (input.dir || input.pickDir) {
+    const directory = resolve(input.dir ?? await pickJoinDirectory());
+    if (!existsSync(directory)) {
+      if (!input.createDir) throw new Error(`${directory} does not exist. Re-run with --create-dir to create it.`);
+      await mkdir(directory, { recursive: true });
+    } else {
+      const { stat } = await import('node:fs/promises');
+      const directoryStat = await stat(directory);
+      if (!directoryStat.isDirectory()) throw new Error(`${directory} is not a directory.`);
+    }
+    target = resolve(directory, safeHostedJoinFilename(input.name ?? parsed.suggestedFilename, parsed.docId));
+  } else {
+    target = resolve(input.file);
+    await mkdir(dirname(target), { recursive: true });
+  }
+
+  if (existsSync(target)) {
+    const existing = await readFile(target, 'utf8');
+    if (existing.length > 0) {
+      if (input.cancel) {
+        return { cancelled: true, target };
+      }
+      if (input.review) throw new Error('Review conflict is not available for hosted app joins yet. No file was changed.');
+      if (input.replace) {
+        throw new Error('Replace is not available for hosted app joins yet. Choose an empty file or empty folder target so MarkLab can bind the shared document safely.');
+      }
+      throw new Error('Target file is non-empty. Choose an empty file, an empty folder target, or reopen the existing bound shared file in MarkLab.app.');
+    }
+  }
+  return { cancelled: false, target };
+}
+
 async function joinCommand(input) {
   if (!input.link) throw new Error('join requires an edit link');
   if (isCollabURL(input.link)) {
+    const parsed = parseHostedCollabLink(input.link);
+    const target = await resolveHostedCollabJoinTarget(input, parsed);
+    if (target?.cancelled) {
+      if (input.json) {
+        writeAgentJson(agentSuccess({ cancelled: true, path: target.target }));
+        return;
+      }
+      console.log('Join cancelled. No file was changed.');
+      return;
+    }
+    if (target?.target) {
+      const response = await requestNativeJoin({ link: input.link, targetPath: target.target });
+      const result = agentSuccess({
+        action: response.action ?? 'native_join_started',
+        path: response.file ?? target.target,
+        docId: response.docId ?? parsed.docId,
+        branchId: response.branchId ?? parsed.branchId,
+        opened: Boolean(response.opened),
+        requestId: response.requestId ?? null,
+        nextStep: 'MarkLab.app is syncing this shared document in the background.',
+      });
+      if (input.json) {
+        writeAgentJson(result);
+        return;
+      }
+      console.log(`Joined shared document ${result.docId}`);
+      console.log(`Local Markdown file: ${result.path}`);
+      console.log(result.nextStep);
+      return;
+    }
+
     const deepLink = buildNativeJoinDeepLink(input.link);
     const opened = await openExternalURL(deepLink);
     if (input.json) {

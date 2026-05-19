@@ -4,7 +4,7 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import { z } from 'zod';
 import { toRoomName } from '../collab/persistence';
 import type { DbPool } from '../db/client';
-import type { HttpAppOptions } from '../http/app';
+import type { CollabMarkdownSnapshot, HttpAppOptions } from '../http/app';
 import { createDoc } from '../services/doc-create';
 import { readBranchState } from '../services/doc-read';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
@@ -107,16 +107,31 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
       const branchId = requiredParam(req, 'branchId');
 
       await options.auth?.requireDocumentAccess(req, docId, branchId, 'read');
-      await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const writeAccess = await optionalWriteAccess(options, req, docId, branchId);
-      const exported = writeAccess
-        ? await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save', versionActorFromAccess(writeAccess))
-        : await readBranchState(pool, docId, branchId);
+      const liveSnapshot = await options.collabSnapshotService?.readCurrentMarkdownSnapshot({ docId, branchId });
+      let exported: CollabMarkdownSnapshot | null = liveSnapshot ?? null;
+      if (!exported) {
+        await options.flushCollabDocument?.(toRoomName(docId, branchId));
+        const writeAccess = await optionalWriteAccess(options, req, docId, branchId);
+        if (writeAccess) {
+          const flushed = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save', versionActorFromAccess(writeAccess));
+          exported = {
+            docId,
+            branchId: flushed.branchId,
+            versionId: flushed.versionId,
+            versionNumber: flushed.versionNumber,
+            hash: flushed.hash,
+            markdown: flushed.markdown,
+          };
+        } else {
+          exported = await readBranchState(pool, docId, branchId);
+        }
+      }
 
-      const metadata = await pool.query<{ title: string; branch_slug: string }>(
-        `select d.title, b.slug as branch_slug
+      const metadata = await pool.query<{ title: string; branch_slug: string; version_number: number | null }>(
+        `select d.title, b.slug as branch_slug, v.version_number
            from documents d
            join document_branches b on b.doc_id = d.id
+           left join document_versions v on v.id = b.head_version_id
           where d.id = $1 and b.id = $2 and b.is_archived = false`,
         [docId, branchId],
       );
@@ -132,7 +147,7 @@ export function createImportExportRoutes(pool: DbPool, options: HttpAppOptions =
         title: metadataRow.title,
         docId,
         branchSlug: metadataRow.branch_slug,
-        versionNumber: exported.versionNumber,
+        versionNumber: exported.versionNumber ?? metadataRow.version_number ?? 0,
         exportedAt: new Date(),
         hash: exported.hash,
       });

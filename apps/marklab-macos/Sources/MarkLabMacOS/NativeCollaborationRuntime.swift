@@ -123,9 +123,11 @@ public final class FileNativeProjectionBaselineStore: NativeProjectionBaselineSt
     self.fileManager = fileManager
   }
 
-  public static func defaultStore(fileManager: FileManager = .default) -> FileNativeProjectionBaselineStore {
-    let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MarkLab", directoryHint: .isDirectory)
+  public static func defaultStore(
+    appSupportDirectory: URL? = nil,
+    fileManager: FileManager = .default
+  ) -> FileNativeProjectionBaselineStore {
+    let appSupport = appSupportDirectory ?? NativeAppSupportDirectory.url(fileManager: fileManager)
     return FileNativeProjectionBaselineStore(fileURL: appSupport.appending(path: "projection-baselines.json"), fileManager: fileManager)
   }
 

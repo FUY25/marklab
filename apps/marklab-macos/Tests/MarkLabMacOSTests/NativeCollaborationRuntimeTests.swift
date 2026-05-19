@@ -223,6 +223,52 @@ struct NativeCollaborationRuntimeTests {
     #expect(!loaded.updatedAt.isEmpty)
   }
 
+  @Test("default native stores share the configured MarkLab app support directory")
+  func defaultStoresUseConfiguredAppSupportDirectory() throws {
+    let directory = try TemporaryDirectory()
+    let appSupport = NativeAppSupportDirectory.url(environment: [
+      "MARKLAB_APP_SUPPORT_DIR": directory.url.path,
+    ])
+
+    let baselineStore = FileNativeProjectionBaselineStore.defaultStore(appSupportDirectory: appSupport)
+    let bindingStore = FileNativeSharedDocumentBindingStore.defaultStore(appSupportDirectory: appSupport)
+    let conflictStore = NativeConflictStore.defaultStore(appSupportDirectory: appSupport)
+    let fileURL = directory.url.appending(path: "joined.md")
+    try Data("# Joined\n".utf8).write(to: fileURL)
+
+    try baselineStore.saveBaseline(
+      NativeProjectionBaselineRecord(
+        markdown: "# Joined\n",
+        providerStateFingerprint: NativeProjectionBaselineRecord.providerYTextFingerprint("# Joined\n")
+      ),
+      fileURL: fileURL
+    )
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: fileURL,
+        link: NativeSharedDocumentLink(
+          originalURL: URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&token=ml_access&mode=edit")!,
+          docId: "doc_1",
+          branchId: "branch_1",
+          token: "ml_access",
+          mode: .edit,
+          suggestedFilename: "joined.md"
+        ),
+        appEditorURL: URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app")!,
+        baselineMarkdown: "# Joined\n"
+      ),
+      fileURL: fileURL
+    )
+    try conflictStore.save(
+      MarkLabConflict(localMarkdown: "# Local\n", sharedMarkdown: "# Shared\n", baselineMarkdown: "# Joined\n"),
+      fileURL: fileURL
+    )
+
+    #expect(FileManager.default.fileExists(atPath: directory.url.appending(path: "projection-baselines.json").path))
+    #expect(FileManager.default.fileExists(atPath: directory.url.appending(path: "shared-document-bindings.json").path))
+    #expect(FileManager.default.fileExists(atPath: directory.url.appending(path: "conflicts", directoryHint: .isDirectory).path))
+  }
+
   @Test("opens conflict instead of silently applying when disk and provider both changed")
   func detectsBothSidesChangedConflict() throws {
     let directory = try TemporaryDirectory()

@@ -98,9 +98,11 @@ public final class FileNativeSharedDocumentBindingStore: NativeSharedDocumentBin
     self.fileManager = fileManager
   }
 
-  public static func defaultStore(fileManager: FileManager = .default) -> FileNativeSharedDocumentBindingStore {
-    let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MarkLab", directoryHint: .isDirectory)
+  public static func defaultStore(
+    appSupportDirectory: URL? = nil,
+    fileManager: FileManager = .default
+  ) -> FileNativeSharedDocumentBindingStore {
+    let appSupport = appSupportDirectory ?? NativeAppSupportDirectory.url(fileManager: fileManager)
     return FileNativeSharedDocumentBindingStore(fileURL: appSupport.appending(path: "shared-document-bindings.json"), fileManager: fileManager)
   }
 

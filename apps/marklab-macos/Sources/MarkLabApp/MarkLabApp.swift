@@ -62,7 +62,7 @@ final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     menuBarController = MarkLabMenuBarController()
     let cliRequestId = MarkLabCLIRequestLaunch.requestId(from: CommandLine.arguments)
-    let cliStore = FileNativeCLIShareRequestStore(appSupportDirectory: Self.appSupportDirectory())
+    let cliStore = FileNativeCLIShareRequestStore(appSupportDirectory: NativeAppSupportDirectory.url())
     let cliProcessor = NativeCLIShareRequestProcessor(
       store: cliStore,
       shareService: NativeCLIShareAppService(backgroundHost: .shared) {
@@ -109,13 +109,6 @@ final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private static func appSupportDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
-    if let override = environment["MARKLAB_APP_SUPPORT_DIR"], !override.isEmpty {
-      return URL(fileURLWithPath: override)
-    }
-    return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MarkLab", directoryHint: .isDirectory)
-  }
 }
 
 enum MarkLabLaunchFile {
@@ -1525,6 +1518,20 @@ final class NativeCLIShareAppService: NativeCLIShareService {
     let result = try await model.createShareLinkForCLI(fileURL: request.fileURL, role: request.role)
     backgroundHost.retain(model, fileURL: request.fileURL)
     return result
+  }
+
+  func joinSharedDocument(for request: NativeCLIJoinServiceRequest) async throws -> NativeCLIJoinServiceResult {
+    let key = canonicalKey(request.fileURL)
+    while inFlightFileKeys.contains(key) {
+      try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    inFlightFileKeys.insert(key)
+    defer { inFlightFileKeys.remove(key) }
+    let model = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL) ?? makeModel()
+    let link = try NativeSharedDocumentLink.parse(request.link)
+    try model.joinSharedDocument(link: link, localFileURL: request.fileURL)
+    backgroundHost.retain(model, fileURL: request.fileURL)
+    return NativeCLIJoinServiceResult(docId: link.docId, branchId: link.branchId, opened: false)
   }
 
   private func canonicalKey(_ fileURL: URL) -> String {
