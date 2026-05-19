@@ -4,7 +4,9 @@ Date: 2026-05-11
 
 Status: Stage-level implementation roadmap. Each plan is intentionally smaller than the full product spec and must produce a testable increment.
 
-Update, 2026-05-18: Plans 1A through 5 are closed for the current private alpha baseline. Plan 6 is implemented for the native relay pilot except for visual/manual clean-install packaging checks. Plan 7 is implemented only as manual/free billing infrastructure readiness; Stripe, paid-plan selection, and admin plan mutation are intentionally deferred. Plan 8 now has the repo-side launch package, runbook, and smoke script; live Fly deploy, Neon migration, and recorded manual product smoke remain operator launch-gate actions. There is no numbered implementation plan after Plan 8 in this roadmap.
+Update, 2026-05-18: Plans 1A through 5 are closed for the current private alpha baseline. Plan 6 is implemented for the native relay pilot except for visual/manual clean-install packaging checks. Plan 7 is implemented only as manual/free billing infrastructure readiness; Stripe, paid-plan selection, and admin plan mutation are intentionally deferred. Plan 8 now has the repo-side launch package, runbook, and smoke script; live Fly deploy, Neon migration, and recorded manual product smoke remain operator launch-gate actions.
+
+Update, 2026-05-19: Plan 9 was added after manual pilot testing exposed a product gap in the CLI/native lifecycle. The new CLI must ask MarkLab.app to create edit/view links directly, MarkLab.app must keep shared files syncing in the background after editor windows close, and the menu bar should show active shared documents with status and last sync time. This is not a return to the archived local daemon route.
 
 ## Why This Should Converge
 
@@ -30,6 +32,7 @@ The important rule is that downstream plans are living execution documents, whil
 | 6 | `2026-05-11-packaging-cli-distribution-docs.md` | CLI, packaging, user docs, diagnostics | Deploy readiness |
 | 7 | `2026-05-11-billing-subscription-seats.md` | Manual/free subscription records and billing-readiness hooks now; Stripe later | Paid/public launch |
 | 8 | `2026-05-11-production-deploy-alpha-launch.md` | Production deploy, smoke, rollback, launch gate | Alpha launch |
+| 9 | `2026-05-19-native-background-sharing-cli-menu-bar.md` | Native background `share --edit|--view`, persistent sync after window close, menu bar status | Pilot usability |
 
 ## Sequencing
 
@@ -44,10 +47,11 @@ Recommended execution order matches the Order column in the table above. Plans a
 7. `2026-05-11-packaging-cli-distribution-docs.md` (6).
 8. `2026-05-11-billing-subscription-seats.md` (7) if public paid launch is in scope for this release; otherwise keep free/manual subscription mode.
 9. `2026-05-11-production-deploy-alpha-launch.md` (8).
+10. `2026-05-19-native-background-sharing-cli-menu-bar.md` (9). Added after private pilot testing; execute before broad pilot use so AI agents and app users can create links without hand-clicking the native inspector.
 
 The billing plan (7) can be deferred for a private free alpha, but the control-plane plan (2) still must include the data model concepts for seats, subscriptions, and guest quotas because provider-token issuance depends on them.
 
-For the current private alpha, execute Plan 7 in manual/free mode only and keep Stripe/payment UX disabled. The next real launch gate is Plan 8's recorded production smoke, not a new Plan 9.
+For the current private alpha, execute Plan 7 in manual/free mode only and keep Stripe/payment UX disabled. Plan 8's recorded production smoke remains the infrastructure launch gate. Plan 9 is a native usability and automation gate for pilot users, not a billing or infrastructure expansion.
 
 ## Downstream Refresh Rule
 

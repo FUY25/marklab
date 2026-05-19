@@ -69,6 +69,21 @@ const legacyLocalDaemonCommands = new Set([
   'stop',
   '__serve',
 ]);
+const packagedLegacyRuntimeCommands = new Set([
+  'open',
+  'share',
+  'share-state',
+  'create-link',
+  'revoke-link',
+  'join',
+  'status',
+  'recent',
+  'wait',
+  'save-version',
+  'versions',
+  'conflict',
+  '__serve',
+]);
 
 export function printUsage() {
   console.log(`Usage:
@@ -117,6 +132,20 @@ function assertLegacyCliEnabled(input, env = process.env) {
     'legacy_cli_disabled',
     `marklab ${input.command} is disabled by default because this CLI drives the archived local-daemon workflow. Use MarkLab.app with the hosted /collab relay/Y-Sweet pilot. Set ${legacyCliOptInEnv}=1 only for archived compatibility testing.`,
     { command: input.command, optInEnv: legacyCliOptInEnv },
+  );
+}
+
+export function assertLegacyCliRuntimeAvailable(input, env = process.env, activeRepoRoot = repoRoot) {
+  if (!legacyCliEnabled(env)) return;
+  if (!packagedLegacyRuntimeCommands.has(input.command)) return;
+  if (input.command === 'join' && input.link && isCollabURL(input.link)) return;
+  const hasLegacyAppRuntime = existsSync(resolve(activeRepoRoot, 'apps/api')) && existsSync(resolve(activeRepoRoot, 'apps/web'));
+  if (basename(activeRepoRoot) !== 'runtime' && hasLegacyAppRuntime) return;
+
+  throw new AgentCommandError(
+    'legacy_cli_disabled',
+    'The packaged @marklab/cli no longer bundles the archived daemon runtime dependencies. Use the default MarkLab.app hosted /collab path, or run archived daemon compatibility tests from a repository checkout with workspace dependencies installed.',
+    { command: input.command, runtimeRoot: activeRepoRoot, optInEnv: legacyCliOptInEnv },
   );
 }
 
@@ -1701,6 +1730,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   assertLegacyCliEnabled(input);
+  assertLegacyCliRuntimeAvailable(input);
 
   if (!legacyCliEnabled() && input.command === 'open') {
     await nativeOpenCommand(input);

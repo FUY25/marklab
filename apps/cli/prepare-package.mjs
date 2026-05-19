@@ -9,8 +9,6 @@ const packageJsonPath = resolve(cliRoot, 'package.json');
 const packageJsonBackupPath = resolve(cliRoot, '.package-json.prepack-backup');
 
 const runtimeEntries = [
-  ['apps/api', 'apps/api'],
-  ['apps/web', 'apps/web'],
   ['packages/collab-editor', 'packages/collab-editor'],
   ['packages/markdown', 'packages/markdown'],
   ['packages/shared', 'packages/shared'],

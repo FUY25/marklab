@@ -10,10 +10,18 @@ MarkLab watches local Markdown files and syncs them through the native relay app
 - Agents are not collaborators in the presence UI; they work through the local file.
 - For broad edits, ask for or confirm an external checkpoint until the native hosted Versions UI is complete.
 
-The current normal CLI command only opens hosted edit links in MarkLab.app:
+The current normal CLI surface routes files and hosted edit links through MarkLab.app:
 
 ```bash
+marklab doctor --json
+marklab open <file.md>
+marklab share <file.md>
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
+marklab status <file.md> --json
+marklab wait <file.md> --synced --json
+marklab conflict <file.md> --json
 ```
 
-Archived daemon commands such as `status`, `wait`, `save-version`, and `conflict` require `MARKLAB_ENABLE_LEGACY_CLI=1`.
+`open` and `share` open the local file in MarkLab.app; `share` does not create a hidden daemon relay link. MarkLab.app owns Start Sharing, workspace-owned document creation, and access-link creation. `status`, `wait`, and `conflict` read MarkLab.app support files for native sync/conflict state.
+
+Archived daemon commands such as `open --background`, `create-link`, `revoke-link`, `stop`, `save-version`, and `versions` require `MARKLAB_ENABLE_LEGACY_CLI=1`; packaged `@marklab/cli` intentionally does not bundle that old runtime.

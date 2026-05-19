@@ -32,7 +32,8 @@ MARKLAB_ENABLE_LEGACY_CLI=1 npx -y @marklab/cli join '<legacy-relay-link>' --pic
 
 - Node.js 20.19 or newer, Node.js 22.12 or newer, or Node.js 24 or newer.
 - A modern browser.
-- The npm package includes the CLI runtime for hosted `/collab` link opening plus archived compatibility commands. Developers working from the repository checkout can still use pnpm for local development.
+- The npm package includes the CLI runtime for hosted `/collab` link opening. It no longer installs the Hocuspocus/Milkdown runtime dependencies for the archived daemon path.
+- Developers working from the repository checkout can still run archived daemon compatibility tests with pnpm workspace dependencies installed.
 
 Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pnpm, Git, or a specific Markdown editor.
 
@@ -66,6 +67,8 @@ Use `marklab --help`, `marklab open --help`, `marklab share --help`, or `marklab
 ## Archived Daemon Behavior
 
 The following behavior applies only when `MARKLAB_ENABLE_LEGACY_CLI=1` is set.
+
+The packaged `npx -y @marklab/cli` build intentionally blocks these archived daemon commands because it no longer bundles the old editor/relay runtime dependencies. Use a repository checkout with workspace dependencies installed if you need to test this compatibility path.
 
 Host online means the archived MarkLab daemon is running and connected.
 

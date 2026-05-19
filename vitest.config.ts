@@ -1,4 +1,8 @@
 import { defineConfig } from 'vitest/config';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -16,6 +20,6 @@ export default defineConfig({
     // the repo root as well as via `pnpm --filter @marklab/collab-web test`.
     // The shim early-returns when `window` is undefined, so it is a no-op
     // for node-environment tests.
-    setupFiles: ['./apps/collab-web/vitest.setup.ts'],
+    setupFiles: [resolve(repoRoot, 'apps/collab-web/vitest.setup.ts')],
   },
 });

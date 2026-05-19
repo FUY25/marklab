@@ -120,7 +120,8 @@ describe('packed @marklab/cli install smoke', () => {
     expect(body.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: 'milkdown_headless_runtime',
-        status: 'ok',
+        status: 'warning',
+        message: expect.stringContaining('Skipped'),
       }),
     ]));
   }, 120000);

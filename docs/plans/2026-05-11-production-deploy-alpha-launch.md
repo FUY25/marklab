@@ -38,7 +38,7 @@ Execution note, 2026-05-18: the repo-side alpha launch package is now in place: 
 - Provider public URL prefix is `https://<fly-app>.fly.dev` in process mode and must be root-mounted; path-prefixed public provider URLs are rejected.
 - Fly volume `marklab_ysweet_data` is mounted at `/data`, with provider store path `/data/ysweet`. Local provider data is `.marklab-provider-data/ysweet`.
 - Provider secrets are `MARKLAB_YSWEET_AUTH` (private key forwarded to child as `Y_SWEET_AUTH`, not argv) and `MARKLAB_YSWEET_SERVER_TOKEN` (SDK/check_store token). Both come from `y-sweet gen-auth --json`.
-- `/healthz` must show `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`. Schema readiness includes provider/session tables and required provider columns.
+- `/healthz` must show `database.ready=true`, `schema.ready=true`, `relay.required=false` for the default production pilot, `provider.ready=true`, and `provider.storeReady=true`. Schema readiness includes provider/session tables and required provider columns.
 - Docker image build acceptance may be blocked locally if the Docker daemon is not running; record that separately from Fly deploy credentials.
 
 ## Control Plane Facts From Plan 2
@@ -54,7 +54,7 @@ Execution note, 2026-05-18: the repo-side alpha launch package is now in place: 
 - The alpha browser surface is co-located with the API process. `infra/docker/api.Dockerfile` builds `apps/collab-web`, copies `apps/collab-web/dist`, and sets `MARKLAB_COLLAB_WEB_DIST_DIR=/app/apps/collab-web/dist`.
 - Static collab-web assets are served under `/collab-web/`. Browser collaborator routes are `/collab?docId=...&branchId=...&token=...&mode=edit|view`, and workspace settings are `/workspaces/:workspaceId/settings`.
 - Plan 3's automated browser suite includes both memory-provider collaboration tests and a real API-root Y-Sweet websocket browser smoke; production still needs the same path verified against deployed infrastructure.
-- Production smoke must verify `/collab` serves the collab-web entry, `/collab-web/assets/...` assets load, existing `apps/web` routes such as `/relay/...` still load, view mode opens without provider websocket traffic, and edit mode refresh denial surfaces unavailable.
+- Production smoke must verify `/collab` serves the collab-web entry, `/collab-web/assets/...` assets load, archived `apps/web` routes such as `/relay/...` are not part of the production acceptance path, view mode opens without provider websocket traffic, and edit mode refresh denial surfaces unavailable.
 
 ## Native Facts From Plans 4 And 5.5
 
@@ -121,7 +121,7 @@ Execution note, 2026-05-18: the repo-side alpha launch package is now in place: 
 - [ ] Apply `apps/api/src/db/schema.sql` or the migration command produced by earlier plans to Neon.
 - [x] Record whether migrations are one-shot SQL, an app-owned migration command, or a CI deploy step.
 - [ ] Verify required tables and columns exist.
-- [ ] Acceptance: `/healthz` reports `database.ready=true`, `schema.ready=true`, `relay.ready=true`, `provider.ready=true`, and `provider.storeReady=true`; the database migration task does not pass the launch gate unless relay and provider readiness also remain green.
+- [ ] Acceptance: `/healthz` reports `database.ready=true`, `schema.ready=true`, `relay.required=false`, `provider.ready=true`, and `provider.storeReady=true`; the database migration task does not pass the launch gate unless provider readiness also remains green.
 
 ### Task 5: Provider Persistence Gate
 
@@ -149,7 +149,7 @@ Execution note, 2026-05-18: the repo-side alpha launch package is now in place: 
 
 - [ ] Run browser edit smoke.
 - [ ] Run view-link no-provider-websocket smoke.
-- [ ] Run collab-web static route smoke for `/collab`, `/collab-web/assets/...`, and an existing `apps/web` route such as `/relay/...`.
+- [ ] Run collab-web static route smoke for `/collab` and `/collab-web/assets/...`; do not include archived `apps/web` routes such as `/relay/...` in production acceptance.
 - [ ] Run workspace-owned document smoke: login, create workspace, create/import document with `workspaceId`, list it through `/api/workspaces/:workspaceId/documents`, create edit/view grants.
 - [ ] Run native host plus browser guest smoke.
 - [ ] Run native app-kind spoofing smoke: public browser/cookie-authenticated traffic with `clientKind=app` is downgraded, while packaged MarkLab.app bearer plus `X-MarkLab-Native-App: 1` is preserved as app kind.

@@ -100,12 +100,7 @@ fly secrets set \
   MARKLAB_REQUIRE_AUTH='true' \
   MARKLAB_PUBLIC_WEB_URL='https://marklab-relay-alpha.fly.dev' \
   MARKLAB_PUBLIC_API_URL='https://marklab-relay-alpha.fly.dev' \
-  MARKLAB_PUBLIC_RELAY_WS_URL='wss://marklab-relay-alpha.fly.dev/relay' \
   MARKLAB_ALLOWED_ORIGINS='https://marklab-relay-alpha.fly.dev' \
-  MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS='86400' \
-  MARKLAB_RELAY_HOST_LEASE_SECONDS='30' \
-  MARKLAB_RELAY_MAX_ROOM_CONNECTIONS='32' \
-  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576' \
   MARKLAB_YSWEET_AUTH='<private_key-from-y-sweet-gen-auth>' \
   MARKLAB_YSWEET_SERVER_TOKEN='<server_token-from-y-sweet-gen-auth>'
 ```
@@ -118,18 +113,13 @@ fly secrets set \
   MARKLAB_REQUIRE_AUTH='true' \
   MARKLAB_PUBLIC_WEB_URL='https://<fly-app>.fly.dev' \
   MARKLAB_PUBLIC_API_URL='https://<fly-app>.fly.dev' \
-  MARKLAB_PUBLIC_RELAY_WS_URL='wss://<fly-app>.fly.dev/relay' \
   MARKLAB_ALLOWED_ORIGINS='https://<fly-app>.fly.dev' \
-  MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS='86400' \
-  MARKLAB_RELAY_HOST_LEASE_SECONDS='30' \
-  MARKLAB_RELAY_MAX_ROOM_CONNECTIONS='32' \
-  MARKLAB_RELAY_MAX_MESSAGE_BYTES='1048576' \
   MARKLAB_YSWEET_PUBLIC_URL_PREFIX='https://<fly-app>.fly.dev' \
   MARKLAB_YSWEET_AUTH='<private_key-from-y-sweet-gen-auth>' \
   MARKLAB_YSWEET_SERVER_TOKEN='<server_token-from-y-sweet-gen-auth>'
 ```
 
-`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, relay websocket joins, and Y-Sweet client token websocket URLs must resolve to the same deployed host unless a later custom-domain plan changes all of them together.
+`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, and Y-Sweet client token websocket URLs must resolve to the same deployed host unless a later custom-domain plan changes all of them together. The archived `/relay` daemon route is not configured for the production pilot unless `MARKLAB_ENABLE_LEGACY_RELAY=true` is deliberately added for compatibility testing.
 
 Provider env defaults that are not secrets live in `fly.toml`: `MARKLAB_YSWEET_PROVIDER_MODE=process`, `MARKLAB_YSWEET_SERVER_URL=http://127.0.0.1:8080`, `MARKLAB_YSWEET_STORE_PATH=/data/ysweet`, `MARKLAB_YSWEET_HOST=127.0.0.1`, `MARKLAB_YSWEET_PORT=8080`, `MARKLAB_YSWEET_CHECKPOINT_FREQ_SECONDS=10`, and `MARKLAB_YSWEET_SKIP_GC=false`. Keep `MARKLAB_YSWEET_SKIP_GC=false` while MarkLab pins Y-Sweet 0.9.1; true is rejected because that server version has no `--skip-gc` serve flag.
 
@@ -163,11 +153,11 @@ curl https://marklab-relay-alpha.fly.dev/healthz
 
 The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production must do the same before rollout. Until the API exposes a source-integrated migration command, the operator applies the checked-in schema to Neon directly.
 
-`/healthz` reports process liveness separately from database readiness, schema readiness, relay readiness, and provider readiness. A production response is not alpha-ready unless `ok`, `database.ready`, `schema.ready`, `relay.ready`, `provider.ready`, and `provider.storeReady` are all `true`.
+`/healthz` reports process liveness separately from database readiness, schema readiness, legacy relay readiness, and provider readiness. The current production pilot does not require the archived relay, so a release-ready response has `ok`, `database.ready`, `schema.ready`, `relay.required=false`, `provider.ready`, and `provider.storeReady`.
 
 ## 8. Release Gate
 
-Before an alpha user tries the relay:
+Before an alpha user tries hosted collaboration:
 
 ```bash
 curl https://<fly-app>.fly.dev/healthz

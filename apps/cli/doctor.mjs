@@ -224,6 +224,11 @@ function cliPackageRootFromRuntimeRoot(runtimeRoot) {
   return basename(runtimeRoot) === 'runtime' ? dirname(runtimeRoot) : runtimeRoot;
 }
 
+export function shouldProbeMilkdownRuntime(runtimeRoot = resolveRuntimeRootFromCliDirectory(), env = process.env) {
+  if (!existsSync(resolve(runtimeRoot, 'pnpm-workspace.yaml'))) return false;
+  return basename(runtimeRoot) !== 'runtime' || env.MARKLAB_ENABLE_LEGACY_CLI === '1';
+}
+
 function ensureRuntimeWorkspaceLinks(activeRuntimeRoot) {
   if (!existsSync(resolve(activeRuntimeRoot, 'pnpm-workspace.yaml'))) return false;
   if (basename(activeRuntimeRoot) !== 'runtime') return false;
@@ -513,25 +518,39 @@ export async function runDoctor(input = {}, options = {}) {
     addCheck(checks, 'watcher_temp_change', 'error', message);
   }
 
-  try {
-    const milkdownRuntimeProbe = options.milkdownRuntimeProbe ?? defaultMilkdownRuntimeProbe;
-    const runtime = await milkdownRuntimeProbe({
-      env,
-      timeoutMs: options.milkdownRuntimeTimeoutMs ?? 15_000,
+  const runtimeRoot = options.runtimeRoot ?? resolveRuntimeRootFromCliDirectory();
+  if (!shouldProbeMilkdownRuntime(runtimeRoot, env)) {
+    const message = 'Skipped Milkdown headless runtime probe for the packaged CLI default path.';
+    warnings.push({
+      code: 'milkdown_headless_skipped',
+      message,
+      details: { runtimeRoot, reason: 'legacy_cli_not_enabled' },
     });
-    if (runtime.ok) {
-      addCheck(checks, 'milkdown_headless_runtime', 'ok', 'Milkdown headless runtime initialized successfully.', {
-        ...runtime.details,
+    addCheck(checks, 'milkdown_headless_runtime', 'warning', message, {
+      runtimeRoot,
+      enableWith: 'MARKLAB_ENABLE_LEGACY_CLI=1',
+    });
+  } else {
+    try {
+      const milkdownRuntimeProbe = options.milkdownRuntimeProbe ?? defaultMilkdownRuntimeProbe;
+      const runtime = await milkdownRuntimeProbe({
+        env,
+        timeoutMs: options.milkdownRuntimeTimeoutMs ?? 15_000,
       });
-    } else {
-      const message = 'Milkdown headless runtime failed to initialize.';
-      errors.push({ code: 'milkdown_headless_init_failed', message, details: runtime.details });
-      addCheck(checks, 'milkdown_headless_runtime', 'error', message, runtime.details);
+      if (runtime.ok) {
+        addCheck(checks, 'milkdown_headless_runtime', 'ok', 'Milkdown headless runtime initialized successfully.', {
+          ...runtime.details,
+        });
+      } else {
+        const message = 'Milkdown headless runtime failed to initialize.';
+        errors.push({ code: 'milkdown_headless_init_failed', message, details: runtime.details });
+        addCheck(checks, 'milkdown_headless_runtime', 'error', message, runtime.details);
+      }
+    } catch (error) {
+      const message = 'Milkdown headless runtime probe failed.';
+      errors.push({ code: 'milkdown_headless_unavailable', message, details: { cause: error instanceof Error ? error.message : String(error) } });
+      addCheck(checks, 'milkdown_headless_runtime', 'error', message);
     }
-  } catch (error) {
-    const message = 'Milkdown headless runtime probe failed.';
-    errors.push({ code: 'milkdown_headless_unavailable', message, details: { cause: error instanceof Error ? error.message : String(error) } });
-    addCheck(checks, 'milkdown_headless_runtime', 'error', message);
   }
 
   const relayUrl = env.MARKLAB_RELAY_URL ?? env.MARKLAB_RELAY_WS_URL ?? env.MARKLAB_PUBLIC_RELAY_WS_URL;

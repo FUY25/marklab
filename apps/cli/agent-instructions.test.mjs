@@ -9,8 +9,10 @@ describe('agent instruction commands', () => {
     const codex = await readAgentInstructions('codex');
     expect(codex.target).toBe('codex');
     expect(codex.instructions).toContain('Edit the local `.md` file on disk');
+    expect(codex.instructions).toContain('marklab status <file.md> --json');
+    expect(codex.instructions).toContain('read MarkLab.app support files');
     expect(codex.instructions).toContain("marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'");
-    expect(codex.instructions).toContain('archived local-daemon compatibility commands');
+    expect(codex.instructions).toContain('Archived local-daemon commands');
     expect(codex.instructions).not.toMatch(/direct Yjs|direct Postgres/u);
   });
 

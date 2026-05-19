@@ -14,6 +14,9 @@ export interface RelayProductionConfig {
 export function loadRelayProductionConfig(env: EnvSource = process.env): RelayProductionConfig {
   const apiEnv = loadApiEnv(env);
   if (apiEnv.mode !== 'production') throw new Error('relay production config requires hosted production mode');
+  if (!apiEnv.legacyRelayEnabled) {
+    throw new Error('legacy relay production config requires MARKLAB_ENABLE_LEGACY_RELAY=true');
+  }
 
   return {
     publicWebUrl: apiEnv.publicWebUrl,

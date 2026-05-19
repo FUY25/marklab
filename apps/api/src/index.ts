@@ -81,10 +81,10 @@ async function main() {
     providerTokenService && ysweetProviderConfig?.connectionString
       ? createYSweetSnapshotService({ pool, connectionString: ysweetProviderConfig.connectionString })
       : undefined;
-  const localHostedRelay = Boolean(localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
+  const localHostedRelay = Boolean(env.legacyRelayEnabled && localFileService && env.publicApiUrl && !isLoopbackPublicApiUrl(env.publicApiUrl));
   const hostedRelayService = localHostedRelay ? createRemoteRelayRoomService({ publicApiUrl: env.publicApiUrl }) : undefined;
   const localRelayService =
-    localFileService && !localHostedRelay && process.env.MARKLAB_ENABLE_RELAY === 'true'
+    env.legacyRelayEnabled && localFileService && !localHostedRelay && process.env.MARKLAB_ENABLE_RELAY === 'true'
       ? createInMemoryRelayRoomService()
       : undefined;
   const relayService = hostedRelayService ?? localRelayService;
@@ -242,6 +242,10 @@ async function main() {
 
   httpServer.on('upgrade', (request, socket, head) => {
     if (request.url?.startsWith('/relay')) {
+      if (!env.legacyRelayEnabled) {
+        socket.destroy();
+        return;
+      }
       if (!relay) {
         socket.destroy();
         return;
