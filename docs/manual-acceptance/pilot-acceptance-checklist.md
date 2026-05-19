@@ -592,3 +592,136 @@ If you get stuck early:
 The point of this pass is *signal*, not completion. A 60-minute pass
 that finds the three most important bugs beats a 90-minute pass that
 clears all 27 checkboxes while missing them.
+
+---
+
+## Appendix A — Running this with a remote collaborator
+
+Running this checklist with a friend on a different machine and network
+gives you signal a same-machine test cannot: real WebSocket latency,
+different macOS versions, different browsers, real input methods. This
+appendix describes how to split the work without invalidating the
+checklist.
+
+### Three roles
+
+- **Operator (you):** own the deployment, the Neon shell, and the
+  seeding scripts. Drive all destructive tests (revoke grant, role
+  downgrade, missing file).
+- **Collaborator (your friend):** download MarkLab.app, sign in
+  somehow, and join links you provide. Drive native-app tests.
+- **Both:** test convergence, cursor, presence together over video.
+
+### Login path for your friend (until OIDC is wired)
+
+Three options. Recommended is a mix of A and B.
+
+| Option | What the operator does | What the friend does | When |
+| --- | --- | --- | --- |
+| **A — Operator-seeded user** | Run `scripts/marklab-bootstrap-alpha-user.mjs` for the friend's email. Send them the `ml_user_...` token plus workspace id over a secure channel (Signal, 1Password share, encrypted email). | Set the env vars when launching MarkLab.app, or paste the token into the `/signin` page once it ships. | Native app tests and authenticated browser tests. |
+| **B — Share link only** | Create the edit grant. Send them the `/collab?...` URL. | Open the URL in a browser. No login required. | Browser collaboration tests; works today without a signin UI. |
+| **C — Wait for OIDC** | Don't run with friends yet. | — | If you want this to feel like a real pilot. Pushes the test out. |
+
+For a pre-pilot acceptance pass with one friend, use A for native app
+tests and B for browser-only tests. Both signals matter.
+
+### What to send your friend before the test
+
+1. **A packaged MarkLab.app, not source.** Build once:
+   ```sh
+   swift build -c release --package-path apps/marklab-macos
+   ```
+   then zip the resulting binary, or run the packaging script if it
+   produces a `.app` bundle. Do not ask them to install pnpm, swiftc,
+   and clone the repo. That's developer onboarding, not pilot testing.
+
+2. **A `.env.marklab-pilot` file** (option A only) with their values:
+   ```sh
+   MARKLAB_CONTROL_PLANE_API_URL=https://marklab-relay-alpha.fly.dev
+   MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
+   MARKLAB_USER_TOKEN=ml_user_<their-token>
+   MARKLAB_WORKSPACE_ID=<workspace-uuid>
+   ```
+   They run: `set -a; source ./.env.marklab-pilot; set +a; open -a MarkLab.app`.
+
+3. **One pre-created edit grant URL and one view grant URL** for the
+   browser-side tests. They confirm both URLs load before you start.
+
+4. **A real Markdown file**, not a sterile `pilot.md`. Send something
+   with links, code blocks, lists, and at least some non-ASCII (CJK,
+   emoji). The renderer hardening tests in `bug.md` (#39, #42, #50,
+   #51) exist for a reason; real content exercises them.
+
+### Which checklist rows split across people
+
+The rows don't change — just who does them.
+
+| Phase / row | Driver | Notes |
+| --- | --- | --- |
+| 1.1 Browser edit mounts | Both in parallel | Compare console + network independently. |
+| 1.2 View link no-write | Either (once) | — |
+| 1.3, 1.4 Native app | **Friend** | Your most valuable signal — clean-machine app behavior. Have them screenshot the window and toolbar so you can compare to a MarkEdit reference visually. |
+| 1.5 Health check | Operator | — |
+| 2.1 Browser↔browser | Friend's browser + your browser | Real two-network test. |
+| 2.2 App↔browser | Friend on app, you on browser | — |
+| 2.3 Cursor 3-way | Both watching both screens | Critical to see each other's caret colors and names. Do this over video screenshare. |
+| 2.4 Cursor disappears | Either | — |
+| 2.5 Awareness identity | Operator | Easier from the seeding script. |
+| 2.6 Disk projection | Friend | They own the local file. |
+| 3.1, 3.2, 3.3, 3.4 Lifecycle | **Operator only** | Friend doesn't have psql access to Neon. Friend observes the *effect* (their editor goes Unavailable); operator triggers the *cause* (revoke SQL). |
+| 3.5 Quota | Operator | — |
+| 3.6 ClientKind spoofing | Operator | Browser devtools work. |
+| 4.1 Host offline | Friend quits app, operator watches browser | — |
+| 4.2 Browser offline | Either, using devtools throttling | — |
+| 4.3 Missing file | Friend deletes their local file | Operator watches the projection-pause state through a shared session. |
+| 4.4-4.6 Conflict | Coordinated | Friend quits app, you both edit (you in browser, friend's disk via screenshare). Friend relaunches and drives the conflict UI. Most coordination-heavy phase. |
+| 5.x Native polish | Friend | They have the clean-machine app build. Screenshots back to you. |
+
+### Operational extras for remote testing
+
+Add two fields to every `bug.md` entry during this pass:
+
+```md
+- Network: <your network → friend's network, e.g. "home wifi → 4G">
+- Latency: <ping or roundtrip estimate, e.g. "~80ms">
+- Time observed: <UTC timestamp>
+```
+
+The timestamp matters because the operator can grep Fly logs around
+that moment for correlated errors:
+
+```sh
+fly logs -a marklab-relay-alpha
+```
+
+Keep that running in a terminal during the joint session. Any
+unexplained UI behavior on the friend's side that lines up with a
+log stack trace becomes a Medium-or-higher finding even if the user
+flow recovered.
+
+### Suggested two-person schedule
+
+| Block | Duration | Mode | Tasks |
+| --- | --- | --- | --- |
+| Day before | ~30 min | Async | Operator packages the app, prepares env file and URLs, sends to friend. Friend confirms they can launch the app and see the document window. Fix any blockers before the joint session. |
+| Joint session 1 | 40 min | Video on | Pre-flight (5 min) + Phase 1 (10 min) + Phase 2 (25 min). Highest-value 40 minutes. |
+| Solo or async | ~25 min | Operator alone with friend on standby | Phase 3. Operator runs DB ops; friend confirms "yes my editor went Unavailable" via a short ping. |
+| Joint session 2 | 20 min | Video on | Phase 4. Conflict tests are coordination-heavy and the most likely to expose real bugs. |
+| Async | 5 min | Friend | Phase 5 screenshots; send to operator. |
+
+Total real testing: ~95 minutes, plus day-before setup.
+
+### What you cannot test until OIDC ships
+
+Mark these as deferred in the final report — they're not failures of
+this pass, just out of scope until login is wired:
+
+- Self-serve sign-up (friend creates their own account from a marketing
+  page).
+- Password reset / account recovery from the product UI.
+- Multi-provider sign-in (Google, GitHub, etc.).
+- Workspace invite flow that doesn't require operator DB writes.
+
+If any of these surface a real problem during testing (e.g. friend
+cannot find a sign-in URL at all), that is itself a finding — log it
+as severity High under "Out of scope but observed."
