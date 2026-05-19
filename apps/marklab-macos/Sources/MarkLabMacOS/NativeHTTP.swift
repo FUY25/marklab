@@ -1,6 +1,6 @@
 import Foundation
 
-public struct NativeHTTPRequest: Equatable {
+public struct NativeHTTPRequest: Equatable, Sendable {
   public var method: String
   public var url: URL
   public var headers: [String: String]
@@ -14,7 +14,7 @@ public struct NativeHTTPRequest: Equatable {
   }
 }
 
-public struct NativeHTTPResponse: Equatable {
+public struct NativeHTTPResponse: Equatable, Sendable {
   public var statusCode: Int
   public var data: Data
   public var headers: [String: String]

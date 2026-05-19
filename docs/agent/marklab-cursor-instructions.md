@@ -7,9 +7,7 @@ Before editing a shared file, confirm with the user that the file is the intende
 During editing:
 
 - Edit the `.md` file directly.
-- Do not call hosted document mutation endpoints.
-- Do not mutate Yjs state or Postgres rows.
-- Do not use access tokens as an agent write API.
+- Use only the CLI commands below for sharing and sync coordination.
 - Stop if MarkLab.app reports paused sync or conflict.
 
 After editing, report the changed file and inspect MarkLab.app native sync state when useful:
@@ -24,8 +22,9 @@ Normal CLI routing uses MarkLab.app:
 
 ```bash
 marklab open <file.md>
-marklab share <file.md>
+marklab share <file.md> --edit
+marklab share <file.md> --view
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
-`share` opens the local file in MarkLab.app and leaves Start Sharing/access-link creation to the native UI. Archived daemon commands such as `open --background`, `create-link`, `revoke-link`, `stop`, `save-version`, and `versions` require `MARKLAB_ENABLE_LEGACY_CLI=1`; packaged `@marklab/cli` intentionally does not bundle that old runtime.
+`share --edit` and `share --view` ask MarkLab.app to start or reuse native sharing in the background, create the requested access link, copy it to the clipboard, and print it.

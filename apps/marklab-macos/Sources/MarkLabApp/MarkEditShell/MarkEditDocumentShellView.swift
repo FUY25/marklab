@@ -11,10 +11,16 @@ import MarkLabMacOS
 struct MarkEditDocumentShellView: View {
   @ObservedObject var model: MarkLabAppModel
   let descriptor = MarkEditShellDescriptor.current
+  private let retainsSharedDocumentOnDisappear: Bool
   @State private var collaborationInspectorPresented = false
   @State private var editorSelectionStatus = "Ln 1, Col 1"
   @State private var editorCommandSequence = 0
   @State private var editorCommand: MarkEditLocalEditorCommand?
+
+  init(model: MarkLabAppModel, retainsSharedDocumentOnDisappear: Bool = true) {
+    self.model = model
+    self.retainsSharedDocumentOnDisappear = retainsSharedDocumentOnDisappear
+  }
 
   var body: some View {
     ZStack(alignment: .bottom) {
@@ -57,6 +63,9 @@ struct MarkEditDocumentShellView: View {
     }
     .onDisappear {
       _ = try? model.flushLocalAutosave()
+      if retainsSharedDocumentOnDisappear {
+        model.retainSharedDocumentForBackgroundIfNeeded()
+      }
     }
     .onChange(of: requiresCollaborationInspector) { _, requiresInspector in
       if requiresInspector {

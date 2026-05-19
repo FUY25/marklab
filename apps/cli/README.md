@@ -7,14 +7,15 @@ The new MarkLab pilot uses MarkLab.app with the hosted `/collab` control-plane/Y
 ```sh
 npx -y @marklab/cli doctor --json
 npx -y @marklab/cli open README.md
-npx -y @marklab/cli share README.md
+npx -y @marklab/cli share README.md --edit
+npx -y @marklab/cli share README.md --view
 npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 npx -y @marklab/cli status README.md --json
 npx -y @marklab/cli wait README.md --synced --json
 npx -y @marklab/cli conflict README.md --json
 ```
 
-`open` and `share` open the file in MarkLab.app. `share` does not create hidden daemon relay links; the native app owns Start Sharing, workspace-owned document creation, and access-link creation. `join` opens `marklab://join?...` so MarkLab.app can ask where to create or attach the local Markdown file. View links stay browser-only.
+`open` opens the file in MarkLab.app. `share --edit` and `share --view` ask MarkLab.app to start or reuse native sharing in the background, create the requested access link, copy it to the clipboard, and print it. `share` does not create hidden daemon relay links. `join` opens `marklab://join?...` so MarkLab.app can ask where to create or attach the local Markdown file. View links stay browser-only.
 
 The legacy local-daemon CLI commands are disabled by default. For archived compatibility testing only, opt in explicitly:
 
@@ -42,7 +43,8 @@ Ordinary collaborators using a hosted edit link do not need Postgres, Docker, pn
 ```sh
 marklab join <https://.../collab?...mode=edit>
 marklab open <file.md>
-marklab share <file.md>
+marklab share <file.md> --edit
+marklab share <file.md> --view
 marklab status <file.md> --json
 marklab wait <file.md> --synced --json
 marklab conflict <file.md> --json
@@ -81,7 +83,7 @@ marklab create-link <file.md> --role edit
 
 Hosting continues after the terminal command exits until you run `marklab stop <file.md>` or `marklab stop --all`. Closing the browser tab does not stop hosting as long as the daemon process is still running.
 
-`marklab share <file.md>` is temporary foreground sharing. Closing that terminal stops hosting, so use it for quick tests rather than persistent collaboration.
+`marklab share <file.md>` without `--edit` or `--view` is no longer the normal pilot path. Choose the link role explicitly so MarkLab.app can create the correct access link without a human click.
 
 Browser edit and view links work without installing MarkLab. A pure web link cannot install or run local software, create local files, or inspect whether MarkLab.app is available, because browsers do not have that access. The current safe alpha path is one hosted `/collab` edit link plus optional native app opening through `marklab join`.
 

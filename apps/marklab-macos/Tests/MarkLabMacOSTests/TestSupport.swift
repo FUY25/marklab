@@ -54,3 +54,58 @@ final class RecordingHTTPTransport: NativeHTTPTransport {
     return responses.removeFirst()
   }
 }
+
+actor BlockingFirstHTTPTransport: NativeHTTPTransport {
+  private var responses: [NativeHTTPResponse] = []
+  private(set) var requests: [RecordedHTTPRequest] = []
+  private var didStartFirstRequest = false
+  private var firstStartedContinuation: CheckedContinuation<Void, Never>?
+  private var firstReleaseContinuation: CheckedContinuation<Void, Never>?
+
+  func enqueue(json: String, statusCode: Int = 200) {
+    responses.append(NativeHTTPResponse(
+      statusCode: statusCode,
+      data: Data(json.utf8),
+      headers: ["content-type": "application/json"]
+    ))
+  }
+
+  func send(_ request: NativeHTTPRequest) async throws -> NativeHTTPResponse {
+    requests.append(RecordedHTTPRequest(
+      method: request.method,
+      path: request.url.path,
+      percentEncodedPath: URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? request.url.path,
+      authorization: request.headers["Authorization"],
+      nativeAppProof: request.headers["X-MarkLab-Native-App"],
+      bodyString: request.body.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    ))
+    let shouldBlockFirstRequest = !didStartFirstRequest
+    didStartFirstRequest = true
+    if responses.isEmpty { throw NativeHTTPError.transport("missing test response") }
+    let response = responses.removeFirst()
+
+    if shouldBlockFirstRequest {
+      await withCheckedContinuation { continuation in
+        firstReleaseContinuation = continuation
+        firstStartedContinuation?.resume()
+        firstStartedContinuation = nil
+      }
+    }
+
+    return response
+  }
+
+  func waitUntilFirstRequestStarted() async {
+    if firstReleaseContinuation != nil {
+      return
+    }
+    await withCheckedContinuation { continuation in
+      firstStartedContinuation = continuation
+    }
+  }
+
+  func releaseFirstRequest() {
+    firstReleaseContinuation?.resume()
+    firstReleaseContinuation = nil
+  }
+}

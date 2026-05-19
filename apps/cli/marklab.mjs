@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
@@ -92,7 +93,8 @@ export function printUsage() {
   For archived compatibility testing only, set ${legacyCliOptInEnv}=1.
 
   marklab open <file.md> [--background]
-  marklab share <file.md> [--json]
+  marklab share <file.md> --edit [--json]
+  marklab share <file.md> --view [--json]
   marklab join <https://.../collab?...mode=edit> [--json]
   marklab join <edit-link> <file.md>
   marklab join <edit-link> --dir <dir> [--name <file.md>] [--create-dir] [--background]
@@ -160,9 +162,10 @@ Open a local Markdown file in MarkLab.app. The --background form is archived dae
   }
   if (command === 'share') {
     console.log(`Usage:
-  marklab share <file.md> [--json]
+  marklab share <file.md> --edit [--json]
+  marklab share <file.md> --view [--json]
 
-Open a local Markdown file in MarkLab.app and use the native Start Sharing flow. The app creates workspace-owned documents and access links; this command does not mint a hidden daemon relay link.`);
+Ask MarkLab.app to start or reuse native sharing in the background, create an edit/view link, copy it to the clipboard, and print it. This command does not mint a hidden daemon relay link.`);
     return;
   }
   if (command === 'join') {
@@ -216,7 +219,15 @@ export function parseCliArgs(argv) {
 
   if (command === 'share') {
     const file = positionalArgs(rest)[0] ?? null;
-    return { command, file, json, daemonOnly: rest.includes('--daemon-only') };
+    const wantsEdit = rest.includes('--edit');
+    const wantsView = rest.includes('--view');
+    return {
+      command,
+      file,
+      json,
+      daemonOnly: rest.includes('--daemon-only'),
+      shareRole: wantsEdit && wantsView ? 'invalid' : wantsEdit ? 'edit' : wantsView ? 'view' : null,
+    };
   }
 
   if (command === 'share-state') {
@@ -605,9 +616,108 @@ function nativeAppSupportDir(env = process.env) {
   return join(homedir(), 'Library', 'Application Support', 'MarkLab');
 }
 
+function nativeCliRequestTimeoutMs(env = process.env) {
+  const configured = Number(env.MARKLAB_NATIVE_CLI_TIMEOUT_MS ?? 120000);
+  return Number.isFinite(configured) && configured > 0 ? configured : 120000;
+}
+
+function nativeCliRequestPaths(requestId, env = process.env) {
+  const appSupport = nativeAppSupportDir(env);
+  return {
+    appSupport,
+    requestId,
+    requestsDir: join(appSupport, 'cli-requests'),
+    responsesDir: join(appSupport, 'cli-responses'),
+    requestPath: join(appSupport, 'cli-requests', `${requestId}.json`),
+    responsePath: join(appSupport, 'cli-responses', `${requestId}.json`),
+  };
+}
+
+function nativeCliRequestId() {
+  return `req_${Date.now().toString(36)}_${randomBytes(8).toString('base64url')}`;
+}
+
+async function writeNativeShareRequest({ markdownPath, role }, env = process.env) {
+  const requestId = nativeCliRequestId();
+  const paths = nativeCliRequestPaths(requestId, env);
+  await mkdir(paths.requestsDir, { recursive: true });
+  await mkdir(paths.responsesDir, { recursive: true });
+  const request = {
+    schemaVersion: 1,
+    requestId,
+    action: 'share',
+    file: markdownPath,
+    role,
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(paths.requestPath, JSON.stringify(request, null, 2), { mode: 0o600 });
+  return { ...paths, request };
+}
+
+async function waitForNativeShareResponse(responsePath, timeoutMs) {
+  const startedAt = Date.now();
+  let lastError;
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      return JSON.parse(await readFile(responsePath, 'utf8'));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') lastError = error;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  if (lastError) {
+    throw new AgentCommandError('native_share_failed', 'Unable to read native share response.', {
+      responsePath,
+      error: lastError instanceof Error ? lastError.message : String(lastError),
+    });
+  }
+  throw new AgentCommandError('native_share_timeout', 'Timed out waiting for MarkLab.app to create the share link.', {
+    responsePath,
+    timeoutMs,
+  });
+}
+
+async function openNativeCliRequest(requestId, env = process.env) {
+  if (process.env.MARKLAB_NO_OPEN === 'true') return false;
+  const argsForApp = ['--marklab-cli-request', requestId];
+  if (env.MARKLAB_OPEN_COMMAND_FOR_TEST) {
+    return runNativeOpen(env.MARKLAB_OPEN_COMMAND_FOR_TEST, argsForApp, 'process the native share request');
+  }
+  if (process.platform === 'darwin') {
+    const appPath = nativeAppBundlePath(env);
+    const args = appPath
+      ? ['-gj', '-a', resolve(appPath), '--args', ...argsForApp]
+      : ['-gj', '-a', nativeAppName(env), '--args', ...argsForApp];
+    return runNativeOpen('open', args, 'process the native share request');
+  }
+  throw new AgentCommandError('native_launch_failed', 'Background native share requests require MarkLab.app on macOS.', {
+    platform: process.platform,
+  });
+}
+
+async function requestNativeShareLink({ markdownPath, role }, env = process.env) {
+  const pending = await writeNativeShareRequest({ markdownPath, role }, env);
+  let opened = false;
+  let response;
+  try {
+    opened = await openNativeCliRequest(pending.requestId, env);
+    response = await waitForNativeShareResponse(pending.responsePath, nativeCliRequestTimeoutMs(env));
+  } catch (error) {
+    await rm(pending.requestPath, { force: true });
+    throw error;
+  }
+  if (response?.ok !== true) {
+    throw new AgentCommandError(
+      response?.code || 'native_share_failed',
+      response?.message || 'MarkLab.app could not create the share link.',
+      response?.details ?? { requestId: pending.requestId }
+    );
+  }
+  return { ...response, opened: Boolean(response.opened ?? opened) };
+}
+
 async function readJsonFile(filePath, fallback) {
   try {
-    const { readFile } = await import('node:fs/promises');
     return JSON.parse(await readFile(filePath, 'utf8'));
   } catch (error) {
     if (error?.code === 'ENOENT') return fallback;
@@ -1012,21 +1122,32 @@ async function nativeOpenCommand(input) {
 
 async function nativeShareCommand(input) {
   if (!input.file) throw new AgentCommandError('invalid_target', 'share requires a Markdown file path.');
+  if (input.shareRole !== 'edit' && input.shareRole !== 'view') {
+    throw new AgentCommandError('invalid_target', input.shareRole === 'invalid'
+      ? 'share accepts only one of --edit or --view.'
+      : 'share requires --edit or --view.');
+  }
   const markdownPath = await resolveMarkdownFile(input.file);
-  const opened = await openExternalFile(markdownPath);
+  const response = await requestNativeShareLink({ markdownPath, role: input.shareRole });
   const result = agentSuccess({
+    action: response.action ?? 'native_share_link_created',
     path: markdownPath,
-    action: 'start_sharing_in_app',
-    opened,
-    nextStep: opened
-      ? 'Use Start Sharing in MarkLab.app. The app creates the workspace-owned document and access links.'
-      : 'Open this file in MarkLab.app, then use Start Sharing. The app creates the workspace-owned document and access links.',
+    file: response.file ?? markdownPath,
+    role: response.role ?? input.shareRole,
+    url: response.url,
+    copied: Boolean(response.copied),
+    docId: response.docId ?? null,
+    branchId: response.branchId ?? null,
+    grantId: response.grantId ?? null,
+    opened: Boolean(response.opened),
+    requestId: response.requestId ?? null,
   });
   if (input.json) {
     writeAgentJson(result);
     return;
   }
-  console.log(result.nextStep);
+  console.log(result.url);
+  if (result.copied) console.log('Link copied to clipboard.');
 }
 
 async function nativeStatusCommand(input) {
@@ -1539,7 +1660,7 @@ async function agentCommand(input) {
 }
 
 async function forbiddenAgentWriteCommand(input) {
-  throw new AgentCommandError('forbidden_agent_write', `marklab ${input.command} is forbidden for agents. Edit the local Markdown file directly, then use marklab wait/save-version/status for coordination.`);
+  throw new AgentCommandError('forbidden_agent_write', `marklab ${input.command} is forbidden for agents. Edit the local Markdown file directly, then use marklab wait, marklab status, and marklab conflict for coordination.`);
 }
 
 function parseRelayLink(link) {

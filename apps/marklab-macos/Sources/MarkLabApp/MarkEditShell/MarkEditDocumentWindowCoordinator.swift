@@ -17,6 +17,7 @@ final class MarkEditDocumentWindowCoordinator {
     let model = MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: false)
     model.loadFile(fileURL)
     guard model.filePath != nil else { return .failed(statusText: model.statusText) }
+    MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
     let controller = MarkEditDocumentWindowController(model: model) { [weak self] controller in
       self?.controllers[ObjectIdentifier(controller)] = nil
     }
@@ -35,10 +36,12 @@ enum MarkEditDocumentWindowOpenResult: Equatable {
 @MainActor
 private final class MarkEditDocumentWindowController: NSWindowController, NSWindowDelegate {
   private let onClose: (MarkEditDocumentWindowController) -> Void
+  private let model: MarkLabAppModel
 
   init(model: MarkLabAppModel, onClose: @escaping (MarkEditDocumentWindowController) -> Void) {
     self.onClose = onClose
-    let rootView = MarkEditDocumentShellView(model: model)
+    self.model = model
+    let rootView = MarkEditDocumentShellView(model: model, retainsSharedDocumentOnDisappear: false)
     let hostingController = NSHostingController(rootView: rootView)
     let window = NSWindow(contentViewController: hostingController)
     window.title = model.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "MarkLab"
@@ -58,6 +61,10 @@ private final class MarkEditDocumentWindowController: NSWindowController, NSWind
   }
 
   func windowWillClose(_ notification: Notification) {
+    if model.hasSharedDocument, let fileURL = model.fileURLForBackgroundRetention {
+      MarkLabBackgroundSharedDocumentHost.shared.retain(model, fileURL: fileURL)
+    }
+    model.detachSharedWindow()
     onClose(self)
   }
 

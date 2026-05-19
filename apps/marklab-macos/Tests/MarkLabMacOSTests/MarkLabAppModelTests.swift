@@ -26,6 +26,151 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("shared shell disappearance retains the model for background sync")
+  func sharedShellDisappearanceRetainsModelForBackgroundSync() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "root-window.md")
+    try Data("# Root window\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_root","branchId":"branch_main","versionId":"version_1","hash":"sha256:root"}"#, statusCode: 201)
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: sessionManager,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+
+    #expect(model.retainSharedDocumentForBackgroundIfNeeded(backgroundHost: backgroundHost))
+    #expect(backgroundHost.retainedModel(fileURL: fileURL) === model)
+    #expect(sessionManager.sessions.first?.hasOpenWindow == false)
+  }
+
+  @MainActor
+  @Test("CLI share service retains a background shared-document model after creating a link")
+  func cliShareServiceRetainsBackgroundModel() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "cli-share.md")
+    try Data("# CLI share\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_cli","branchId":"branch_main","versionId":"version_1","hash":"sha256:cli"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grantId":"grant_cli","branchId":"branch_main","token":"ml_access_edit","role":"edit","expiresAt":null,"createdAt":"2026-05-19T12:00:00.000Z"}"#, statusCode: 201)
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+    let service = NativeCLIShareAppService(model: model, backgroundHost: backgroundHost)
+
+    _ = try await service.createShareLink(for: NativeCLIShareServiceRequest(fileURL: fileURL, role: .edit))
+
+    #expect(backgroundHost.retainedFileURLs == [fileURL])
+    #expect(backgroundHost.retainedModel(fileURL: fileURL) === model)
+  }
+
+  @MainActor
+  @Test("CLI share service retains independent background models for different files")
+  func cliShareServiceRetainsIndependentBackgroundModelsForDifferentFiles() async throws {
+    let directory = try TemporaryDirectory()
+    let firstFileURL = directory.url.appending(path: "first.md")
+    let secondFileURL = directory.url.appending(path: "second.md")
+    try Data("# First\n".utf8).write(to: firstFileURL)
+    try Data("# Second\n".utf8).write(to: secondFileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_first","branchId":"branch_main","versionId":"version_1","hash":"sha256:first"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grantId":"grant_first","branchId":"branch_main","token":"ml_access_first","role":"edit","expiresAt":null,"createdAt":"2026-05-19T12:00:00.000Z"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"docId":"doc_second","branchId":"branch_main","versionId":"version_2","hash":"sha256:second"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grantId":"grant_second","branchId":"branch_main","token":"ml_access_second","role":"view","expiresAt":null,"createdAt":"2026-05-19T12:01:00.000Z"}"#, statusCode: 201)
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    var createdModelCount = 0
+    let service = NativeCLIShareAppService(backgroundHost: backgroundHost) {
+      createdModelCount += 1
+      return MarkLabAppModel(
+        hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+          apiBaseURL: URL(string: "https://api.example.test")!,
+          webBaseURL: URL(string: "https://app.example.test")!,
+          bearerToken: "ml_user_session",
+          workspaceId: "workspace_1",
+          transport: transport
+        )),
+        baselineStore: InMemoryNativeProjectionBaselineStore(),
+        conflictStore: NativeConflictStore(directoryURL: directory.url.appending(
+          path: "conflicts-\(createdModelCount)",
+          directoryHint: .isDirectory
+        )),
+        sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+        sessionManager: NativeSharedDocumentSessionManager(),
+        nativeBearerToken: "ml_user_session"
+      )
+    }
+
+    _ = try await service.createShareLink(for: NativeCLIShareServiceRequest(fileURL: firstFileURL, role: .edit))
+    let firstModel = try #require(backgroundHost.retainedModel(fileURL: firstFileURL))
+    _ = try await service.createShareLink(for: NativeCLIShareServiceRequest(fileURL: secondFileURL, role: .view))
+    let secondModel = try #require(backgroundHost.retainedModel(fileURL: secondFileURL))
+
+    #expect(createdModelCount == 2)
+    #expect(firstModel !== secondModel)
+    #expect(firstModel.filePath == firstFileURL.path)
+    #expect(secondModel.filePath == secondFileURL.path)
+    #expect(backgroundHost.retainedFileURLs == [firstFileURL, secondFileURL])
+  }
+
+  @MainActor
+  @Test("failed native start sharing removes the pending menu-bar session")
+  func failedStartSharingRemovesPendingMenuSession() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "failed-share.md")
+    try Data("# Failed share\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"error":"internal_error"}"#, statusCode: 500)
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: sessionManager,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    await #expect(throws: Error.self) {
+      try await model.startSharingAndConnectThrowing()
+    }
+
+    #expect(sessionManager.sessions.isEmpty)
+  }
+
+  @MainActor
   @Test("local autosave setting gates local-only disk saves")
   func localAutosaveSettingGatesLocalOnlyDiskSaves() throws {
     let suiteName = "MarkLabAppModelTests.localAutosave.\(UUID().uuidString)"

@@ -1,13 +1,13 @@
 import Foundation
 
-public struct NativeHostedDocument: Decodable, Equatable {
+public struct NativeHostedDocument: Decodable, Equatable, Sendable {
   public let docId: String
   public let branchId: String
   public let versionId: String
   public let hash: String
 }
 
-public struct NativeHostedAccessGrant: Decodable, Equatable {
+public struct NativeHostedAccessGrant: Decodable, Equatable, Sendable {
   public let grantId: String
   public let branchId: String
   public let token: String
@@ -16,7 +16,7 @@ public struct NativeHostedAccessGrant: Decodable, Equatable {
   public let createdAt: String?
 }
 
-public struct NativeHostedShareLink: Equatable {
+public struct NativeHostedShareLink: Equatable, Sendable {
   public let grantId: String
   public let role: NativeLinkRole
   public let url: URL

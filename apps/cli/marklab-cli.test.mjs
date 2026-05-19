@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import http from 'node:http';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -154,6 +154,55 @@ function runCli(args, env, timeoutMs = 90000) {
       clearTimeout(timer);
       resolveRun({ code, signal, stdout, stderr });
     });
+  });
+}
+
+async function waitForNativeShareRequest(appSupportDirectory, timeoutMs = 5000) {
+  const requestsDirectory = join(appSupportDirectory, 'cli-requests');
+  const startedAt = Date.now();
+  let lastError;
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const files = (await readdir(requestsDirectory)).filter((file) => file.endsWith('.json'));
+      if (files.length > 0) {
+        const file = join(requestsDirectory, files[0]);
+        return JSON.parse(await readFile(file, 'utf8'));
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw lastError ?? new Error('Timed out waiting for native share request.');
+}
+
+async function runCliWithNativeShareResponse(args, env, responseForRequest) {
+  const child = spawn(process.execPath, ['apps/cli/marklab.mjs', ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, MARKLAB_ENABLE_LEGACY_CLI: '0', ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.on('data', (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr?.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  const request = await waitForNativeShareRequest(env.MARKLAB_APP_SUPPORT_DIR);
+  const responseDirectory = join(env.MARKLAB_APP_SUPPORT_DIR, 'cli-responses');
+  await mkdir(responseDirectory, { recursive: true });
+  await writeFile(
+    join(responseDirectory, `${request.requestId}.json`),
+    JSON.stringify(responseForRequest(request)),
+    'utf8',
+  );
+
+  return new Promise((resolveRun, rejectRun) => {
+    child.once('error', rejectRun);
+    child.once('exit', (code, signal) => resolveRun({ code, signal, stdout, stderr, request }));
   });
 }
 
@@ -324,23 +373,108 @@ describe('marklab CLI', () => {
     const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-share-'));
     const markdownPath = join(directory, 'share.md');
     await writeFile(markdownPath, '# Native share\n', 'utf8');
-    const canonicalMarkdownPath = await realpath(markdownPath);
 
     const result = await runCli(['share', markdownPath, '--json'], {
       MARKLAB_ENABLE_LEGACY_CLI: '0',
       MARKLAB_NO_OPEN: 'true',
     }, 30000);
 
-    expectCliOk(result);
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'invalid_target',
+      message: 'share requires --edit or --view.',
+    });
+  });
+
+  it('creates edit and view links through the native app request bridge without legacy CLI opt-in', async () => {
+    for (const role of ['edit', 'view']) {
+      const directory = await mkdtemp(join(tmpdir(), `marklab-cli-native-share-${role}-`));
+      const appSupportDirectory = join(directory, 'app-support');
+      const markdownPath = join(directory, 'share.md');
+      await writeFile(markdownPath, '# Native share\n', 'utf8');
+      const canonicalMarkdownPath = await realpath(markdownPath);
+
+      const result = await runCliWithNativeShareResponse(
+        ['share', markdownPath, `--${role}`, '--json'],
+        {
+          MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+          MARKLAB_NO_OPEN: 'true',
+          MARKLAB_NATIVE_CLI_TIMEOUT_MS: '5000',
+        },
+        (request) => ({
+          ok: true,
+          requestId: request.requestId,
+          action: 'native_share_link_created',
+          file: request.file,
+          role: request.role,
+          url: `https://app.example.test/collab?docId=doc_cli&branchId=branch_main&token=ml_access_${role}&mode=${role}`,
+          copied: true,
+          docId: 'doc_cli',
+          branchId: 'branch_main',
+          grantId: `grant_${role}`,
+          opened: false,
+        }),
+      );
+
+      expectCliOk(result);
+      expect(result.request).toMatchObject({
+        schemaVersion: 1,
+        action: 'share',
+        file: canonicalMarkdownPath,
+        role,
+      });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        action: 'native_share_link_created',
+        file: canonicalMarkdownPath,
+        role,
+        url: `https://app.example.test/collab?docId=doc_cli&branchId=branch_main&token=ml_access_${role}&mode=${role}`,
+        copied: true,
+        docId: 'doc_cli',
+        branchId: 'branch_main',
+        grantId: `grant_${role}`,
+      });
+    }
+  });
+
+  it('reports a typed timeout when the native app does not answer a share request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-share-timeout-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    const markdownPath = join(directory, 'share.md');
+    await writeFile(markdownPath, '# Native share timeout\n', 'utf8');
+
+    const result = await runCli(['share', markdownPath, '--edit', '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_NO_OPEN: 'true',
+      MARKLAB_NATIVE_CLI_TIMEOUT_MS: '25',
+    }, 30000);
+
+    expect(result.code).toBe(8);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      code: 'native_share_timeout',
+    });
+    await expect(readdir(join(appSupportDirectory, 'cli-requests'))).resolves.toEqual([]);
+  });
+
+  it('points forbidden agent writes at the current native coordination commands', async () => {
+    const result = await runCli(['write', 'README.md', '--json'], {
+      MARKLAB_ENABLE_LEGACY_CLI: '0',
+      MARKLAB_NO_OPEN: 'true',
+    }, 30000);
+
+    expect(result.code).toBe(2);
     const body = JSON.parse(result.stdout);
     expect(body).toMatchObject({
-      ok: true,
-      path: canonicalMarkdownPath,
-      action: 'start_sharing_in_app',
-      opened: false,
+      ok: false,
+      code: 'forbidden_agent_write',
     });
-    expect(body).not.toHaveProperty('grantId');
-    expect(body).not.toHaveProperty('url');
+    expect(body.message).toContain('marklab wait');
+    expect(body.message).toContain('marklab status');
+    expect(body.message).toContain('marklab conflict');
+    expect(body.message).not.toContain('save-version');
   });
 
   it('reads native shared-file status, wait, and conflict state from MarkLab.app support files without legacy opt-in', async () => {
@@ -450,12 +584,21 @@ describe('marklab CLI', () => {
       file: 'README.md',
       json: false,
       daemonOnly: false,
+      shareRole: null,
     });
-    expect(parseCliArgs(['share', 'README.md', '--json', '--daemon-only'])).toEqual({
+    expect(parseCliArgs(['share', 'README.md', '--json', '--daemon-only', '--edit'])).toEqual({
       command: 'share',
       file: 'README.md',
       json: true,
       daemonOnly: true,
+      shareRole: 'edit',
+    });
+    expect(parseCliArgs(['share', 'README.md', '--view'])).toEqual({
+      command: 'share',
+      file: 'README.md',
+      json: false,
+      daemonOnly: false,
+      shareRole: 'view',
     });
     expect(parseCliArgs(['join', 'https://example.test/relay/room_1?token=secret', '--dir', './docs', '--name', 'shared.md', '--create-dir'])).toEqual({
       command: 'join',

@@ -9,11 +9,12 @@ describe('agent instruction commands', () => {
     const codex = await readAgentInstructions('codex');
     expect(codex.target).toBe('codex');
     expect(codex.instructions).toContain('Edit the local `.md` file on disk');
+    expect(codex.instructions).toContain('marklab share <file.md> --edit');
+    expect(codex.instructions).toContain('marklab share <file.md> --view');
     expect(codex.instructions).toContain('marklab status <file.md> --json');
-    expect(codex.instructions).toContain('read MarkLab.app support files');
+    expect(codex.instructions).toContain('Use only the CLI commands below');
     expect(codex.instructions).toContain("marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'");
-    expect(codex.instructions).toContain('Archived local-daemon commands');
-    expect(codex.instructions).not.toMatch(/direct Yjs|direct Postgres/u);
+    expect(codex.instructions).not.toMatch(/Yjs|Postgres|hosted mutation|access tokens|provider internals|local daemon/u);
   });
 
   it('requires explicit write and refuses to overwrite without force', async () => {

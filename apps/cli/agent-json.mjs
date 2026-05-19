@@ -16,6 +16,8 @@ export const agentErrorCodes = Object.freeze([
   'invalid_target',
   'invalid_config',
   'native_launch_failed',
+  'native_share_failed',
+  'native_share_timeout',
 ]);
 
 export const agentExitCodes = Object.freeze({
@@ -48,6 +50,8 @@ const errorExitCode = Object.freeze({
   invalid_target: agentExitCodes.invalidCommandOrTarget,
   invalid_config: agentExitCodes.invalidCommandOrTarget,
   native_launch_failed: agentExitCodes.featureUnavailable,
+  native_share_failed: agentExitCodes.featureUnavailable,
+  native_share_timeout: agentExitCodes.featureUnavailable,
 });
 
 export class AgentCommandError extends Error {

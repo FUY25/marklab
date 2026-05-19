@@ -1,6 +1,6 @@
 # MarkLab Agent Guide
 
-MarkLab agents edit local Markdown files. They do not appear as collaborators and they do not write hosted Yjs state directly.
+MarkLab agents edit local Markdown files. They do not appear as collaborators.
 
 ## Current Pilot Rule
 
@@ -10,10 +10,10 @@ Use the filesystem as the content surface:
 agent edits local .md
   -> MarkLab.app file watcher observes the disk change
   -> active shared document ingests the change
-  -> browser/app collaborators receive it through /collab
+  -> browser/app collaborators receive it
 ```
 
-Do not call hosted document mutation endpoints for content changes. Do not mutate Yjs state or Postgres rows. Do not use access-grant tokens as an agent write API.
+Use the local Markdown file as the only content write surface.
 
 ## Before Editing
 
@@ -37,28 +37,20 @@ marklab wait <file.md> --synced --json
 marklab conflict <file.md> --json
 ```
 
-These commands read MarkLab.app support files and do not use the archived local daemon. If `conflict` reports an open conflict, stop editing the watched file and let the user resolve it in MarkLab.app.
+If `conflict` reports an open conflict, stop editing the watched file and let the user resolve it in MarkLab.app.
 
 ## Link Management
 
-Agents should not create or revoke links through undocumented APIs. Link creation, copy, revoke, active collaborators, and local sync state belong in the native collaboration inspector for the current pilot.
+Agents should create links only through the CLI commands below. Link revoke, active collaborator review, and conflict resolution belong in MarkLab.app.
 
 Normal new-pilot CLI commands are UI/native routing and sync inspection:
 
 ```bash
 marklab doctor --json
 marklab open <file.md>
-marklab share <file.md>
+marklab share <file.md> --edit
+marklab share <file.md> --view
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 ```
 
-View links stay browser-only.
-
-## Deferred Control Surface
-
-The remaining planned hosted agent control surface is:
-
-- `save-version`
-- `versions`
-
-Those commands must bind to the new relay/native session model before becoming normal pilot guidance. The archived local-daemon versions of those commands are not the new product path and require `MARKLAB_ENABLE_LEGACY_CLI=1`.
+Use `share --edit` when the user needs a writable collaborator link and `share --view` for read-only review. View links stay browser-only. For content changes, edit the local Markdown file and use only the CLI commands listed above for coordination.

@@ -133,52 +133,52 @@ After implementation, rewrite the agent docs around the new contract:
 
 ### Task 1: CLI Share Role Contract
 
-- [ ] Add failing CLI tests for `marklab share <file.md> --edit`, `--view`, `--json`, and missing-role usage.
-- [ ] Add failing tests proving `marklab share --edit|--view` is allowed without `MARKLAB_ENABLE_LEGACY_CLI=1`.
-- [ ] Add failing tests proving it does not call the archived local daemon.
-- [ ] Implement parsing and dispatch only after the tests fail for the expected reason.
+- [x] Add failing CLI tests for `marklab share <file.md> --edit`, `--view`, `--json`, and missing-role usage.
+- [x] Add failing tests proving `marklab share --edit|--view` is allowed without `MARKLAB_ENABLE_LEGACY_CLI=1`.
+- [x] Add failing tests proving it does not call the archived local daemon.
+- [x] Implement parsing and dispatch only after the tests fail for the expected reason.
 
 ### Task 2: Native Request/Response Bridge
 
-- [ ] Add failing Node tests for request JSON creation, bounded response waiting, success output, timeout, and typed error output.
-- [ ] Add failing Swift tests for reading a pending share request and writing a response.
-- [ ] Implement the bridge in the smallest focused modules.
-- [ ] Acceptance: CLI tests pass without requiring a running GUI app by using a deterministic fake native response.
+- [x] Add failing Node tests for request JSON creation, bounded response waiting, success output, timeout, and typed error output.
+- [x] Add failing Swift tests for reading a pending share request and writing a response.
+- [x] Implement the bridge in the smallest focused modules.
+- [x] Acceptance: CLI tests pass without requiring a running GUI app by using a deterministic fake native response.
 
 ### Task 3: Background Shared Session Manager
 
-- [ ] Add failing Swift tests proving a shared session remains active after a document window detaches.
-- [ ] Add failing Swift tests proving `lastSyncAt` updates when a projection succeeds.
-- [ ] Add failing Swift tests for status transitions: `syncing`, `synced`, `offline`, `conflict`, and `error`.
-- [ ] Implement or refactor the native session manager to satisfy those tests using existing native collaboration/runtime primitives.
+- [x] Add failing Swift tests proving a shared session remains active after a document window detaches.
+- [x] Add failing Swift tests proving `lastSyncAt` updates when a projection succeeds.
+- [x] Add failing Swift tests for status transitions: `syncing`, `synced`, `offline`, `conflict`, and `error`.
+- [x] Implement or refactor the native session manager to satisfy those tests using existing native collaboration/runtime primitives.
 
 ### Task 4: Native Share Link Creation From CLI Request
 
-- [ ] Add failing Swift tests proving a share request starts or reuses the native shared session.
-- [ ] Add failing Swift tests proving edit and view links call the native control-plane client with the requested role.
-- [ ] Add failing Swift tests proving the link is copied to the pasteboard by an injectable pasteboard abstraction.
-- [ ] Implement request handling against the existing native share controller/control-plane client.
+- [x] Add failing Swift tests proving a share request starts or reuses the native shared session.
+- [x] Add failing Swift tests proving edit and view links call the native control-plane client with the requested role.
+- [x] Add failing Swift tests proving the link is copied to the pasteboard by an injectable pasteboard abstraction.
+- [x] Implement request handling against the existing native share controller/control-plane client.
 
 ### Task 5: Menu Bar Status UI
 
-- [ ] Add failing Swift tests for a menu bar view model: empty state, document rows, status labels, last sync labels, and open-document action.
-- [ ] Implement the status item/menu model without duplicating the document inspector.
-- [ ] Wire the menu bar model to the shared session manager.
+- [x] Add failing Swift tests for a menu bar view model: empty state, document rows, status labels, last sync labels, and open-document action.
+- [x] Implement the status item/menu model without duplicating the document inspector.
+- [x] Wire the menu bar model to the shared session manager.
 
 ### Task 6: Agent Docs And Help Text
 
-- [ ] Add or update tests that assert agent docs mention only the current CLI contract and local-edit behavior.
-- [ ] Rewrite `docs/agent/*` after CLI behavior is final.
-- [ ] Update CLI help and `apps/cli/README.md`.
+- [x] Add or update tests that assert agent docs mention only the current CLI contract and local-edit behavior.
+- [x] Rewrite `docs/agent/*` after CLI behavior is final.
+- [x] Update CLI help and `apps/cli/README.md`.
 
 ### Task 7: Verification
 
-- [ ] Run targeted CLI tests.
-- [ ] Run Swift tests.
-- [ ] Run root `npx -y pnpm@10.0.0 test`.
-- [ ] Run `npx -y pnpm@10.0.0 typecheck`.
-- [ ] Run native/browser smoke if native runtime changes touch sync behavior.
-- [ ] Run `git diff --check`.
+- [x] Run targeted CLI tests.
+- [x] Run Swift tests.
+- [x] Run root `npx -y pnpm@10.0.0 test`.
+- [x] Run `npx -y pnpm@10.0.0 typecheck`.
+- [x] Run native/browser smoke if native runtime changes touch sync behavior.
+- [x] Run `git diff --check`.
 
 ## Code Review Gate
 
