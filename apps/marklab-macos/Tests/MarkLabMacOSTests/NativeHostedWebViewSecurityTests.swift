@@ -69,6 +69,16 @@ struct NativeHostedWebViewSecurityTests {
     let origin = NativeHostedWebViewOrigin(url: try #require(URL(string: "https://app.example.test/collab")))
 
     #expect(origin.matches(scheme: "https", host: "app.example.test", port: 443))
+    #expect(origin.matches(scheme: "https", host: "app.example.test", port: 0))
     #expect(!origin.matches(scheme: "https", host: "app.example.test", port: 444))
+  }
+
+  @Test("does not treat omitted ports as custom origins")
+  func omittedPortsDoNotMatchCustomOriginPorts() throws {
+    let customOrigin = NativeHostedWebViewOrigin(url: try #require(URL(string: "https://app.example.test:8443/collab")))
+
+    #expect(customOrigin.matches(scheme: "https", host: "app.example.test", port: 8443))
+    #expect(!customOrigin.matches(scheme: "https", host: "app.example.test", port: 0))
+    #expect(!customOrigin.matches(scheme: "https", host: "app.example.test", port: 443))
   }
 }

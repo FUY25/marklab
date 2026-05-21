@@ -682,3 +682,38 @@ This file records correctness/security bugs found by plan-level review passes.
    - Resolution: added `apps/collab-web/vitest.setup.ts` and `apps/collab-web/vitest.config.ts`. The setup file installs `Storage.prototype.{getItem,setItem,removeItem,clear,key,length}` backed by a per-instance `WeakMap` (so `vi.spyOn(Storage.prototype, 'setItem')` still works) and replaces `window.localStorage` and `window.sessionStorage` with `Object.create(Storage.prototype)` instances exposed via configurable getters (so `vi.spyOn(window, 'localStorage', 'get')` still works). Coverage: `pnpm --filter @marklab/collab-web test` now reports `Test Files 7 passed (7) | Tests 24 passed (24)` with exit code 0.
 
    Note: the masking pattern here is the same shape as `bug.md` items 49 (blocked browser storage `get`) and 50 (root vitest discovery skipped `.test.tsx`) — a test-environment defect that hides product-test signal. Whenever a test-harness change opens a new failure, treat it as recovered signal, not new regressions.
+
+## Pilot RC 2026-05-21
+
+- Branch: `macos-app`
+- Commit: `c1333b4e7a3a0d47ec6db2269bd97638b27de124`
+- Remote state: `origin/macos-app` matched local HEAD after `git fetch origin macos-app`; `git rev-list --left-right --count HEAD...origin/macos-app` returned `0 0`.
+- Worktree state at freeze: no tracked code diffs; intentional untracked checklist document at `docs/manual-acceptance/pre-pilot-launch-checklist-progress-log.md`.
+- Candidate artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`
+- Gate 0 baseline:
+  - `npx -y pnpm@10.0.0 typecheck` passed.
+  - `npx -y pnpm@10.0.0 test` passed: 80 files passed, 682 tests passed, 1 skipped.
+  - `swift test --package-path apps/marklab-macos` passed: 72 tests passed.
+  - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app` passed and produced the candidate artifact.
+  - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package` passed for bundle identifier `com.marklab.app` and URL scheme `marklab`.
+- Gate 0 findings: no P0/P1 findings from automated baseline.
+- Next gate: Gate 1 manual pilot acceptance.
+
+## Pilot Manual Acceptance — 2026-05-21
+
+Target: `https://marklab-relay-alpha.fly.dev`
+Operator: Codex
+Git SHA under test: `c1333b4e7a3a0d47ec6db2269bd97638b27de124`
+App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`
+
+### Findings
+
+1. P1-001 — Shared-mode app/browser edits do not project to the local Markdown file.
+   - Phase: 2.2 App ↔ Browser convergence.
+   - Impact: the native hosted editor and browser collaborator converge live, but the user's local `.md` file remains stale. This breaks the pilot's local-first expectation and makes the core share flow require an unsafe/manual workaround.
+   - Evidence: MarkLab.app entered shared mode from `~/marklab-pilot-acceptance/pilot.md`, created an edit link, and a browser collaborator joined. The app marker appeared in the browser and the browser marker appeared in the app. After the projection debounce, an additional wait, and Cmd+S, `~/marklab-pilot-acceptance/pilot.md` still did not contain either marker and remained at 56 bytes.
+   - Classification: P1 blocker for pilot.
+   - Root cause: the native WebView message bridge rejected `WKScriptMessage` events from default HTTPS origins when `WKSecurityOrigin.port` was reported as `0` instead of `443`. Navigation still worked, so the hosted editor converged live, but `markdown-snapshot` and `selection-change` messages were ignored by the native model.
+   - Resolution: normalize an omitted security-origin port (`0`) to the scheme default in `NativeHostedWebViewOrigin.matches`, while keeping custom-port origins strict.
+   - Verification: `swift test --package-path apps/marklab-macos` passed with 73 tests; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 80 files and 682 tests; `package:app` and `verify:package` passed; Phase 2.2 was re-run against the patched packaged app and confirmed both app-originated and browser-originated edits projected into `~/marklab-pilot-acceptance/pilot-bridge-fix.md`.
+   - Status: fixed; re-freeze Gate 0 with a new commit/SHA before continuing the full manual pass.

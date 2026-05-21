@@ -23,9 +23,10 @@ public struct NativeHostedWebViewOrigin: Equatable {
   }
 
   public func matches(scheme: String, host: String, port: Int) -> Bool {
-    self.scheme.lowercased() == scheme.lowercased()
+    let normalizedPort = port == 0 ? NativeHostedWebViewOrigin.defaultPort(for: scheme) : port
+    return self.scheme.lowercased() == scheme.lowercased()
       && self.host.lowercased() == host.lowercased()
-      && self.port == port
+      && self.port == normalizedPort
   }
 }
 
