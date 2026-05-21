@@ -47,7 +47,7 @@ This plan does not build billing or the full production launch gate. It does inc
 ## Browser Facts From Plan 3
 
 - `apps/collab-web` is built into the API Docker image and served by the API process. The deploy-time dist path is `MARKLAB_COLLAB_WEB_DIST_DIR`; normal packaged clients should not need a separate collab-web origin.
-- Browser collaborator links should open the public web origin at `/collab?docId=...&branchId=...&token=...&mode=edit|view`. Existing `apps/web` share/access panels now generate that route shape, with assets under `/collab-web/`.
+- Browser collaborator links should open the public web origin at `/collab?docId=...&branchId=...&token=...&mode=edit|view`. The active browser surface is `apps/collab-web`, with assets under `/collab-web/`; the archived `apps/web` surface has been removed.
 - `/workspaces/:workspaceId/settings` exists in `apps/collab-web` with Members, Documents, and read-only Plan & Billing tabs. Packaging/docs should route workspace administration to that browser shell until native settings UI exists.
 
 ## Native Facts From Plans 4 And 5.5
@@ -65,7 +65,6 @@ This plan does not build billing or the full production launch gate. It does inc
 ## File Structure
 
 - Modify `apps/cli/marklab.mjs`
-- Modify `apps/cli/relay-config.mjs`
 - Modify `apps/cli/doctor.mjs`
 - Modify `apps/cli/*.test.mjs`
 - Modify native packaging files from `2026-05-11-marklab-native-integration.md`.

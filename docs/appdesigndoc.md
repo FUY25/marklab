@@ -62,11 +62,11 @@ These decisions supersede older exploratory MarkLab notes if there is a conflict
 11. V1 view links are current-state rendered views, not Yjs provider participants. A viewer receives the full current Markdown/rendered document through the control plane, cannot write, does not mount a source editor, does not publish presence, and does not store Yjs update history in IndexedDB. A later "trusted live read-only collaborator" mode may connect to Y-Sweet with `authorization: "read-only"`, but that is not the public view-link MVP.
 12. Provider document ids are opaque server-generated ids. File path, filename, workspace name, and user identity must not be encoded into provider document ids.
 13. MVP editing uses CodeMirror 6 source editing plus live preview. Rich/WYSIWYG editing is delayed until the adapter risks are proven.
-14. `apps/collab-web` should be a new independent browser collaboration app based on Vite, React, and TypeScript. It should not start by rewriting the existing `apps/web`.
+14. `apps/collab-web` is the independent browser collaboration app based on Vite, React, and TypeScript. The archived `apps/web` Milkdown surface has been removed from the active pilot.
 15. CollabMD is a browser UI/editor-shell reference only. MarkLab should not adopt CollabMD's sync/server model.
 16. Vditor is a Phase 2 rich-mode candidate because it is Markdown-string centered, but it must not become the default collaborative editor before offset mapping and remote cursor/highlight support are verified.
 17. Conflict UX starts Relay-like and simple. The older complex MarkLab three-way/base/local/shared/AI merge UI is deferred.
-18. AI edits should operate through the local Markdown file when a local file exists. CLI commands should control software actions such as share, revoke, export, status, wait-for-sync, and conflict inspection.
+18. AI edits should operate through the local Markdown file when a local file exists. CLI commands should control software actions such as share, status, `wait <file.md> --synced`, and conflict inspection.
 
 ## Product Scope
 
@@ -78,7 +78,7 @@ The technical MVP proves the collaboration engine and local-file workflow:
 - MarkLab.app native editor based on MarkEdit/CodeMirror.
 - Browser editor as a formal collaborator entry point.
 - MVP browser editing starts with CodeMirror source editing plus live preview.
-- New `apps/collab-web` browser collaboration app, separate from the existing `apps/web` shell.
+- `apps/collab-web` browser collaboration app, with the archived `apps/web` shell removed from the active pilot.
 - Yjs provider-style sync.
 - Durable server-side collaboration state.
 - Offline local editing and reconnect merge.
@@ -440,7 +440,7 @@ When a client transitions from disconnected to connected, or when a previously-i
 
 ### CLI surface for safe coordination
 
-CLI and agent commands expose `status`, `wait-for-sync`, and conflict state so local automation can coordinate safely around an in-flight session. In the current native pilot, those commands read MarkLab.app support files for the active local file instead of talking to the archived daemon. The contract is that `wait-for-sync` blocks until the local shared state has synced and projected to disk, or reports conflict/timeout.
+CLI and agent commands expose `status`, `wait <file.md> --synced`, and conflict state so local automation can coordinate safely around an in-flight session. In the current native pilot, those commands read MarkLab.app support files for the active local file instead of talking to the archived daemon. The contract is that `marklab wait <file.md> --synced` blocks until the local shared state has synced and projected to disk, or reports conflict/timeout.
 
 ## Collaboration Data Flow
 
@@ -497,7 +497,7 @@ This is the long-tail case: the host (or any participant) was disconnected for a
 
 The local Markdown file remains a first-class product object.
 
-AI agents and local tools may edit any local `.md` file at any time. They do not need to know whether a file is currently shared. For files that are not part of an active collaboration room, the edit is just a regular disk write — nothing else happens. For files that *are* part of an active room, the file watcher picks the change up and runs the ingestion path defined in "Canonical State And Projection" (LF normalize → self-loopback check via projected-hash → compare disk/provider against `lastProjectedMarkdown` → apply one-sided changes or open conflict for both-sides-changed cases). The CLI controls software actions such as share, revoke, export, status, wait-for-sync, and conflict inspection. AI should not write through a hosted content mutation API.
+AI agents and local tools may edit any local `.md` file at any time. They do not need to know whether a file is currently shared. For files that are not part of an active collaboration room, the edit is just a regular disk write — nothing else happens. For files that *are* part of an active room, the file watcher picks the change up and runs the ingestion path defined in "Canonical State And Projection" (LF normalize → self-loopback check via projected-hash → compare disk/provider against `lastProjectedMarkdown` → apply one-sided changes or open conflict for both-sides-changed cases). The CLI controls software actions such as share, status, `wait <file.md> --synced`, and conflict inspection. AI should not write through a hosted content mutation API.
 
 This means multi-file AI workflows (Cursor / Aider / Claude Code editing across a docs/ folder) are supported in v1 even though collaboration itself is per-file: the AI just edits the files. Shared files reconcile; unshared files are local writes. No special "AI-aware" handling is required in v1.
 
@@ -514,7 +514,7 @@ An explicit agent edit protocol can be added later:
 - `marklab agent edit begin`
 - `marklab agent edit end`
 - `marklab status`
-- `marklab wait-for-sync`
+- `marklab wait <file.md> --synced`
 - `marklab conflict`
 
 V1 relies on file-watcher ingestion only. The explicit `begin/end` protocol is reserved for cases where rapid AI-driven full-file rewrites (an agent that produces complete new file content rather than surgical patches) produce noisy conflict behavior with concurrent remote edits. Until that protocol ships, unattended AI rewrites of a shared file during active multi-client collaboration may legitimately surface conflict UI; this is acceptable v1 behavior.
@@ -541,7 +541,7 @@ That Y.Text is the canonical collaboration state. Editor surfaces may render or 
 
 ### Browser Collaboration App
 
-The MVP browser collaboration surface should be a new `apps/collab-web` app rather than a rewrite of the current `apps/web`.
+The MVP browser collaboration surface is `apps/collab-web`; the older `apps/web` shell is archived and removed from the active pilot.
 
 Recommended stack:
 
@@ -815,9 +815,9 @@ Build the native app collaboration surface:
 - Share/manage controls.
 - Relay-like conflict diff.
 
-Plan 4 created the native source in this monorepo at `apps/marklab-macos/`. Plan 5.5 changes the native strategy from **Reference** to **Port MarkEdit UI shell**: MarkLab now owns a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local Markdown editor surface, toolbar/status/inspector layout, and document-scoped conflict panel with MIT attribution to MarkEdit's editor document/window/web-view patterns. MarkLab collaboration is layered into that shell rather than owning the root editor layout. The hosted `/collab` CodeMirror/Yjs app still provides the first shared-editing engine inside MarkLab.app with `clientKind=app`; the embedded app editor URL is first-party and grantless, public edit/view access grants are created only for collaborators, and the WKWebView injects the native user bearer token plus `X-MarkLab-Native-App: 1` only into same-origin `/api/` fetches. The API downgrades `clientKind=app` to `browser` unless the request carries a MarkLab user-session bearer (`ml_user_...`) with that native-app marker and resolves to a non-guest actor, so a public link URL or cookie-authenticated browser cannot spoof native app audit/session metadata; the embedded collab-web editor treats such downgrade as unavailable instead of continuing as a browser session. MarkLab.app watches the opened shared file with a macOS file-system dispatch source and also keeps a timer as a backup; one-sided AI/editor disk changes are sent back into the embedded Y.Text editor only after the live provider text still matches the expected baseline, while divergent disk/shared changes open the MarkEdit-style conflict inspector. Projection baselines are persisted as the full local tuple (`lastProjectedMarkdown`, `lastProjectedHash`, `lastProviderStateFingerprint`, `updatedAt`) in the native app support store and are updated in memory only after the durable baseline write succeeds. In the hosted-WKWebView MVP, `lastProviderStateFingerprint` is an explicit `provider-ytext:sha256:...` fingerprint of the provider Y.Text Markdown snapshot; a later fully bundled native Yjs runtime can replace that with a binary Yjs state/update fingerprint. The legacy local CLI daemon boundary (`marklab share --json --daemon-only` plus `/api/local/app-context`) is disabled by default for the new relay/Y-Sweet pilot and can only be re-enabled deliberately with `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` for compatibility testing. Browser/native editor semantics that must stay identical live in `packages/collab-editor/`: Y.Text binding, session client contracts, awareness helpers, and remote cursor rendering. The first automated native/browser smoke is `pnpm --filter @marklab/marklab-macos smoke:native-browser`; it gates the Swift native app build, MarkEdit shell strategy tests, runtime tests, app-kind/browser convergence on `Y.Text("contents")`, hosted-native Markdown disk projection, and cursor awareness exchange. Swift WKWebView security tests, MarkEdit shell strategy tests, and collab-web native-bridge unit tests cover the exact-URL, unavailable-session, shell strategy, and disk-ingestion bridge contracts that the same-Mac smoke does not launch through a GUI automation harness.
+Plan 4 created the native source in this monorepo at `apps/marklab-macos/`. Plan 5.5 changes the native strategy from **Reference** to **Port MarkEdit UI shell**: MarkLab now owns a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local Markdown editor surface, toolbar/status/inspector layout, and document-scoped conflict panel with MIT attribution to MarkEdit's editor document/window/web-view patterns. MarkLab collaboration is layered into that shell rather than owning the root editor layout. The hosted `/collab` CodeMirror/Yjs app still provides the first shared-editing engine inside MarkLab.app with `clientKind=app`; the embedded app editor URL is first-party and grantless, public edit/view access grants are created only for collaborators, and the WKWebView injects the native user bearer token plus `X-MarkLab-Native-App: 1` only into same-origin `/api/` fetches. The API downgrades `clientKind=app` to `browser` unless the request carries a MarkLab user-session bearer (`ml_user_...`) with that native-app marker and resolves to a non-guest actor, so a public link URL or cookie-authenticated browser cannot spoof native app audit/session metadata; the embedded collab-web editor treats such downgrade as unavailable instead of continuing as a browser session. MarkLab.app watches the opened shared file with a macOS file-system dispatch source and also keeps a timer as a backup; one-sided AI/editor disk changes are sent back into the embedded Y.Text editor only after the live provider text still matches the expected baseline, while divergent disk/shared changes open the MarkEdit-style conflict inspector. Projection baselines are persisted as the full local tuple (`lastProjectedMarkdown`, `lastProjectedHash`, `lastProviderStateFingerprint`, `updatedAt`) in the native app support store and are updated in memory only after the durable baseline write succeeds. In the hosted-WKWebView MVP, `lastProviderStateFingerprint` is an explicit `provider-ytext:sha256:...` fingerprint of the provider Y.Text Markdown snapshot; a later fully bundled native Yjs runtime can replace that with a binary Yjs state/update fingerprint. The legacy local CLI daemon boundary and local app-context API routes have been removed from the active pilot; normal share/join/status/wait/conflict workflows use the MarkLab.app request bridge, app-support files, hosted control plane, and `/collab` editor. Browser/native editor semantics that must stay identical live in `packages/collab-editor/`: Y.Text binding, session client contracts, awareness helpers, and remote cursor rendering. The first automated native/browser smoke is `pnpm --filter @marklab/marklab-macos smoke:native-browser`; it gates the Swift native app build, MarkEdit shell strategy tests, runtime tests, app-kind/browser convergence on `Y.Text("contents")`, hosted-native Markdown disk projection, and cursor awareness exchange. Swift WKWebView security tests, MarkEdit shell strategy tests, and collab-web native-bridge unit tests cover the exact-URL, unavailable-session, shell strategy, and disk-ingestion bridge contracts that the same-Mac smoke does not launch through a GUI automation harness.
 
-The old `marklab` CLI local-daemon command surface is also inactive by default and requires `MARKLAB_ENABLE_LEGACY_CLI=1` for archived compatibility testing.
+The old `marklab` CLI local-daemon command surface has been removed from the active package. Historical daemon commands belong in archived docs only.
 
 Optional Phase 2 rich-mode spike:
 

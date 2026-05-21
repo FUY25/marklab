@@ -423,6 +423,13 @@ async function writeNativeJoinRequest({ link, targetPath }, env = process.env) {
   return { ...paths, request };
 }
 
+async function cleanupNativeCliRequest(paths) {
+  await Promise.allSettled([
+    rm(paths.requestPath, { force: true }),
+    rm(paths.responsePath, { force: true }),
+  ]);
+}
+
 async function waitForNativeShareResponse(responsePath, timeoutMs) {
   const startedAt = Date.now();
   let lastError;
@@ -471,9 +478,8 @@ async function requestNativeShareLink({ markdownPath, role }, env = process.env)
   try {
     opened = await openNativeCliRequest(pending.requestId, env);
     response = await waitForNativeShareResponse(pending.responsePath, nativeCliRequestTimeoutMs(env));
-  } catch (error) {
-    await rm(pending.requestPath, { force: true });
-    throw error;
+  } finally {
+    await cleanupNativeCliRequest(pending);
   }
   if (response?.ok !== true) {
     throw new AgentCommandError(
@@ -492,9 +498,8 @@ async function requestNativeJoin({ link, targetPath }, env = process.env) {
   try {
     opened = await openNativeCliRequest(pending.requestId, env);
     response = await waitForNativeShareResponse(pending.responsePath, nativeCliRequestTimeoutMs(env));
-  } catch (error) {
-    await rm(pending.requestPath, { force: true });
-    throw error;
+  } finally {
+    await cleanupNativeCliRequest(pending);
   }
   if (response?.ok !== true) {
     throw new AgentCommandError(
@@ -543,7 +548,8 @@ function summarizeNativeBinding(binding) {
 
 function providerVerificationConfig(binding, env = process.env) {
   const apiUrl = env.MARKLAB_CONTROL_PLANE_API_URL?.trim() || env.MARKLAB_PUBLIC_API_URL?.trim() || '';
-  const bearerToken = env.MARKLAB_USER_TOKEN?.trim() || '';
+  const bindingToken = typeof binding?.token === 'string' ? binding.token.trim() : '';
+  const bearerToken = bindingToken || env.MARKLAB_USER_TOKEN?.trim() || '';
   if (!apiUrl || !bearerToken || !binding?.docId || !binding?.branchId) return null;
   return {
     apiUrl: apiUrl.replace(/\/+$/u, ''),
@@ -833,7 +839,13 @@ async function nativeWaitCommand(input) {
         conflict: latest.conflict,
       });
     }
-    if (latest.syncState === 'synced' || latest.syncState === 'local') {
+    if (latest.syncState === 'local') {
+      throw new AgentCommandError('invalid_target', 'File is local-only; share or join it before waiting for shared sync.', {
+        path: latest.path,
+        syncState: latest.syncState,
+      });
+    }
+    if (latest.syncState === 'synced') {
       const result = agentSuccess({
         path: latest.path,
         syncState: latest.syncState,
