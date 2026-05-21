@@ -105,6 +105,43 @@ struct NativeCLIShareBridgeTests {
     #expect(try store.loadResponse(requestId: "req_stale") == nil)
   }
 
+  @Test("native CLI share request store skips malformed requests without blocking valid requests")
+  func requestStoreSkipsMalformedPendingRequests() throws {
+    let directory = try TemporaryDirectory()
+    let store = FileNativeCLIShareRequestStore(
+      appSupportDirectory: directory.url,
+      maximumPendingRequestAge: 60,
+      now: { Date(timeIntervalSince1970: 1_200) }
+    )
+    let requestsDirectory = directory.url.appending(path: "cli-requests", directoryHint: .isDirectory)
+    let responsesDirectory = directory.url.appending(path: "cli-responses", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: requestsDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: responsesDirectory, withIntermediateDirectories: true)
+    let malformedRequestURL = requestsDirectory.appending(path: "req_bad.json", directoryHint: .notDirectory)
+    let malformedResponseURL = responsesDirectory.appending(path: "req_bad.json", directoryHint: .notDirectory)
+    try Data(#"{ "requestId": "#.utf8).write(to: malformedRequestURL)
+    try Data(#"{ "ok": false }"#.utf8).write(to: malformedResponseURL)
+    try store.writeRequest(NativeCLIShareRequest(
+      requestId: "req_fresh",
+      action: .share,
+      file: "/tmp/fresh.md",
+      role: .edit,
+      createdAt: "1970-01-01T00:19:30.000Z"
+    ))
+
+    #expect(try store.pendingRequestIds() == ["req_fresh"])
+    #expect(FileManager.default.fileExists(atPath: malformedRequestURL.path))
+    #expect(FileManager.default.fileExists(atPath: malformedResponseURL.path))
+
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_000)],
+      ofItemAtPath: malformedRequestURL.path
+    )
+    #expect(try store.pendingRequestIds() == ["req_fresh"])
+    #expect(!FileManager.default.fileExists(atPath: malformedRequestURL.path))
+    #expect(!FileManager.default.fileExists(atPath: malformedResponseURL.path))
+  }
+
   @MainActor
   @Test("native CLI share service serializes concurrent same-file requests")
   func nativeCLIShareServiceSerializesConcurrentSameFileRequests() async throws {

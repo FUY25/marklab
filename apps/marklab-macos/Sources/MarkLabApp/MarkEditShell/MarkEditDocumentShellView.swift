@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import MarkLabMacOS
 
+enum MarkEditOperationalStatusSeverity: Equatable {
+  case normal
+  case error
+}
+
 // Adapted from MarkEdit, MIT licensed.
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/EditorWindowController.swift
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/Views/EditorStatusView.swift
@@ -392,7 +397,10 @@ struct MarkEditDocumentShellView: View {
   private var editorStatusOverlay: some View {
     HStack {
       if let operationalStatus {
-        statusPill(operationalStatus)
+        statusPill(
+          operationalStatus,
+          severity: Self.operationalStatusSeverityForTesting(operationalStatus)
+        )
           .frame(maxWidth: 420, alignment: .leading)
       }
       Spacer()
@@ -403,16 +411,29 @@ struct MarkEditDocumentShellView: View {
     .allowsHitTesting(false)
   }
 
-  private func statusPill(_ text: String) -> some View {
+  private func statusPill(
+    _ text: String,
+    severity: MarkEditOperationalStatusSeverity = .normal
+  ) -> some View {
     Text(text)
       .lineLimit(1)
       .truncationMode(.middle)
       .padding(.horizontal, 10)
       .padding(.vertical, 5)
+      .foregroundStyle(severity == .error ? Color(nsColor: .systemRed) : Color.primary)
+      .background(
+        severity == .error ? Color(nsColor: .systemRed).opacity(0.14) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+      )
       .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
-          .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
+          .stroke(
+            severity == .error
+              ? Color(nsColor: .systemRed).opacity(0.75)
+              : Color(nsColor: .separatorColor).opacity(0.6),
+            lineWidth: 1
+          )
       }
   }
 
@@ -439,6 +460,21 @@ struct MarkEditDocumentShellView: View {
       if trimmed.hasPrefix("Shared \(filename) as ") { return nil }
     }
     return trimmed
+  }
+
+  static func operationalStatusSeverityForTesting(_ statusText: String) -> MarkEditOperationalStatusSeverity {
+    let trimmed = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let lowercased = trimmed.lowercased()
+    if lowercased.hasPrefix("unable ")
+      || lowercased.hasPrefix("failed ")
+      || lowercased.hasPrefix("conflict:")
+      || lowercased.hasPrefix("unavailable")
+      || lowercased.hasPrefix("denied")
+      || lowercased.contains(" unavailable")
+      || lowercased.contains(" denied") {
+      return .error
+    }
+    return .normal
   }
 
   static func statusSummaryTextForTesting(

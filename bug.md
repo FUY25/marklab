@@ -732,7 +732,8 @@ App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/Mar
    - Impact: when the local Markdown file is missing, MarkLab.app surfaces `Unable to ingest local disk change.` and does not silently recreate or overwrite the file, so the data-safety behavior is acceptable. However, the status appears in the normal bottom-left status treatment rather than a red/error treatment, making it easier for pilot users to miss a real projection problem.
    - Evidence: user manual visual check moved `~/marklab-pilot-acceptance/pilot-presence-phase23.md` aside, continued browser edits, and observed MarkLab.app showing `Unable to ingest local disk change.` while the browser and app remained usable and later reconciled after restore.
    - Classification: P2, accepted for small pilot as a visibility/UX follow-up.
-   - Status: open follow-up; make projection-ingestion failures visually distinct, preferably with error coloring and clearer wording.
+   - Resolution: operational status pills now classify `Unable...`, `Failed...`, `Conflict:`, unavailable, and denied messages as error severity and render them with red text, red border, and a light red background. Swift UI strategy tests cover `Unable to ingest local disk change.` as an error and the normal waiting-to-ingest status as non-error.
+   - Status: fixed in Gate 2.5 follow-up.
 
 4. P2-004 — Native conflict review is cramped inside the collaboration sidebar.
    - Phase: 4.4 Disk + provider divergence conflict UI.

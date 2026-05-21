@@ -1550,6 +1550,11 @@ struct HostedCollabWebView: NSViewRepresentable {
 
   func makeNSView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
+    configuration.userContentController.addUserScript(WKUserScript(
+      source: HostedCollabWebView.nativeMarkerUserScript(),
+      injectionTime: .atDocumentStart,
+      forMainFrameOnly: true
+    ))
     if let nativeBearerToken, !nativeBearerToken.isEmpty {
       configuration.userContentController.addUserScript(WKUserScript(
         source: HostedCollabWebView.authFetchUserScript(nativeBearerToken),
@@ -1595,12 +1600,19 @@ struct HostedCollabWebView: NSViewRepresentable {
     return String(arrayLiteral.dropFirst().dropLast())
   }
 
+  fileprivate static func nativeMarkerUserScript() -> String {
+    """
+    (() => {
+      window.__marklabNativeApp = true;
+    })();
+    """
+  }
+
   fileprivate static func authFetchUserScript(_ bearerToken: String) -> String {
     let escapedToken = javascriptStringLiteral(bearerToken)
     return """
     (() => {
       const marklabNativeBearerToken = \(escapedToken);
-      window.__marklabNativeApp = true;
       const marklabNativeFetch = window.fetch.bind(window);
       window.fetch = (input, init = {}) => {
         const rawUrl = typeof input === 'string' ? input : input.url;
@@ -1628,6 +1640,14 @@ struct HostedCollabWebView: NSViewRepresentable {
 
   static func nativeEditableJavaScriptForTesting(_ isEditable: Bool) -> String {
     nativeEditableJavaScript(isEditable)
+  }
+
+  static func nativeMarkerUserScriptForTesting() -> String {
+    nativeMarkerUserScript()
+  }
+
+  static func authFetchUserScriptForTesting(_ bearerToken: String) -> String {
+    authFetchUserScript(bearerToken)
   }
 
   fileprivate static func editorCommandJavaScript(_ command: MarkEditLocalEditorCommand) -> String {

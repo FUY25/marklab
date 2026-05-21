@@ -1,6 +1,6 @@
 # Reconnect Conflict Hardening Implementation Plan
 
-> **Status, 2026-05-21:** Partially superseded by the current MarkLab.app native conflict inspector, hosted `/collab` control-plane/Y-Sweet path, and app-support-file status model. Do not execute local-daemon/API-local steps directly. References below to `apps/api/src/local/*`, local conflict routes, daemon registries, or daemon opt-in flags are historical notes from the removed daemon/local API approach.
+> **Status, 2026-05-21:** Historical reference only. This checklist is superseded by the current MarkLab.app native conflict inspector, hosted `/collab` control-plane/Y-Sweet path, and app-support-file status model. Do not execute the unchecked tasks below as active pilot work; any new conflict UX work needs a fresh Gate document/decision. References below to `apps/api/src/local/*`, local conflict routes, daemon registries, or daemon opt-in flags are historical notes from the removed daemon/local API approach.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -72,16 +72,14 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 
 ## File Structure
 
-- Modify `apps/api/src/local/local-conflict-store.ts`
-- Modify `apps/api/src/local/local-conflict-routes.ts`
-- Modify `apps/api/src/local/local-file-service.ts`
-- Modify `apps/api/src/local/local-conflict-store.test.ts`
-- Modify `apps/api/src/routes/local-conflict-routes.test.ts`
-- Modify `apps/collab-web/src/` conflict UI files created in `2026-05-11-collab-web-app.md`.
-- Modify native conflict UI files created in `2026-05-11-marklab-native-integration.md`.
-- Modify `apps/cli/marklab.mjs`
-- Modify `apps/cli/agent-conflict.test.mjs`
-- Modify downstream plan files listed in the final task.
+Historical daemon/local API file targets from the original plan were removed in Gate 2.5. Do not recreate `apps/api/src/local/local-conflict-*`, `apps/api/src/local/local-file-service.ts`, or `apps/api/src/routes/local-conflict-routes.test.ts` for the active pilot.
+
+Current conflict-related work, when explicitly resumed, belongs in these active surfaces:
+
+- `apps/collab-web/src/` for browser `/collab` conflict UI.
+- `apps/marklab-macos/Sources/MarkLabApp/` and `apps/marklab-macos/Sources/MarkLabMacOS/` for native conflict/status behavior.
+- `apps/cli/marklab.mjs` and active CLI tests for agent-visible conflict commands.
+- Downstream plan files listed in the final task, only after behavior is deliberately changed.
 
 ## Tasks
 
@@ -95,7 +93,7 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
   - shared revision/fingerprint;
   - status.
 - [ ] Add route tests for current conflict and historical conflict fetch.
-- [ ] Acceptance command: `npx -y pnpm@10.0.0 test apps/api/src/routes/local-conflict-routes.test.ts`.
+- [ ] Historical acceptance command removed with the daemon/local API stack; define a new active acceptance command before resuming this task.
 
 ### Task 2: Resolution Actions
 
@@ -147,7 +145,7 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 
 ### Task 7: Verification
 
-- [ ] Run `npx -y pnpm@10.0.0 test apps/api/src/local apps/api/src/routes/local-conflict-routes.test.ts apps/cli`.
+- [ ] Run active browser/native/CLI conflict tests defined by the replacement Gate document. Do not run removed `apps/api/src/local` or `local-conflict-routes` tests.
 - [ ] Run browser/native conflict E2E smoke.
 - [ ] Run `git diff --check`.
 - [ ] Commit with `git commit -m "feat: harden reconnect conflict ux"`.

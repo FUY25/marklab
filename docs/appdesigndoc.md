@@ -288,7 +288,7 @@ The data model should support the later team/business product even when v1 UI is
 - `share_keys`: invite keys for joining a workspace.
 - `documents`: one Markdown document resource, with an opaque provider document id. A workspace contains many documents. v1 limits each document to a single Markdown file; folder/multi-file collaboration is Phase 5.
 - `document_access_grants`: per-document view/edit links.
-- `sessions`: browser/app/daemon/agent/guest participant sessions.
+- `sessions`: browser/app/agent/api/guest participant sessions. The legacy local daemon session kind was removed from the active pilot with the old daemon/local API stack.
 - `plans`: free/dev/team/business plan definitions.
 - `seat_limits`: workspace-scoped maximums (named-member seats and a separate concurrent-guest-edit quota; see Permission Model).
 - `subscriptions`: subscription records, initially manual or free-only.

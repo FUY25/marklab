@@ -194,7 +194,16 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
       .sorted()
     var pending: [String] = []
     for requestId in requestIds {
-      guard let request = try loadRequest(requestId: requestId) else { continue }
+      let request: NativeCLIShareRequest
+      do {
+        guard let loadedRequest = try loadRequest(requestId: requestId) else { continue }
+        request = loadedRequest
+      } catch {
+        if malformedRequestIsStale(requestId: requestId) {
+          try removeRequestFiles(requestId: requestId)
+        }
+        continue
+      }
       if isStale(request) {
         try removeRequestFiles(requestId: requestId)
         continue
@@ -245,6 +254,17 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
   private func isStale(_ request: NativeCLIShareRequest) -> Bool {
     guard maximumPendingRequestAge > 0, let createdAt = Self.date(from: request.createdAt) else { return false }
     return now().timeIntervalSince(createdAt) > maximumPendingRequestAge
+  }
+
+  private func malformedRequestIsStale(requestId: String) -> Bool {
+    guard maximumPendingRequestAge > 0 else { return false }
+    guard
+      let attributes = try? fileManager.attributesOfItem(atPath: requestURL(requestId).path),
+      let modifiedAt = attributes[.modificationDate] as? Date
+    else {
+      return false
+    }
+    return now().timeIntervalSince(modifiedAt) > maximumPendingRequestAge
   }
 
   private static func date(from value: String) -> Date? {

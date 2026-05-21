@@ -141,7 +141,7 @@ Before starting implementation, carry forward the browser items explicitly defer
 - [ ] Decide whether collab-web is served by the API process or as a separate static app.
 - [ ] Update Docker/Fly config according to that decision.
 - [ ] Ensure `MARKLAB_PUBLIC_WEB_URL` points to the browser collaborator route that real share links open.
-- [ ] Acceptance command: production build serves the collab-web entry and does not break existing `apps/web` routes.
+- [ ] Acceptance command: production build serves the `apps/collab-web` entry at `/collab` plus `/collab-web/assets/...`; archived `apps/web` and old `/relay` routes are not part of active pilot compatibility.
 
 ### Task 7B: Workspace Settings Shell
 

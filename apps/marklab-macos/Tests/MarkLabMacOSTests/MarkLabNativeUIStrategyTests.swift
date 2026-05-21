@@ -155,6 +155,16 @@ struct MarkLabNativeUIStrategyTests {
       ) == "Unable to save Markdown file."
     )
     #expect(
+      MarkEditDocumentShellView.operationalStatusSeverityForTesting(
+        "Unable to ingest local disk change."
+      ) == .error
+    )
+    #expect(
+      MarkEditDocumentShellView.operationalStatusSeverityForTesting(
+        "Waiting to ingest local disk change into the shared editor."
+      ) == .normal
+    )
+    #expect(
       MarkEditDocumentShellView.operationalStatusTextForTesting(
         "Projected shared Markdown to note.md.",
         filePath: "/tmp/note.md"
@@ -195,6 +205,19 @@ struct MarkLabNativeUIStrategyTests {
     #expect(commandJavaScript.contains("=== true"))
     #expect(readOnlyJavaScript.contains("typeof window.__marklabSetNativeEditable === 'function'"))
     #expect(readOnlyJavaScript.contains("__marklabSetNativeEditable(false) === true"))
+  }
+
+  @Test("hosted app web view native marker is independent from bearer auth injection")
+  @MainActor
+  func hostedAppWebViewNativeMarkerDoesNotRequireBearerToken() {
+    let markerJavaScript = HostedCollabWebView.nativeMarkerUserScriptForTesting()
+    let authJavaScript = HostedCollabWebView.authFetchUserScriptForTesting("ml_user_session")
+
+    #expect(markerJavaScript.contains("window.__marklabNativeApp = true"))
+    #expect(!markerJavaScript.contains("Authorization"))
+    #expect(!markerJavaScript.contains("ml_user_session"))
+    #expect(authJavaScript.contains("headers.set('Authorization'"))
+    #expect(authJavaScript.contains("headers.set('X-MarkLab-Native-App', '1')"))
   }
 
   @Test("native collaboration inspector models collaborators separately from access links")
