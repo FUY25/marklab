@@ -719,3 +719,33 @@ App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/Mar
    - Resolution: normalize an omitted security-origin port (`0`) to the scheme default in `NativeHostedWebViewOrigin.matches`, while keeping custom-port origins strict.
    - Verification: `swift test --package-path apps/marklab-macos` passed with 73 tests; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 80 files and 682 tests; `package:app` and `verify:package` passed; Phase 2.2 was re-run against the patched packaged app and confirmed both app-originated and browser-originated edits projected into `~/marklab-pilot-acceptance/pilot-bridge-fix.md`.
    - Status: fixed; Gate 0 re-frozen on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` before continuing the full manual pass.
+
+2. P2-002 — Remote cursor re-anchor is delayed in the actively editing surface after local insertion.
+   - Phase: 2.3 Cursor and selection three-way.
+   - Impact: anchor stability is eventually correct and the non-editing observer sees the collaborator cursor move with inserted text, but the currently editing browser/app surface can briefly show the remote cursor at its old location until a later refresh/awareness update. This is visual latency, not data loss or convergence failure.
+   - Evidence: user manual visual check confirmed Phase 2.3 items 1-6 passed. During anchor stability testing with an extra headless collaborator cursor, the non-editing surface showed the collaborator cursor moving with text after insertion. The actively editing browser and app both lagged before the remote cursor refreshed into the moved position.
+   - Classification: P2, accepted for small pilot as a known visual limitation.
+   - Status: open follow-up; does not block pilot unless it becomes confusing enough in real pilot sessions.
+
+3. P2-003 — Native missing-file/projection failure status uses neutral visual treatment.
+   - Phase: 4.3 Missing local file pauses projection.
+   - Impact: when the local Markdown file is missing, MarkLab.app surfaces `Unable to ingest local disk change.` and does not silently recreate or overwrite the file, so the data-safety behavior is acceptable. However, the status appears in the normal bottom-left status treatment rather than a red/error treatment, making it easier for pilot users to miss a real projection problem.
+   - Evidence: user manual visual check moved `~/marklab-pilot-acceptance/pilot-presence-phase23.md` aside, continued browser edits, and observed MarkLab.app showing `Unable to ingest local disk change.` while the browser and app remained usable and later reconciled after restore.
+   - Classification: P2, accepted for small pilot as a visibility/UX follow-up.
+   - Status: open follow-up; make projection-ingestion failures visually distinct, preferably with error coloring and clearer wording.
+
+4. P2-004 — Native conflict review is cramped inside the collaboration sidebar.
+   - Phase: 4.4 Disk + provider divergence conflict UI.
+   - Impact: the conflict workflow is functionally present, but it is embedded below collaboration metadata, active collaborators, local sync status, and the stop-sharing control. In a narrow side panel this mixes operational collaboration UI with the high-stakes conflict review flow, making the conflict harder to scan and the resolution actions feel cramped.
+   - Evidence: user manual visual check showed the conflict panel containing local/shared/base snapshots, diff, Accept Local, Keep Shared, Paste Resolved, and confirmation controls inside the same sidebar as collaboration state. User confirmed the functional conflict behavior passed but the UI placement felt uncomfortable.
+   - Classification: P2, accepted for small pilot as a usability follow-up because data-safety behavior and conflict resolution controls were present.
+   - Status: open follow-up; move conflict review into a more dedicated surface, such as a full-width lower panel, modal/sheet, or focused review mode separated from active collaborators and sharing metadata.
+
+### Final manual acceptance summary
+
+- Result: passed for a small manual pilot on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` and app artifact `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`.
+- Target: `https://marklab-relay-alpha.fly.dev`.
+- Open blockers: no open P0 and no open P1 after P1-001 was fixed and re-verified.
+- Accepted P2 follow-ups: P2-002 active-editor remote-cursor re-anchor latency, P2-003 neutral styling for native projection-ingestion failures, and P2-004 cramped native conflict review placement.
+- Manual coverage completed: Phase 1 smoke; Phase 2 convergence/presence; Phase 3 permissions/lifecycle; Phase 4 edge cases including missing-file projection pause, conflict review, guarded resolved save, external atomic save during conflict, and active user typing versus simulated agent blind atomic replace; Phase 5 native shell polish.
+- Note: the lower-risk added Phase 4.7 normal agent local edit/replace smoke was not run as a separate row because external append ingestion was already covered by Phase 2.6 and Phase 4.8, while the higher-risk blind atomic replace race was covered by Phase 4.8 and produced an explicit conflict instead of silent overwrite.

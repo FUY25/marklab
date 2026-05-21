@@ -480,6 +480,78 @@ This proves closed bug #95/#96/#103.
 **Pass:** external content preserved or conflict re-opens.
 **Fail:** external content overwritten.
 
+### 4.7 Agent local edit/replace smoke (5 min)
+
+This covers the v1 agent contract: agents edit the local Markdown file,
+and MarkLab.app ingests that disk change into the shared provider state.
+It does not require a real model run; terminal writes exercise the same
+file-watcher path.
+
+1. With MarkLab.app and one browser edit tab open on the same shared
+   local file, confirm there is no conflict panel open.
+2. Simulate an agent append:
+   ```sh
+   printf '\nAGENT LOCAL EDIT phase47\n' >> ~/marklab-pilot-acceptance/pilot.md
+   ```
+3. **Expect:** within a few seconds, MarkLab.app and the browser edit
+   tab both show `AGENT LOCAL EDIT phase47`.
+4. Simulate an agent full-file atomic replace while preserving current
+   content:
+   ```sh
+   cp ~/marklab-pilot-acceptance/pilot.md /tmp/marklab-phase47-agent.md
+   printf '\nAGENT ATOMIC REPLACE phase47\n' >> /tmp/marklab-phase47-agent.md
+   mv /tmp/marklab-phase47-agent.md ~/marklab-pilot-acceptance/pilot.md
+   ```
+5. **Expect:** MarkLab.app and the browser edit tab both show
+   `AGENT ATOMIC REPLACE phase47`, or a conflict opens if a provider
+   edit raced the disk replacement. It must not silently overwrite the
+   agent replacement.
+
+**Pass:** append and atomic-replace disk changes are ingested into app
+and browser, or an explicit conflict opens for a real race.
+**Fail:** agent-written content disappears silently, does not reach the
+browser/app, or is overwritten without a conflict.
+
+### 4.8 Agent atomic replace during active user typing (5 min)
+
+This is the high-risk race: a user is actively editing in the shared
+editor while an agent performs a full-file local replacement from disk.
+
+1. With MarkLab.app and one browser edit tab open on the same shared
+   local file, confirm there is no conflict panel open.
+2. In the browser or app editor, type a unique marker and keep the
+   cursor active:
+   ```text
+   USER ACTIVE TYPING phase48
+   ```
+3. Before waiting for everything to settle, simulate an agent direct
+   full-file replacement that intentionally does not include the user
+   marker:
+   ```sh
+   cat > /tmp/marklab-phase48-agent.md <<'EOF'
+   AGENT DIRECT REPLACE phase48
+   EOF
+   mv /tmp/marklab-phase48-agent.md ~/marklab-pilot-acceptance/pilot.md
+   ```
+4. **Expect:** one of these acceptable outcomes:
+   - An explicit conflict opens and shows the user/provider text versus
+     the agent disk replacement.
+   - The agent replacement becomes the shared document only if it is
+     clearly ingested as the latest local file state; browser/app both
+     converge to `AGENT DIRECT REPLACE phase48`.
+5. Continue typing another short marker after the replace:
+   ```text
+   USER AFTER REPLACE phase48
+   ```
+6. **Expect:** the post-replace typing is either preserved in the
+   current shared document or blocked by a visible conflict/read-only
+   state. It must not disappear silently.
+
+**Pass:** no silent rollback, no hidden overwrite, and any real race is
+represented as an explicit conflict or a clearly converged replacement.
+**Fail:** user typing or agent replacement disappears silently; app and
+browser disagree for more than a few seconds without a conflict/status.
+
 ---
 
 ## Phase 5 — Native shell polish (5 min)
