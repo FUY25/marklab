@@ -1,5 +1,10 @@
 import Foundation
 
+public enum NativeLinkRole: String, Codable, Equatable, Sendable {
+  case edit
+  case view
+}
+
 public struct NativeHostedDocument: Decodable, Equatable, Sendable {
   public let docId: String
   public let branchId: String

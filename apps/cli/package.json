@@ -3,48 +3,22 @@
   "version": "0.1.0-alpha.5",
   "private": false,
   "type": "module",
-  "description": "MarkLab CLI helper for hosted app joins plus archived local-daemon compatibility commands.",
+  "description": "MarkLab CLI helper for hosted app joins and native sync coordination.",
   "bin": {
     "marklab": "marklab.mjs"
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
-  "dependencies": {
-    "@marklab/markdown": "file:../../packages/markdown",
-    "@marklab/shared": "file:../../packages/shared",
-    "@vitejs/plugin-react": "^5.0.0",
-    "crossws": "^0.3.5",
-    "express": "^5.0.0",
-    "jsdom": "^27.4.0",
-    "lucide-react": "^1.14.0",
-    "pg": "^8.13.0",
-    "prettier": "^3.3.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "tsx": "^4.19.0",
-    "vite": "^6.0.0",
-    "ws": "^8.18.0",
-    "y-protocols": "^1.0.6",
-    "yjs": "^13.6.0",
-    "zod": "^3.24.0"
-  },
+  "dependencies": {},
   "files": [
     "README.md",
     "agent-instructions.mjs",
     "agent-json.mjs",
-    "daemon-supervisor.mjs",
     "doctor.mjs",
-    "marklab.mjs",
-    "prepare-package.mjs",
-    "recent-files.mjs",
-    "relay-config.mjs",
-    "runtime",
-    "wait-for-sync.mjs"
+    "marklab.mjs"
   ],
   "scripts": {
-    "prepack": "node prepare-package.mjs prepare",
-    "postpack": "node prepare-package.mjs clean",
     "pack:dry-run": "npm pack --dry-run"
   }
 }

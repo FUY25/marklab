@@ -7,7 +7,7 @@ This runbook is for the new MarkLab app path:
 - Provider: API-root Y-Sweet routes such as `/d/<providerDocId>/ws/<providerDocId>`
 - Native app: MarkLab.app embeds `/collab` with `clientKind=app` and same-origin native bearer injection
 
-It is not the old host-gated `/local#token=...` daemon route. The legacy local daemon bridge is disabled by default and only runs when `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set. The old local-daemon CLI command surface is also disabled by default and requires `MARKLAB_ENABLE_LEGACY_CLI=1` for archived compatibility testing.
+It is not the old host-gated `/local#token=...` daemon route. The legacy local daemon bridge and old local-daemon CLI command surface have been removed from the active pilot.
 
 ## Can We Use The Current Fly.io + Neon Alpha?
 

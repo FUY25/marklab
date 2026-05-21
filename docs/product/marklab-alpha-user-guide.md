@@ -1,15 +1,15 @@
 # MarkLab Alpha User Guide
 
-This guide describes the new MarkLab relay/native pilot.
+This guide describes the current MarkLab hosted control-plane/Y-Sweet native pilot.
 
-It does not describe the archived local-daemon alpha. The archived daemon commands are disabled by default and require `MARKLAB_ENABLE_LEGACY_CLI=1` only for compatibility testing.
+It does not describe the archived local-daemon alpha. The daemon route and old daemon CLI commands have been removed from the active pilot.
 
 ## What MarkLab Does
 
 MarkLab lets people coedit Markdown while keeping a normal local `.md` file in the workflow.
 
 - The native app opens and saves local Markdown files.
-- `Start Sharing` creates a shared relay document for that file.
+- `Start Sharing` creates a hosted shared document for that file.
 - Browser collaborators edit through `/collab`.
 - App collaborators can open the same edit link in MarkLab.app and create their own local file copy.
 - MarkLab projects shared changes back to the local file and stops for conflict review when local disk and provider state both diverge.
@@ -93,7 +93,7 @@ Expected behavior:
 - MarkLab asks for the destination folder.
 - The local filename is the shared document name.
 - If a same-name local file is non-empty and is not already bound to that shared document, this pilot slice refuses the join instead of overwriting silently. Attach-to-existing with conflict preview remains the unchecked Plan 6 follow-up.
-- Reopen restores the local binding without using the old daemon.
+- Reopen restores the local binding through the hosted document binding.
 
 ## Saving
 
@@ -114,7 +114,7 @@ Realtime sync keeps connected editors current. It is not a substitute for versio
 
 The API has version routes for manual save, autosave, list, and restore. Those routes flush active collaboration state before saving or restoring.
 
-The new native relay UI does not yet expose a complete hosted Versions panel. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
+The new native hosted UI does not yet expose a complete Versions panel. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
 
 ## Plan And Billing
 

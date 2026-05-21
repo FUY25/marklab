@@ -1,13 +1,13 @@
 # Fly.io And Neon Alpha Setup
 
-This is the operator path for the current MarkLab alpha: hosted control plane, `/collab` browser app, and API-supervised Y-Sweet provider. It is not the archived anonymous relay-daemon alpha.
+This is the operator path for the current MarkLab alpha: hosted control plane, `/collab` browser app, and API-supervised Y-Sweet provider. It is not the archived anonymous daemon alpha.
 
 ## Target Regions
 
 - Fly.io region: Singapore, `sin`
 - Neon region: AWS Asia Pacific 1 Singapore, `aws-ap-southeast-1`
 
-Keep Fly and Neon in Singapore for the alpha. Moving one without the other increases latency for relay metadata and host-online checks.
+Keep Fly and Neon in Singapore for the alpha. Moving one without the other increases latency for control-plane metadata, access checks, and provider token issuance.
 
 ## 1. Create Accounts
 
@@ -23,7 +23,7 @@ The Fly image serves the API, built `/collab` app, workspace settings shell, and
 
 The API co-locates the upstream Y-Sweet provider in the same Fly machine. The API supervises a child `y-sweet serve` process on `127.0.0.1:8080`, stores provider checkpoints on a Fly volume at `/data/ysweet`, and proxies public Y-Sweet document routes to that child process. Current Y-Sweet 0.9.1 client tokens use `/d/<providerDocId>/ws/<providerDocId>` for websocket sync plus `/d/<providerDocId>/as-update` and `/d/<providerDocId>/update` for token-scoped document HTTP traffic.
 
-The current alpha is login/workspace backed. MarkLab.app creates or imports workspace-owned documents, creates access grants for collaborators, and receives short-lived provider tokens through the control plane. Do not use the old anonymous `/relay/<room>` daemon route for new pilot testing.
+The current alpha is login/workspace backed. MarkLab.app creates or imports workspace-owned documents, creates access grants for collaborators, and receives short-lived provider tokens through the control plane. The old anonymous daemon route is no longer part of the pilot stack.
 
 Run the private alpha as one Fly machine:
 
@@ -119,7 +119,7 @@ fly secrets set \
   MARKLAB_YSWEET_SERVER_TOKEN='<server_token-from-y-sweet-gen-auth>'
 ```
 
-`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, and Y-Sweet client token websocket URLs must resolve to the same deployed host unless a later custom-domain plan changes all of them together. The archived `/relay` daemon route is not configured for the production pilot unless `MARKLAB_ENABLE_LEGACY_RELAY=true` is deliberately added for compatibility testing.
+`DATABASE_URL` must include `sslmode=require`. Public URL mismatch is a release blocker because share links, API calls, and Y-Sweet client token websocket URLs must resolve to the same deployed host unless a later custom-domain plan changes all of them together.
 
 Provider env defaults that are not secrets live in `fly.toml`: `MARKLAB_YSWEET_PROVIDER_MODE=process`, `MARKLAB_YSWEET_SERVER_URL=http://127.0.0.1:8080`, `MARKLAB_YSWEET_STORE_PATH=/data/ysweet`, `MARKLAB_YSWEET_HOST=127.0.0.1`, `MARKLAB_YSWEET_PORT=8080`, `MARKLAB_YSWEET_CHECKPOINT_FREQ_SECONDS=10`, and `MARKLAB_YSWEET_SKIP_GC=false`. Keep `MARKLAB_YSWEET_SKIP_GC=false` while MarkLab pins Y-Sweet 0.9.1; true is rejected because that server version has no `--skip-gc` serve flag.
 
@@ -153,7 +153,7 @@ curl https://marklab-relay-alpha.fly.dev/healthz
 
 The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production must do the same before rollout. Until the API exposes a source-integrated migration command, the operator applies the checked-in schema to Neon directly.
 
-`/healthz` reports process liveness separately from database readiness, schema readiness, legacy relay readiness, and provider readiness. The current production pilot does not require the archived relay, so a release-ready response has `ok`, `database.ready`, `schema.ready`, `relay.required=false`, `provider.ready`, and `provider.storeReady`.
+`/healthz` reports process liveness separately from database readiness, schema readiness, and provider readiness. A release-ready response has `ok`, `database.ready`, `schema.ready`, `provider.ready`, and `provider.storeReady`.
 
 ## 8. Release Gate
 

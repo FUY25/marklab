@@ -6,19 +6,6 @@ import Testing
 @Suite("MarkLab app model")
 struct MarkLabAppModelTests {
   @MainActor
-  @Test("legacy local daemon boundary is opt-in for the new relay app")
-  func legacyLocalDaemonBoundaryIsOptIn() {
-    #expect(!MarkLabAppModel.localDaemonBoundaryEnabled(environment: [:]))
-    #expect(MarkLabAppModel.localDaemonBoundaryEnabled(environment: [
-      "MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY": "1",
-    ]))
-    #expect(!MarkLabAppModel.localDaemonBoundaryEnabled(environment: [
-      "MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY": "1",
-      "MARKLAB_APP_SKIP_LOCAL_DAEMON": "1",
-    ]))
-  }
-
-  @MainActor
   @Test("created browser links report automatic clipboard copy")
   func createdBrowserLinksReportAutomaticClipboardCopy() {
     #expect(MarkLabAppModel.linkCopiedStatusText(role: .edit) == "Edit link copied to clipboard.")
@@ -241,7 +228,7 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
-  @Test("joins an edit link as a local shared document without the legacy daemon")
+  @Test("joins an edit link as a local shared document")
   func joinsEditLinkAsLocalSharedDocument() throws {
     let directory = try TemporaryDirectory()
     let fileURL = directory.url.appending(path: "joined.md")

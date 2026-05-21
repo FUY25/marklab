@@ -6,17 +6,13 @@ The product model is still simple: the user's `.md` file on disk remains the loc
 
 ## Current Pilot
 
-The current pilot is the new relay/Y-Sweet native path, not the old local daemon route.
+The current pilot is the hosted control-plane/Y-Sweet native path. The old local daemon route has been removed from active build, test, and CLI paths.
 
 - Native app: `apps/marklab-macos`
 - Hosted pilot target: `https://marklab-relay-alpha.fly.dev`
 - Browser collaborator route: `/collab?docId=...&branchId=...&token=...&mode=edit|view`
 - Control plane: `/api/auth/*`, `/api/workspaces/*`, `/api/docs/*`, access grants, and collab sessions
 - Provider: Y-Sweet routes proxied at the API root, for example `/d/<providerDocId>/ws/<providerDocId>`
-- Local daemon compatibility: archived and disabled by default
-
-The old daemon CLI workflow can still be tested only by opting in with `MARKLAB_ENABLE_LEGACY_CLI=1`. Normal pilot users should use MarkLab.app and hosted `/collab` links.
-
 As of May 18, 2026, `marklab-relay-alpha.fly.dev` is deployed with the new API/control-plane/Y-Sweet stack on Fly.io, backed by Neon and a Fly volume for provider data. Public health should include `ok: true`, `schema.ready: true`, `provider.ready: true`, and `provider.storeReady: true`.
 
 ## Pilot Workflow
@@ -180,7 +176,7 @@ The Docker build depends on the repo-root `.dockerignore`; keep it updated when 
 
 ## CLI Status
 
-The CLI now has native-relay pilot commands that work without the archived daemon opt-in:
+The CLI now exposes only the current MarkLab.app + hosted `/collab` pilot commands:
 
 ```sh
 marklab doctor --json
@@ -192,15 +188,7 @@ marklab wait README.md --synced --json
 marklab conflict README.md --json
 ```
 
-`open` and `share` route to MarkLab.app; `share` does not mint a hidden daemon relay link. The app owns Start Sharing, workspace-owned document creation, and access-link creation. `join` opens a `marklab://join?...` deep link for MarkLab.app. View links are rejected because they are browser-only. `status`, `wait`, and `conflict` read native MarkLab.app support files so agents can coordinate with the local `.md` without using provider internals.
-
-The old daemon commands are archived compatibility commands and require explicit opt-in:
-
-```sh
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab status
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab open README.md --background
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab create-link README.md --role edit
-```
+`open` and `share` route to MarkLab.app; `share` asks the app to create current hosted edit/view links. The app owns Start Sharing, workspace-owned document creation, and access-link creation. `join` opens a `marklab://join?...` deep link for MarkLab.app. View links are rejected because they are browser-only. `status`, `wait`, and `conflict` read native MarkLab.app support files so agents can coordinate with the local `.md` without using provider internals.
 
 ## Product Docs
 
@@ -208,7 +196,6 @@ MARKLAB_ENABLE_LEGACY_CLI=1 marklab create-link README.md --role edit
 - [Alpha User Guide](docs/product/marklab-alpha-user-guide.md)
 - [Local-First User Journeys](docs/product/local-first-user-journeys.md)
 - [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
-- [Archived Local Daemon Distribution](docs/production/local-daemon-distribution.md)
 - [Privacy And Storage](docs/production/privacy-and-storage.md)
 - [Hosted Relay Operations](docs/production/relay-ops.md)
 - [Alpha Launch Runbook](docs/production/alpha-launch-runbook.md)

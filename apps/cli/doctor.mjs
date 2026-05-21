@@ -1,22 +1,14 @@
-import { constants as fsConstants, existsSync, mkdirSync, rmSync, symlinkSync, watch } from 'node:fs';
+import { constants as fsConstants, existsSync, watch } from 'node:fs';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
-import http from 'node:http';
-import https from 'node:https';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join, resolve } from 'node:path';
 import { AgentCommandError, agentSuccess } from './agent-json.mjs';
-import { defaultAlphaRelayConfig } from './relay-config.mjs';
 
 const minimumNodeMajor = 20;
-
-function parsePort(value, fallback) {
-  if (value === undefined || value === null || value === '') return fallback;
-  const port = Number(value);
-  return Number.isInteger(port) && port > 0 ? port : null;
-}
+const defaultAlphaPilot = {
+  publicWebUrl: 'https://marklab-relay-alpha.fly.dev',
+  publicApiUrl: 'https://marklab-relay-alpha.fly.dev',
+};
 
 function addCheck(checks, name, status, message, details = undefined) {
   const check = { name, status, message };
@@ -67,47 +59,6 @@ function pathStorageWarning(targetPath) {
   return null;
 }
 
-async function checkRelayReachability(url, timeoutMs = 1500) {
-  const httpUrl = url.replace(/^ws:/u, 'http:').replace(/^wss:/u, 'https:');
-  return new Promise((resolveCheck) => {
-    let settled = false;
-    function finish(ok, details = undefined) {
-      if (settled) return;
-      settled = true;
-      resolveCheck({ ok, details });
-    }
-
-    let parsed;
-    try {
-      parsed = new URL(httpUrl);
-    } catch {
-      finish(false, { reason: 'invalid_url' });
-      return;
-    }
-
-    const client = parsed.protocol === 'https:' ? https : http;
-    const request = client.request(
-      {
-        method: 'HEAD',
-        hostname: parsed.hostname,
-        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-        path: parsed.pathname || '/',
-        timeout: timeoutMs,
-      },
-      (response) => {
-        response.resume();
-        finish(Boolean(response.statusCode && response.statusCode < 500), { status: response.statusCode });
-      },
-    );
-    request.on('error', (error) => finish(false, { reason: error.message }));
-    request.on('timeout', () => {
-      request.destroy();
-      finish(false, { reason: 'timeout' });
-    });
-    request.end();
-  });
-}
-
 function truncateProbeText(value, maxLength = 2000) {
   const text = String(value ?? '');
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
@@ -120,9 +71,9 @@ function trimTrailingSlash(value) {
 function resolvePilotTarget(env) {
   const apiUrl = env.MARKLAB_CONTROL_PLANE_API_URL?.trim()
     || env.MARKLAB_PUBLIC_API_URL?.trim()
-    || defaultAlphaRelayConfig.publicApiUrl;
+    || defaultAlphaPilot.publicApiUrl;
   const webUrl = env.MARKLAB_PUBLIC_WEB_URL?.trim()
-    || defaultAlphaRelayConfig.publicWebUrl;
+    || defaultAlphaPilot.publicWebUrl;
   return {
     apiUrl: trimTrailingSlash(apiUrl),
     webUrl: trimTrailingSlash(webUrl),
@@ -212,170 +163,6 @@ async function checkApiHealth(apiUrl, timeoutMs = 2500) {
   }
 }
 
-export function resolveRuntimeRootFromCliDirectory(cliDirectory = dirname(fileURLToPath(import.meta.url))) {
-  const workspaceRoot = resolve(cliDirectory, '../..');
-  const packagedRuntimeRoot = resolve(cliDirectory, 'runtime');
-  if (existsSync(resolve(workspaceRoot, 'pnpm-workspace.yaml'))) return workspaceRoot;
-  if (existsSync(resolve(packagedRuntimeRoot, 'pnpm-workspace.yaml'))) return packagedRuntimeRoot;
-  return cliDirectory;
-}
-
-function cliPackageRootFromRuntimeRoot(runtimeRoot) {
-  return basename(runtimeRoot) === 'runtime' ? dirname(runtimeRoot) : runtimeRoot;
-}
-
-export function shouldProbeMilkdownRuntime(runtimeRoot = resolveRuntimeRootFromCliDirectory(), env = process.env) {
-  if (!existsSync(resolve(runtimeRoot, 'pnpm-workspace.yaml'))) return false;
-  return basename(runtimeRoot) !== 'runtime' || env.MARKLAB_ENABLE_LEGACY_CLI === '1';
-}
-
-function ensureRuntimeWorkspaceLinks(activeRuntimeRoot) {
-  if (!existsSync(resolve(activeRuntimeRoot, 'pnpm-workspace.yaml'))) return false;
-  if (basename(activeRuntimeRoot) !== 'runtime') return false;
-  const scopeRoot = resolve(activeRuntimeRoot, 'node_modules/@marklab');
-  mkdirSync(scopeRoot, { recursive: true });
-  for (const name of ['shared', 'markdown', 'collab-editor']) {
-    const linkPath = resolve(scopeRoot, name);
-    const target = `../../packages/${name}`;
-    try {
-      rmSync(linkPath, { recursive: true, force: true });
-    } catch (error) {
-      if (!error || error.code !== 'ENOENT') throw error;
-    }
-    symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
-  }
-  return true;
-}
-
-function runProbeProcess(command, args, options = {}) {
-  return new Promise((resolveCheck) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: { ...process.env, ...(options.env ?? {}) },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      resolveCheck({
-        exitCode: null,
-        signal: 'SIGTERM',
-        stdout,
-        stderr,
-        timedOut: true,
-      });
-    }, options.timeoutMs ?? 15_000);
-
-    child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolveCheck({
-        exitCode: null,
-        signal: null,
-        stdout,
-        stderr,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    child.once('close', (exitCode, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolveCheck({ exitCode, signal, stdout, stderr, timedOut: false });
-    });
-  });
-}
-
-export async function defaultMilkdownRuntimeProbe(options = {}) {
-  const repoRoot = resolveRuntimeRootFromCliDirectory();
-  ensureRuntimeWorkspaceLinks(repoRoot);
-  const apiDirectory = resolve(repoRoot, 'apps/api');
-  const runtimeModulePath = resolve(apiDirectory, 'src/services/milkdown-headless-runtime.ts');
-  if (!existsSync(runtimeModulePath)) {
-    return {
-      ok: false,
-      details: {
-        reason: 'runtime_source_missing',
-        runtimeModulePath,
-      },
-    };
-  }
-
-  const runtimeModuleUrl = pathToFileURL(runtimeModulePath).href;
-  const probeScript = `
-    async function main() {
-      const { createHeadlessMilkdownRuntime } = await import(${JSON.stringify(runtimeModuleUrl)});
-      const state = await createHeadlessMilkdownRuntime().initializeFromMarkdown('# MarkLab doctor\\n\\nRuntime probe.\\n');
-      if (!(state.yjsState instanceof Uint8Array) || state.yjsState.byteLength === 0) throw new Error('empty_yjs_state');
-      if (typeof state.markdown !== 'string' || !state.markdown.includes('MarkLab doctor')) throw new Error('markdown_probe_failed');
-      console.log(JSON.stringify({ markdownLength: state.markdown.length, yjsStateBytes: state.yjsState.byteLength, hash: state.hash }));
-    }
-    main().catch((error) => {
-      console.error(error);
-      process.exit(1);
-    });
-  `;
-  const tsxBinary = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
-  const candidateTsxBins = [
-    resolve(repoRoot, 'node_modules/.bin', tsxBinary),
-    resolve(cliPackageRootFromRuntimeRoot(repoRoot), 'node_modules/.bin', tsxBinary),
-    resolve(cliPackageRootFromRuntimeRoot(repoRoot), '..', '..', '.bin', tsxBinary),
-  ];
-  const localTsx = candidateTsxBins.find((candidate) => existsSync(candidate));
-  const command = localTsx ?? 'pnpm';
-  const args = localTsx ? ['-e', probeScript] : ['--dir', apiDirectory, 'exec', 'tsx', '-e', probeScript];
-  const result = await runProbeProcess(command, args, {
-    cwd: repoRoot,
-    env: options.env,
-    timeoutMs: options.timeoutMs,
-  });
-
-  if (result.exitCode !== 0) {
-    return {
-      ok: false,
-      details: {
-        command: localTsx ? 'tsx' : 'pnpm exec tsx',
-        exitCode: result.exitCode,
-        signal: result.signal,
-        timedOut: Boolean(result.timedOut),
-        stdout: truncateProbeText(result.stdout),
-        stderr: truncateProbeText(result.stderr),
-        error: result.error,
-      },
-    };
-  }
-
-  const outputLine = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
-  try {
-    return {
-      ok: true,
-      details: {
-        ...(outputLine ? JSON.parse(outputLine) : {}),
-        command: localTsx ? 'tsx' : 'pnpm exec tsx',
-      },
-    };
-  } catch {
-    return {
-      ok: true,
-      details: {
-        command: localTsx ? 'tsx' : 'pnpm exec tsx',
-        stdout: truncateProbeText(result.stdout),
-      },
-    };
-  }
-}
-
 export async function runDoctor(input = {}, options = {}) {
   const env = options.env ?? process.env;
   const checks = [];
@@ -437,42 +224,6 @@ export async function runDoctor(input = {}, options = {}) {
     }
   }
 
-  if (await isLoopbackPortAvailable(0)) {
-    addCheck(checks, 'loopback_bind', 'ok', 'Loopback bind is available.');
-  } else {
-    const message = 'Unable to bind a loopback port on 127.0.0.1.';
-    errors.push({ code: 'loopback_bind_failed', message });
-    addCheck(checks, 'loopback_bind', 'error', message);
-  }
-
-  const apiPort = parsePort(env.MARKLAB_API_PORT, 3011);
-  const webPort = parsePort(env.MARKLAB_WEB_PORT, 5175);
-  if (!apiPort || !webPort) {
-    const message = 'MARKLAB_API_PORT and MARKLAB_WEB_PORT must be positive integers when set.';
-    errors.push({ code: 'invalid_port_configuration', message });
-    addCheck(checks, 'port_configuration', 'error', message, {
-      MARKLAB_API_PORT: env.MARKLAB_API_PORT ?? null,
-      MARKLAB_WEB_PORT: env.MARKLAB_WEB_PORT ?? null,
-    });
-  } else if (apiPort === webPort) {
-    const message = 'MARKLAB_API_PORT and MARKLAB_WEB_PORT must be different.';
-    errors.push({ code: 'duplicate_port_configuration', message });
-    addCheck(checks, 'port_configuration', 'error', message, { apiPort, webPort });
-  } else {
-    const apiAvailable = await isLoopbackPortAvailable(apiPort);
-    const webAvailable = await isLoopbackPortAvailable(webPort);
-    const configuredPorts = Boolean(env.MARKLAB_API_PORT || env.MARKLAB_WEB_PORT);
-    if (apiAvailable && webAvailable) {
-      addCheck(checks, 'port_configuration', 'ok', 'API and web ports are available.', { apiPort, webPort });
-    } else {
-      const message = `Port conflict detected for ${!apiAvailable ? `API ${apiPort}` : ''}${!apiAvailable && !webAvailable ? ' and ' : ''}${!webAvailable ? `web ${webPort}` : ''}.`;
-      const issue = { code: 'port_conflict', message, details: { apiPort, webPort, apiAvailable, webAvailable } };
-      if (configuredPorts) errors.push(issue);
-      else warnings.push(issue);
-      addCheck(checks, 'port_configuration', configuredPorts ? 'error' : 'warning', message, issue.details);
-    }
-  }
-
   let targetPath = null;
   if (input.file) {
     targetPath = resolve(input.file);
@@ -516,55 +267,6 @@ export async function runDoctor(input = {}, options = {}) {
     const message = 'File watcher probe failed.';
     errors.push({ code: 'watcher_probe_failed', message, details: { cause: error instanceof Error ? error.message : String(error) } });
     addCheck(checks, 'watcher_temp_change', 'error', message);
-  }
-
-  const runtimeRoot = options.runtimeRoot ?? resolveRuntimeRootFromCliDirectory();
-  if (!shouldProbeMilkdownRuntime(runtimeRoot, env)) {
-    const message = 'Skipped Milkdown headless runtime probe for the packaged CLI default path.';
-    warnings.push({
-      code: 'milkdown_headless_skipped',
-      message,
-      details: { runtimeRoot, reason: 'legacy_cli_not_enabled' },
-    });
-    addCheck(checks, 'milkdown_headless_runtime', 'warning', message, {
-      runtimeRoot,
-      enableWith: 'MARKLAB_ENABLE_LEGACY_CLI=1',
-    });
-  } else {
-    try {
-      const milkdownRuntimeProbe = options.milkdownRuntimeProbe ?? defaultMilkdownRuntimeProbe;
-      const runtime = await milkdownRuntimeProbe({
-        env,
-        timeoutMs: options.milkdownRuntimeTimeoutMs ?? 15_000,
-      });
-      if (runtime.ok) {
-        addCheck(checks, 'milkdown_headless_runtime', 'ok', 'Milkdown headless runtime initialized successfully.', {
-          ...runtime.details,
-        });
-      } else {
-        const message = 'Milkdown headless runtime failed to initialize.';
-        errors.push({ code: 'milkdown_headless_init_failed', message, details: runtime.details });
-        addCheck(checks, 'milkdown_headless_runtime', 'error', message, runtime.details);
-      }
-    } catch (error) {
-      const message = 'Milkdown headless runtime probe failed.';
-      errors.push({ code: 'milkdown_headless_unavailable', message, details: { cause: error instanceof Error ? error.message : String(error) } });
-      addCheck(checks, 'milkdown_headless_runtime', 'error', message);
-    }
-  }
-
-  const relayUrl = env.MARKLAB_RELAY_URL ?? env.MARKLAB_RELAY_WS_URL ?? env.MARKLAB_PUBLIC_RELAY_WS_URL;
-  if (relayUrl) {
-    const reachable = await checkRelayReachability(relayUrl);
-    if (reachable.ok) {
-      addCheck(checks, 'relay_reachability', 'ok', 'Configured relay URL is reachable.', { relayUrl, ...reachable.details });
-    } else {
-      const message = `Configured relay URL is not reachable: ${relayUrl}`;
-      warnings.push({ code: 'relay_unreachable', message, details: reachable.details });
-      addCheck(checks, 'relay_reachability', 'warning', message, reachable.details);
-    }
-  } else {
-    addCheck(checks, 'relay_reachability', 'ok', 'No relay URL is configured; skipping relay reachability probe.');
   }
 
   if (errors.length > 0) {

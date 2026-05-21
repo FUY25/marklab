@@ -117,7 +117,6 @@ struct MarkEditDocumentShellView: View {
     model.hasSharedDocument
       || !model.managedAccessLinks.isEmpty
       || !model.activeCollaborators.isEmpty
-      || model.localDaemonContext != nil
       || model.conflict != nil
   }
 
@@ -315,15 +314,6 @@ struct MarkEditDocumentShellView: View {
             }
             Button("Stop Sharing") { model.stopSharing() }
               .disabled(!model.canStopSharing)
-          }
-        }
-        if let context = model.localDaemonContext {
-          inspectorSection("Legacy Local Daemon") {
-            Text("\(context.shareState.hostOnline ? "online" : "offline") · versions \(context.versions.count)")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Button("Restore Latest Version") { model.restoreLatestVersion() }
-              .disabled(context.versions.isEmpty || model.conflict != nil)
           }
         }
         if let conflict = model.conflict {

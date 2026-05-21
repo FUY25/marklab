@@ -1,36 +1,9 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveRuntimeRootFromCliDirectory, runDoctor } from './doctor.mjs';
-
-const successfulMilkdownProbe = async () => ({
-  ok: true,
-  details: {
-    markdownLength: 31,
-    yjsStateBytes: 128,
-    hash: 'sha256:doctor',
-  },
-});
-
-function listenOnLoopback(port = 0) {
-  const server = net.createServer();
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve(server));
-  });
-}
-
-async function freePort() {
-  const server = await listenOnLoopback(0);
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('missing_port');
-  const port = address.port;
-  await new Promise((resolveClose) => server.close(resolveClose));
-  return port;
-}
+import { runDoctor } from './doctor.mjs';
 
 async function startHealthServer(body) {
   const server = http.createServer((req, res) => {
@@ -42,12 +15,12 @@ async function startHealthServer(body) {
     res.statusCode = 404;
     res.end('not found');
   });
-  const port = await new Promise((resolve, reject) => {
+  const port = await new Promise((resolvePort, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       if (!address || typeof address === 'string') reject(new Error('missing_port'));
-      else resolve(address.port);
+      else resolvePort(address.port);
     });
   });
   return {
@@ -67,11 +40,8 @@ describe('doctor command checks', () => {
       { file: filePath },
       {
         env: {
-          MARKLAB_API_PORT: String(await freePort()),
-          MARKLAB_WEB_PORT: String(await freePort()),
           MARKLAB_DOCTOR_SKIP_NETWORK: '1',
         },
-        milkdownRuntimeProbe: successfulMilkdownProbe,
       },
     );
 
@@ -83,70 +53,15 @@ describe('doctor command checks', () => {
       'installation_mode',
       'native_app',
       'native_url_scheme',
-      'loopback_bind',
-      'port_configuration',
+      'pilot_target',
+      'api_health',
       'target_file_permissions',
       'watcher_temp_change',
-      'milkdown_headless_runtime',
-      'relay_reachability',
     ]));
     await expect(readFile(filePath, 'utf8')).resolves.toBe(before);
   });
 
-  it('fails with doctor_failed when configured ports conflict', async () => {
-    const server = await listenOnLoopback(0);
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('missing_port');
-    try {
-      await expect(
-        runDoctor({}, {
-          env: {
-            MARKLAB_API_PORT: String(address.port),
-            MARKLAB_WEB_PORT: String(await freePort()),
-            MARKLAB_DOCTOR_SKIP_NETWORK: '1',
-          },
-          milkdownRuntimeProbe: successfulMilkdownProbe,
-        }),
-      ).rejects.toMatchObject({
-        code: 'doctor_failed',
-        exitCode: 7,
-        details: {
-          errors: [expect.objectContaining({ code: 'port_conflict' })],
-        },
-      });
-    } finally {
-      await new Promise((resolveClose) => server.close(resolveClose));
-    }
-  });
-
-  it('fails doctor when the Milkdown headless runtime cannot initialize', async () => {
-    await expect(
-      runDoctor(
-        {},
-        {
-          env: {
-            MARKLAB_API_PORT: String(await freePort()),
-            MARKLAB_WEB_PORT: String(await freePort()),
-            MARKLAB_DOCTOR_SKIP_NETWORK: '1',
-          },
-          milkdownRuntimeProbe: async () => ({
-            ok: false,
-            details: {
-              reason: 'empty_yjs_state',
-            },
-          }),
-        },
-      ),
-    ).rejects.toMatchObject({
-      code: 'doctor_failed',
-      exitCode: 7,
-      details: {
-        errors: [expect.objectContaining({ code: 'milkdown_headless_init_failed' })],
-      },
-    });
-  });
-
-  it('reports hosted relay health from /healthz without requiring the legacy daemon CLI', async () => {
+  it('reports hosted pilot health from /healthz', async () => {
     const server = await startHealthServer({
       ok: true,
       schema: { ready: true, missing: [] },
@@ -161,10 +76,7 @@ describe('doctor command checks', () => {
           env: {
             MARKLAB_CONTROL_PLANE_API_URL: server.url,
             MARKLAB_PUBLIC_WEB_URL: 'https://app.example.test',
-            MARKLAB_API_PORT: String(await freePort()),
-            MARKLAB_WEB_PORT: String(await freePort()),
           },
-          milkdownRuntimeProbe: successfulMilkdownProbe,
         },
       );
 
@@ -205,11 +117,8 @@ describe('doctor command checks', () => {
         env: {
           MARKLAB_APP_PATH: appPath,
           MARKLAB_APP_URL_SCHEME: 'marklab',
-          MARKLAB_API_PORT: String(await freePort()),
-          MARKLAB_WEB_PORT: String(await freePort()),
           MARKLAB_DOCTOR_SKIP_NETWORK: '1',
         },
-        milkdownRuntimeProbe: successfulMilkdownProbe,
       },
     );
 
@@ -234,14 +143,6 @@ describe('doctor command checks', () => {
     ]));
   });
 
-  it('resolves packaged runtime sources under the CLI package runtime directory', async () => {
-    const cliDirectory = await mkdtemp(join(tmpdir(), 'marklab-cli-runtime-root-'));
-    await mkdir(resolve(cliDirectory, 'runtime', 'apps', 'api'), { recursive: true });
-    await writeFile(resolve(cliDirectory, 'runtime', 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n', 'utf8');
-
-    expect(resolveRuntimeRootFromCliDirectory(cliDirectory)).toBe(resolve(cliDirectory, 'runtime'));
-  });
-
   it('fails doctor when the configured native join URL scheme is invalid', async () => {
     await expect(
       runDoctor(
@@ -249,11 +150,8 @@ describe('doctor command checks', () => {
         {
           env: {
             MARKLAB_APP_URL_SCHEME: '1 bad',
-            MARKLAB_API_PORT: String(await freePort()),
-            MARKLAB_WEB_PORT: String(await freePort()),
             MARKLAB_DOCTOR_SKIP_NETWORK: '1',
           },
-          milkdownRuntimeProbe: successfulMilkdownProbe,
         },
       ),
     ).rejects.toMatchObject({

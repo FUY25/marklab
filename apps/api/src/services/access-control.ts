@@ -5,8 +5,8 @@ import { withTransaction } from '../db/client';
 
 export type AccessOperation = 'read' | 'write';
 export type AccessGrantRole = 'view' | 'edit';
-export type AccessClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'api';
-export type AccessActorKind = 'user' | 'guest' | 'agent' | 'daemon';
+export type AccessClientKind = 'browser' | 'app' | 'agent' | 'api';
+export type AccessActorKind = 'user' | 'guest' | 'agent';
 export type DocumentGrantSource = 'document_access_grants';
 
 export interface VerifiedDocumentAccess {

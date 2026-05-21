@@ -10,8 +10,6 @@ import {
 } from './ysweet-provider-websocket-proxy';
 
 const originalAdminHash = process.env.MARKLAB_ADMIN_TOKEN_HASH;
-const originalRelayManagementToken = process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN;
-const originalLocalToken = process.env.MARKLAB_LOCAL_TOKEN;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -23,8 +21,6 @@ function restoreEnv(name: string, value: string | undefined): void {
 
 afterEach(() => {
   restoreEnv('MARKLAB_ADMIN_TOKEN_HASH', originalAdminHash);
-  restoreEnv('MARKLAB_RELAY_MANAGEMENT_TOKEN', originalRelayManagementToken);
-  restoreEnv('MARKLAB_LOCAL_TOKEN', originalLocalToken);
 });
 
 describe('ysweet provider websocket proxy helpers', () => {
@@ -35,7 +31,6 @@ describe('ysweet provider websocket proxy helpers', () => {
     expect(isYSweetProviderWebSocketPath('/d/doc_1/ws/doc_2?token=secret')).toBe(true);
     expect(isYSweetProviderWebSocketPath('/d/doc_1/update')).toBe(false);
     expect(isYSweetProviderWebSocketPath('/doc/api/abc')).toBe(false);
-    expect(isYSweetProviderWebSocketPath('/relay/abc')).toBe(false);
     expect(isYSweetProviderWebSocketPath(undefined)).toBe(false);
   });
 
@@ -91,8 +86,6 @@ describe('ysweet provider websocket proxy helpers', () => {
 
   it('does not preserve known MarkLab bearer tokens on provider HTTP requests', () => {
     process.env.MARKLAB_ADMIN_TOKEN_HASH = sha256Hex('admin-secret');
-    process.env.MARKLAB_RELAY_MANAGEMENT_TOKEN = 'relay-management-secret';
-    process.env.MARKLAB_LOCAL_TOKEN = 'local-daemon-secret';
 
     for (const authorization of [
       'Bearer ml_user_secret',
@@ -100,11 +93,7 @@ describe('ysweet provider websocket proxy helpers', () => {
       'Bearer ml_access_secret',
       'Bearer ml_agent_secret',
       'Bearer ml_workspace_secret',
-      'Bearer ml_relay_secret',
-      'Bearer ml_relay_host_secret',
       'Bearer admin-secret',
-      'Bearer relay-management-secret',
-      'Bearer local-daemon-secret',
     ]) {
       expect(buildYSweetProviderProxyHeaders({
         host: 'marklab.example.test',

@@ -9,7 +9,7 @@ const envApiUrl = (import.meta as unknown as { env?: Record<string, string | und
 
 export const MARKLAB_API_URL = envApiUrl?.replace(/\/+$/u, '') ?? '';
 
-export type CollabClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
+export type CollabClientKind = 'browser' | 'app' | 'agent' | 'guest';
 export type CollabMode = 'view' | 'edit';
 export type ProviderAuthorization = 'full' | 'read-only';
 

@@ -22,7 +22,6 @@ struct MarkLabNativeUIStrategyTests {
       .createViewLink,
       .copyLink,
       .revokeLink,
-      .restoreLatestVersion,
     ])
   }
 

@@ -14,7 +14,6 @@ Current product path under test:
 - Provider: API-supervised Y-Sweet process, proxied under `/d/<providerDocId>/...`
 - Metadata database: Neon Postgres
 - Provider persistence: Fly volume `marklab_ysweet_data` mounted at `/data`, with store path `/data/ysweet`
-- Archived local daemon path: compatibility-only, disabled by default
 
 ## Status Values
 
@@ -39,7 +38,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 0 | Release candidate freeze | Passed | TBD | Patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` passed the Gate 0 baseline. |
 | 1 | Manual pilot acceptance | Passed | TBD | Phases 1-5 passed on patched RC; no open P0/P1 after P1-001 fix; P2 follow-ups logged. |
 | 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. |
-| 2.5 | Dead code inventory and safe removal | Passed | TBD | Deleted two confirmed dead tracked files; kept active compatibility paths; baseline stayed green. |
+| 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Not started | TBD | |
 | 4 | Cost instrumentation and unit economics | Not started | TBD | |
 | 5 | Clean install and distribution | Not started | TBD | |
@@ -175,7 +174,7 @@ Exit criteria:
 
 ## Gate 2.5 - Dead Code Inventory And Safe Removal
 
-Goal: remove or quarantine old implementation paths only after the RC has been manually exercised and P0/P1 findings are understood. This gate reduces codebase confusion without changing the active pilot behavior.
+Goal: remove or quarantine old implementation paths only after the RC has been manually exercised and P0/P1 findings are understood. This gate now includes removing the old remote-main daemon/CLI/web/relay compatibility stack from active code so Gate 3 does not analyze the wrong product.
 
 Timing:
 
@@ -239,15 +238,15 @@ Progress log:
 | --- | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. No inventory yet. | Not started | This document. | Run inventory after Gate 2. |
 | 2026-05-21 | `infra/docker/web.Dockerfile` | Delete now | `rg` found no active build, package script, CI, or production deploy reference. `apps/api/src/config/production-deploy-config.test.ts` explicitly asserts production compose does not reference `infra/docker/web.Dockerfile`, and production API image builds `apps/collab-web`, not `apps/web`. | Deleted; rollback by restoring from git if a future archived-web compatibility build is deliberately revived. |
-| 2026-05-21 | `apps/web/tests/archived/local-file-sync.spec.ts.disabled` | Delete now | File has `.disabled` suffix and is outside Playwright discovery. `rg` found only historical references in `docs/Archive`; active relay/local compatibility coverage remains in `apps/web/tests/relay-collaboration.spec.ts`, API local/relay tests, CLI tests, and manual Gate 1. | Deleted; rollback by restoring from git if the old Hocuspocus-style `/local` browser-to-browser test is needed for forensic comparison. |
-| 2026-05-21 | `apps/web/**` legacy browser app surface | Keep temporarily | Root `package.json` still typechecks `apps/web`; active compatibility tests use `@marklab/web`; CLI repository-mode daemon compatibility checks for `apps/web`; production config tests verify it is not built into the hosted API image. | Do not delete before pilot. Revisit after compatibility path is removed or fully archived. |
-| 2026-05-21 | `apps/api/src/local/**`, `apps/api/src/routes/local-*` | Keep temporarily | Active API local tests, CLI agent/status/version/wait tests, and optional native local-daemon boundary still reference `/api/local/*`. `MarkLab.app` only enables the boundary with `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1`, so it is not active pilot default but remains compatibility code. | Leave in place; remove only after CLI/native compatibility replacement is designed and tested. |
-| 2026-05-21 | `apps/api/src/relay/**`, `apps/api/src/routes/relay-routes.ts` | Keep temporarily | Production hosted mode disables legacy relay unless explicitly enabled, but local daemon compatibility and relay tests still reference `/api/relay/*` and `/relay` websocket paths. | Leave in place; keep production guard tests. |
-| 2026-05-21 | `apps/cli/marklab.mjs` legacy daemon commands plus `daemon-supervisor.mjs` and `relay-config.mjs` | Keep temporarily | Legacy commands are disabled unless `MARKLAB_ENABLE_LEGACY_CLI=1`; native relay commands (`open`, `share`, `join`, `status`, `wait`, `conflict`) are active. CLI tests verify both the disabled default and compatibility opt-in. | Do not simplify in Gate 2.5; revisit in Gate 9.5 after pilot evidence. |
-| 2026-05-21 | Current docs outside `docs/Archive` mentioning daemon or `apps/web` | Keep temporarily | `README.md`, `docs/product/*`, and `docs/production/local-daemon-distribution.md` already describe daemon behavior as archived/compatibility. Some `docs/plans/*` preserve execution history and downstream TODOs. | Gate 8 will do public docs cleanup; do not delete planning context in Gate 2.5. |
-| 2026-05-21 | Root `typecheck` inclusion of `apps/web` and `@marklab/web` package scripts | Keep temporarily | The old web app is still compiled to keep compatibility code honest; no production Docker image builds it. Removing it would be active build/test policy change, not dead-code deletion. | Revisit only with a dedicated `apps/web` archival plan. |
-| 2026-05-21 | Legacy schema tables `share_links`, `relay_rooms`, `relay_access_grants`, `relay_access_sessions` | Keep temporarily | Gate 0 health/schema checks still require the tables; `docs/plans/2026-05-11-control-plane-mvp.md` documents them as legacy/read-only until a later migration. | Do not drop schema in cleanup gate; revisit in server/data lifecycle or migration planning. |
-| 2026-05-21 | Gate 2.5 verification | Passed | `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 80 files and 682 tests plus 1 skipped; `swift test --package-path apps/marklab-macos` passed with 73 tests. Package verification was not required because package scripts and native app packaging files were not changed. | Gate 2.5 passed; continue Gate 3 server/data lifecycle audit. |
+| 2026-05-21 | `apps/web/tests/archived/local-file-sync.spec.ts.disabled` | Delete now | File has `.disabled` suffix and is outside Playwright discovery. The later expanded Gate 2.5 cleanup removed the entire old `apps/web` surface and API local/relay compatibility tests from active code. | Deleted; rollback by restoring from git only for historical forensic comparison outside the pilot. |
+| 2026-05-21 | `apps/web/**` legacy browser app surface | Delete now | This was the old remote-main browser surface, not the current `/collab` app. Root `typecheck` now excludes it; production build and serving use `apps/collab-web`. | Deleted; rollback by restoring from git only if the old surface is deliberately revived outside the pilot. |
+| 2026-05-21 | `apps/api/src/local/**`, `apps/api/src/routes/local-*` | Delete now | The active native app projects shared provider state to local disk directly. `/api/local/*` and local file service tests belonged to the old daemon boundary. | Deleted; rollback by restoring from git only if a new local-file API design is approved. |
+| 2026-05-21 | `apps/api/src/relay/**`, `apps/api/src/routes/relay-routes.ts` | Delete now | The current pilot uses access grants plus Y-Sweet provider tokens, not `/relay/<room>` host-gated rooms. API upgrade handling now routes only provider proxy and `/collab`. | Deleted; health/schema tests no longer require relay tables or relay readiness. |
+| 2026-05-21 | `apps/cli/marklab.mjs` legacy daemon commands plus `daemon-supervisor.mjs`, `relay-config.mjs`, `recent-files.mjs`, and `wait-for-sync.mjs` | Delete now | CLI now exposes current app/deep-link/status/conflict commands only. Old `start`, `serve`, daemon-only share, relay link, recent, version, and legacy opt-in paths were removed. | Deleted legacy helper modules and compatibility tests; current CLI tests cover removed-command rejection and active commands. |
+| 2026-05-21 | Native optional local-daemon boundary and daemon Swift helpers | Delete now | `MarkLab.app` no longer exposes or conditionally connects a daemon boundary. The old daemon collaborator label and inspector section were removed. | Deleted `NativeDaemonClient`, `NativeDaemonRegistry`, `NativeShareController`, and related tests. |
+| 2026-05-21 | Legacy schema tables `relay_rooms`, `relay_access_grants`, `relay_access_sessions` | Delete now | Current sessions use `collab_sessions`, `provider_token_issuances`, `document_access_grants`, and `document_access_sessions`. Health checks no longer require relay tables. | Removed relay table creation from schema. Existing deployed tables, if any, are inert until a later explicit drop migration. |
+| 2026-05-21 | Current docs outside `docs/Archive` mentioning daemon or `apps/web` | Archive/update now | Public docs must not tell pilot operators or users to use the old daemon route. Historical planning docs can remain under `docs/Archive` or `docs/plans`. | README and Fly operator docs updated in this cleanup; broader Gate 8 still audits product/agent/production docs before public launch. |
+| 2026-05-21 | Gate 2.5 verification | Passed | `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 61 files and 470 tests plus 1 skipped; `swift test --package-path apps/marklab-macos` passed with 68 tests; `package:app` and `verify:package` passed for `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`. | Gate 2.5 passed; continue Gate 3 server/data lifecycle audit. |
 
 Exit criteria:
 
@@ -702,7 +701,7 @@ Use this table for cross-gate updates.
 | 2026-05-21 | 1 | Phase 4.6 external atomic save during conflict passed. | User manual visual/file check; external atomic replacement remained visible after resolution, which proves it was not silently overwritten. | Continue added Phase 4.7/4.8. |
 | 2026-05-21 | 1 | Phase 4.8 active user typing vs agent blind atomic replace passed. | User manual screenshot showed explicit conflict with local disk agent replacement, shared editor user typing, and non-empty diff. | Resolve conflict; then run Phase 4.7 or continue Phase 5. |
 | 2026-05-21 | 1 | Gate 1 manual pilot acceptance passed. | Phase 5 visual check passed; bug summary appended; all findings classified with no open P0/P1. | Start Gate 2.5 dead code inventory and safe removal. |
-| 2026-05-21 | 2.5 | Gate 2.5 dead code inventory and safe removal passed. | Deleted `infra/docker/web.Dockerfile` and `apps/web/tests/archived/local-file-sync.spec.ts.disabled`; kept active compatibility paths; typecheck, root tests, and Swift tests passed. | Continue Gate 3 server/data lifecycle audit. |
+| 2026-05-21 | 2.5 | Expanded Gate 2.5 cleanup passed. | Removed old `apps/web`, daemon CLI helpers, API local/relay routes/services, native daemon boundary, and relay schema creation from active code; typecheck, root tests, Swift tests, package build, and package verification passed. | Continue Gate 3 server/data lifecycle audit. |
 
 ## Current Open Decisions
 

@@ -81,8 +81,8 @@ describe('control-plane schema contract', () => {
     expect(normalized).toContain('constraint document_access_sessions_branch_fk foreign key (branch_id) references document_branches(id) on delete set null not valid');
     expect(normalized).toContain('create index if not exists document_access_sessions_doc_seen_idx');
     expect(normalized).toContain('drop constraint if exists access_sessions_client_kind_check');
-    expect(normalized).toContain("constraint document_access_sessions_client_kind_check check (client_kind in ('browser', 'app', 'daemon', 'agent', 'api'))");
-    expect(normalized).toContain("actor_kind text check (actor_kind in ('user', 'guest', 'agent', 'daemon'))");
+    expect(normalized).toContain("constraint document_access_sessions_client_kind_check check (client_kind in ('browser', 'app', 'agent', 'api'))");
+    expect(normalized).toContain("actor_kind text check (actor_kind in ('user', 'guest', 'agent'))");
     expect(normalized).toContain("update document_access_sessions set actor_kind = 'guest' where actor_kind is null");
     expect(normalized).toContain("alter table document_access_sessions alter column actor_kind set default 'guest'");
     expect(normalized).toContain('alter column actor_kind set not null');
@@ -95,7 +95,7 @@ describe('control-plane schema contract', () => {
     expect(normalized).not.toContain('alter table documents add column if not exists workspace_id uuid not null');
   });
 
-  it('marks legacy share and relay tables read-only in schema comments', async () => {
+  it('migrates legacy share links into the current document access grant table', async () => {
     const schema = await schemaSql();
     const normalized = compact(schema);
 
@@ -104,9 +104,9 @@ describe('control-plane schema contract', () => {
     expect(normalized).toContain('from share_links');
     expect(normalized).toContain("(doc_id, branch_id, grant_kind, token_hash, role, expires_at, revoked_at, created_at) select s.doc_id, s.branch_id, 'share'");
     expect(normalized).toContain('on conflict (token_hash) do nothing');
-    expect(schema).toContain('-- legacy: host-gated alpha, do not write: relay_rooms');
-    expect(schema).toContain('-- legacy: host-gated alpha, do not write: relay_access_grants');
-    expect(schema).toContain('-- legacy: host-gated alpha, do not write: relay_access_sessions');
+    expect(schema).not.toContain('create table if not exists relay_rooms');
+    expect(schema).not.toContain('create table if not exists relay_access_grants');
+    expect(schema).not.toContain('create table if not exists relay_access_sessions');
   });
 
   it('keeps provider token issuances tied to collab edit sessions and records refresh attempts', async () => {

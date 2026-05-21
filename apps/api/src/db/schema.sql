@@ -254,7 +254,7 @@ create table if not exists collab_sessions (
   doc_id uuid not null references documents(id) on delete cascade,
   branch_id uuid not null references document_branches(id) on delete cascade,
   mode text not null check (mode in ('view', 'edit')),
-  client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
+  client_kind text not null check (client_kind in ('browser', 'app', 'agent', 'guest')),
   actor_type text not null check (actor_type in ('user', 'agent')),
   actor_id text,
   actor_grant_id text,
@@ -296,7 +296,7 @@ create table if not exists provider_token_issuances (
   folder_id uuid,
   provider_doc_id text not null,
   session_id text not null,
-  client_kind text not null check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest')),
+  client_kind text not null check (client_kind in ('browser', 'app', 'agent', 'guest')),
   actor_type text not null default 'user' check (actor_type in ('user', 'agent')),
   actor_id text,
   actor_grant_id text,
@@ -319,6 +319,24 @@ alter table provider_token_issuances
 alter table provider_token_issuances
   alter column actor_grant_id type text using actor_grant_id::text;
 
+update collab_sessions
+   set client_kind = 'app'
+ where client_kind = 'daemon';
+
+update provider_token_issuances
+   set client_kind = 'app'
+ where client_kind = 'daemon';
+
+alter table collab_sessions
+  drop constraint if exists collab_sessions_client_kind_check;
+
+alter table collab_sessions
+  add constraint collab_sessions_client_kind_check
+  check (client_kind in ('browser', 'app', 'agent', 'guest'));
+
+alter table provider_token_issuances
+  drop constraint if exists provider_token_issuances_client_kind_check;
+
 do $$
 begin
   if not exists (
@@ -326,7 +344,7 @@ begin
   ) then
     alter table provider_token_issuances
       add constraint provider_token_issuances_client_kind_check
-      check (client_kind in ('browser', 'app', 'daemon', 'agent', 'guest'));
+      check (client_kind in ('browser', 'app', 'agent', 'guest'));
   end if;
 
   if not exists (
@@ -573,8 +591,8 @@ create table if not exists document_access_sessions (
   doc_id uuid references documents(id) on delete cascade,
   branch_id uuid references document_branches(id) on delete set null,
   client_id text not null,
-  client_kind text not null default 'browser' check (client_kind in ('browser', 'app', 'daemon', 'agent', 'api')),
-  actor_kind text check (actor_kind in ('user', 'guest', 'agent', 'daemon')) not null default 'guest',
+  client_kind text not null default 'browser' check (client_kind in ('browser', 'app', 'agent', 'api')),
+  actor_kind text check (actor_kind in ('user', 'guest', 'agent')) not null default 'guest',
   actor_id text,
   display_name text not null,
   color text not null,
@@ -602,9 +620,20 @@ update document_access_sessions
    set actor_kind = 'guest'
  where actor_kind is null;
 
+update document_access_sessions
+   set client_kind = 'app'
+ where client_kind = 'daemon';
+
+update document_access_sessions
+   set actor_kind = 'agent'
+ where actor_kind = 'daemon';
+
 alter table document_access_sessions
   alter column actor_kind set default 'guest',
   alter column actor_kind set not null;
+
+alter table document_access_sessions
+  drop constraint if exists document_access_sessions_actor_kind_check;
 
 do $$
 begin
@@ -613,7 +642,7 @@ begin
   ) then
     alter table document_access_sessions
       add constraint document_access_sessions_actor_kind_check
-      check (actor_kind in ('user', 'guest', 'agent', 'daemon'));
+      check (actor_kind in ('user', 'guest', 'agent'));
   end if;
 end
 $$;
@@ -644,7 +673,7 @@ alter table document_access_sessions
 
 alter table document_access_sessions
   add constraint document_access_sessions_client_kind_check
-  check (client_kind in ('browser', 'app', 'daemon', 'agent', 'api'));
+  check (client_kind in ('browser', 'app', 'agent', 'api'));
 
 create index if not exists document_access_grants_doc_active_idx
   on document_access_grants (doc_id, branch_id, created_at desc)
@@ -655,100 +684,3 @@ create index if not exists document_access_sessions_grant_seen_idx
 
 create index if not exists document_access_sessions_doc_seen_idx
   on document_access_sessions (doc_id, branch_id, last_seen_at desc);
-
--- legacy: host-gated alpha, do not write: relay_rooms
-create table if not exists relay_rooms (
-  id uuid primary key default gen_random_uuid(),
-  host_session_id text,
-  host_auth_token_hash text,
-  state text not null default 'host_offline' check (state in ('starting', 'host_online', 'host_offline', 'ended')),
-  last_ephemeral_yjs_state bytea,
-  last_shared_hash text,
-  shared_revision integer not null default 0,
-  accepted_shared_revision integer,
-  accepted_shared_hash text,
-  ephemeral_cache_expires_at timestamptz,
-  ephemeral_last_updated_at timestamptz,
-  cleanup_last_run_at timestamptz,
-  host_lease_expires_at timestamptz,
-  host_offline_reason text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-alter table relay_rooms
-  add column if not exists accepted_shared_revision integer,
-  add column if not exists accepted_shared_hash text,
-  add column if not exists ephemeral_cache_expires_at timestamptz,
-  add column if not exists ephemeral_last_updated_at timestamptz,
-  add column if not exists cleanup_last_run_at timestamptz,
-  add column if not exists host_lease_expires_at timestamptz,
-  add column if not exists host_offline_reason text;
-
--- legacy: host-gated alpha, do not write: relay_access_grants
-create table if not exists relay_access_grants (
-  id uuid primary key default gen_random_uuid(),
-  relay_room_id uuid not null references relay_rooms(id) on delete cascade,
-  token_hash text not null unique,
-  role text not null check (role in ('view', 'edit')),
-  accepted_shared_revision integer,
-  accepted_shared_hash text,
-  expires_at timestamptz,
-  revoked_at timestamptz,
-  cleanup_last_run_at timestamptz,
-  created_at timestamptz not null default now()
-);
-
-alter table relay_access_grants
-  add column if not exists accepted_shared_revision integer,
-  add column if not exists accepted_shared_hash text,
-  add column if not exists cleanup_last_run_at timestamptz;
-
--- legacy: host-gated alpha, do not write: relay_access_sessions
-create table if not exists relay_access_sessions (
-  id uuid primary key default gen_random_uuid(),
-  grant_id uuid references relay_access_grants(id) on delete cascade,
-  client_id text not null,
-  client_kind text not null default 'browser' check (client_kind in ('browser', 'daemon', 'agent')),
-  display_name text not null,
-  color text not null,
-  expires_at timestamptz,
-  last_seen_at timestamptz not null default now(),
-  created_at timestamptz not null default now()
-);
-
-alter table relay_access_sessions
-  add column if not exists expires_at timestamptz;
-
-create index if not exists relay_access_grants_room_active_idx
-  on relay_access_grants (relay_room_id, created_at desc)
-  where revoked_at is null;
-
-create index if not exists relay_access_grants_token_hash_idx
-  on relay_access_grants (token_hash);
-
-create index if not exists relay_access_grants_expiration_idx
-  on relay_access_grants (expires_at)
-  where revoked_at is null and expires_at is not null;
-
-create index if not exists relay_access_sessions_grant_seen_idx
-  on relay_access_sessions (grant_id, last_seen_at desc);
-
-create index if not exists relay_access_sessions_expiration_idx
-  on relay_access_sessions (expires_at)
-  where expires_at is not null;
-
-create index if not exists relay_access_sessions_seen_idx
-  on relay_access_sessions (last_seen_at);
-
-create unique index if not exists relay_access_sessions_grant_client_idx
-  on relay_access_sessions (grant_id, client_id)
-  where grant_id is not null;
-
-create index if not exists relay_rooms_host_lease_expiration_idx
-  on relay_rooms (host_lease_expires_at)
-  where state = 'host_online' and host_lease_expires_at is not null;
-
-create index if not exists relay_rooms_ephemeral_expiration_idx
-  on relay_rooms (ephemeral_cache_expires_at)
-  where ephemeral_cache_expires_at is not null;

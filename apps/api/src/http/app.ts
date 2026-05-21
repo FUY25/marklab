@@ -9,9 +9,6 @@ import { createBillingRoutes } from '../routes/billing-routes';
 import { createCollabSessionRoutes } from '../routes/collab-session-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
-import { createLocalConflictRoutes } from '../routes/local-conflict-routes';
-import { createLocalFileRoutes } from '../routes/local-file-routes';
-import { createRelayRoutes } from '../routes/relay-routes';
 import { createVersionRoutes } from '../routes/version-routes';
 import { createWorkspaceRoutes } from '../routes/workspace-routes';
 import {
@@ -22,10 +19,6 @@ import {
   type VerifiedDocumentAccess,
 } from '../services/access-control';
 import type { LiveMarkdownWriter } from '../services/live-writer';
-import type { LocalFileService } from '../local/local-file-service';
-import type { LocalRelayHostController, LocalRelayMirrorController } from '../local/local-relay-client';
-import type { RelayRoomService, RelayRouteService } from '../relay/relay-room-service';
-import type { RelayServerHandle } from '../relay/relay-server';
 import type { ProviderTokenService } from '../provider/ysweet-token-service';
 import { authenticateRequestUser } from '../services/user-service';
 import { requireUserDocumentAccess } from '../services/control-plane-access';
@@ -42,21 +35,12 @@ export interface HttpAppOptions {
   closeCollabDocumentConnections?: (roomName: string) => void;
   collabSnapshotService?: CollabSnapshotService;
   auth?: HttpRequestAuth;
-  localFileService?: LocalFileService;
-  localDaemonToken?: string;
-  localMode?: boolean;
-  relayService?: RelayRoomService;
-  relayRouteService?: RelayRouteService;
-  relayServer?: RelayServerHandle;
   providerTokenService?: ProviderTokenService;
   providerHttpProxy?: RequestHandler;
   allowedOrigins?: readonly string[];
   enforceAllowedOrigins?: boolean;
   health?: HttpHealthOptions;
-  localRelayHost?: LocalRelayHostController;
-  localRelayMirror?: LocalRelayMirrorController;
   enableLegacyDocAiRoutes?: boolean;
-  staticWeb?: StaticWebOptions;
   staticCollabWeb?: StaticWebOptions;
   authEnvironment?: Partial<HttpAuthEnvironment>;
   oidcExchange?: OidcExchange;
@@ -74,8 +58,6 @@ export interface HttpAuthEnvironment {
 
 export interface HttpHealthOptions {
   databaseRequired?: boolean;
-  relayRequired?: boolean;
-  relayReady?: boolean;
   providerRequired?: boolean;
   providerHealth?: () => Promise<HttpProviderHealthSnapshot>;
   schemaTables?: readonly string[];
@@ -188,14 +170,9 @@ function createCorsMiddleware(input: { allowedOrigins?: readonly string[]; enfor
   };
 }
 
-async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefined, input: HttpHealthOptions = {}) {
+async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
   const database = { required: Boolean(input.databaseRequired), ready: false, error: null as string | null };
   const schema = { required: Boolean(input.databaseRequired), ready: false, missing: [] as string[], error: null as string | null };
-  const relay = {
-    required: Boolean(input.relayRequired),
-    ready: !input.relayRequired || input.relayReady === true || Boolean(relayServer),
-    connectionCount: relayServer?.connectionCount ?? 0,
-  };
   const provider = {
     required: Boolean(input.providerRequired),
     ready: !input.providerRequired,
@@ -225,11 +202,10 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
 
   if (!input.databaseRequired) {
     return {
-      ok: relay.ready && providerReadyForGate,
+      ok: providerReadyForGate,
       process: { ready: true },
       database,
       schema,
-      relay,
       provider,
     };
   }
@@ -260,9 +236,6 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
           'document_access_grants',
           'document_access_sessions',
           'share_links',
-          'relay_rooms',
-          'relay_access_grants',
-          'relay_access_sessions',
           'document_branch_states',
           'collab_sessions',
           'provider_token_issuances',
@@ -306,11 +279,10 @@ async function readHealth(pool: DbPool, relayServer: RelayServerHandle | undefin
   }
 
   return {
-    ok: database.ready && schema.ready && relay.ready && providerReadyForGate,
+    ok: database.ready && schema.ready && providerReadyForGate,
     process: { ready: true },
     database,
     schema,
-    relay,
     provider,
   };
 }
@@ -511,11 +483,6 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
-  if (error instanceof Error && error.message === 'invalid_relay_yjs_state') {
-    res.status(400).json({ error: 'invalid_relay_yjs_state' });
-    return;
-  }
-
   if (error instanceof Error && error.message === 'live_writer_missing_previous_hash') {
     res.status(503).json({ error: 'live_writer_missing_previous_hash' });
     return;
@@ -591,41 +558,6 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
-  if (error instanceof Error && error.message === 'local_version_not_found') {
-    res.status(404).json({ error: 'local_version_not_found' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_service_not_configured') {
-    res.status(503).json({ error: 'relay_service_not_configured' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_management_token_not_configured') {
-    res.status(503).json({ error: 'relay_management_token_not_configured' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_room_not_found') {
-    res.status(404).json({ error: 'relay_room_not_found' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_access_grant_not_found') {
-    res.status(404).json({ error: 'relay_access_grant_not_found' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_shared_state_not_accepted') {
-    res.status(409).json({ error: 'relay_shared_state_not_accepted' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'relay_sync_paused') {
-    res.status(409).json({ error: 'relay_sync_paused' });
-    return;
-  }
-
   if (error instanceof Error && error.message === 'conflict_required') {
     res.status(409).json({ error: 'conflict_required' });
     return;
@@ -646,38 +578,8 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
-  if (error instanceof Error && error.message === 'host_offline') {
-    res.status(409).json({ error: 'host_offline' });
-    return;
-  }
-
-  if (
-    error instanceof Error &&
-    [
-      'relay_host_publish_timeout',
-      'relay_host_publish_closed',
-      'relay_mirror_publish_timeout',
-      'relay_mirror_publish_closed',
-      'relay_mirror_verify_timeout',
-      'relay_mirror_verify_closed',
-    ].includes(error.message)
-  ) {
-    res.status(409).json({ error: 'host_offline' });
-    return;
-  }
-
-  if (error instanceof Error && ['host_file_missing', 'mirror_file_missing'].includes(error.message)) {
-    res.status(409).json({ error: error.message });
-    return;
-  }
-
   if (error instanceof Error && error.message === 'markdown_too_large') {
     res.status(413).json({ error: 'markdown_too_large' });
-    return;
-  }
-
-  if (error instanceof Error && error.message === 'local_state_changed') {
-    res.status(409).json({ error: 'local_state_changed' });
     return;
   }
 
@@ -688,18 +590,6 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   res.status(500).json({ error: 'internal_error' });
 };
-
-function mountStaticWeb(app: express.Express, staticWeb: StaticWebOptions | undefined): void {
-  if (!staticWeb?.distDir || !existsSync(staticWeb.distDir)) return;
-
-  const indexHtml = join(staticWeb.distDir, 'index.html');
-  if (!existsSync(indexHtml)) return;
-
-  app.use(express.static(staticWeb.distDir, { index: false }));
-  app.get(/^\/(?!api\/|healthz$).*/u, (_req, res) => {
-    res.sendFile(indexHtml);
-  });
-}
 
 function mountStaticCollabWeb(app: express.Express, staticCollabWeb: StaticWebOptions | undefined): void {
   if (!staticCollabWeb?.distDir || !existsSync(staticCollabWeb.distDir)) return;
@@ -717,11 +607,6 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   const app = express();
   const authEnvironment = readAuthEnvironment(options.authEnvironment);
   const routeOptions = { ...options, authEnvironment, auth: options.auth ?? createRequestAuth(pool, authEnvironment) };
-  const relayRouteOptions: Parameters<typeof createRelayRoutes>[0] = {};
-  const relayRouteService = options.relayRouteService ?? options.relayService;
-  if (relayRouteService) relayRouteOptions.relayService = relayRouteService;
-  if (options.relayServer) relayRouteOptions.relayServer = options.relayServer;
-  const localMode = options.localMode ?? Boolean(options.localFileService);
   app.use(createCorsMiddleware({
     ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
     enforceAllowedOrigins: options.enforceAllowedOrigins ?? false,
@@ -731,38 +616,28 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
 
   app.get('/healthz', async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const health = await readHealth(pool, options.relayServer, options.health);
+      const health = await readHealth(pool, options.health);
       res.status(health.ok ? 200 : 503).json(health);
     } catch (error) {
       next(error);
     }
   });
 
-  if (localMode) {
-    app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
-    app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
-    // Local-file compatibility only: index.ts wires this to in-memory relay state, not the frozen DB-backed relay_* tables.
-    app.use('/api', createRelayRoutes(relayRouteOptions));
-  } else {
-    app.use('/api', createAuthRoutes(pool, {
-      devAuthEnabled: authEnvironment.devAuth,
-      cookieSecure: authEnvironment.nodeEnv === 'production',
-      ...(authEnvironment.oidc ? { oidcConfig: authEnvironment.oidc } : {}),
-      ...(options.oidcExchange ? { oidcExchange: options.oidcExchange } : {}),
-    }));
-    app.use('/api', createWorkspaceRoutes(pool));
-    app.use('/api', createBillingRoutes(pool));
-    app.use('/api', createAccessRoutes(pool, routeOptions));
-    if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
-    app.use('/api', createImportExportRoutes(pool, routeOptions));
-    app.use('/api', createLocalFileRoutes(options.localFileService, routeOptions));
-    app.use('/api', createLocalConflictRoutes(options.localFileService, routeOptions));
-    app.use('/api', createCollabSessionRoutes(pool, routeOptions));
-    app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
-  }
+  app.use('/api', createAuthRoutes(pool, {
+    devAuthEnabled: authEnvironment.devAuth,
+    cookieSecure: authEnvironment.nodeEnv === 'production',
+    ...(authEnvironment.oidc ? { oidcConfig: authEnvironment.oidc } : {}),
+    ...(options.oidcExchange ? { oidcExchange: options.oidcExchange } : {}),
+  }));
+  app.use('/api', createWorkspaceRoutes(pool));
+  app.use('/api', createBillingRoutes(pool));
+  app.use('/api', createAccessRoutes(pool, routeOptions));
+  if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
+  app.use('/api', createImportExportRoutes(pool, routeOptions));
+  app.use('/api', createCollabSessionRoutes(pool, routeOptions));
+  app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));
 
   mountStaticCollabWeb(app, options.staticCollabWeb);
-  mountStaticWeb(app, options.staticWeb);
   app.use(errorHandler);
 
   return app;

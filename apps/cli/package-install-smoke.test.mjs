@@ -1,12 +1,10 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readlink, readdir, writeFile } from 'node:fs/promises';
-import net from 'node:net';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ensurePackagedRuntimeWorkspaceLinks } from './marklab.mjs';
 
 const cliRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(cliRoot, '../..');
@@ -38,43 +36,7 @@ function expectOk(result) {
   });
 }
 
-function listenOnLoopback(port = 0) {
-  const server = net.createServer();
-  return new Promise((resolveServer, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolveServer(server));
-  });
-}
-
-async function freePort() {
-  const server = await listenOnLoopback(0);
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    await new Promise((resolveClose) => server.close(resolveClose));
-    throw new Error('missing_test_port');
-  }
-  const port = address.port;
-  await new Promise((resolveClose) => server.close(resolveClose));
-  return port;
-}
-
 describe('packed @marklab/cli install smoke', () => {
-  it('creates workspace links for the embedded runtime package imports', async () => {
-    const runtimeRoot = await mkdtemp(join(tmpdir(), 'marklab-cli-runtime-'));
-    await mkdir(join(runtimeRoot, 'packages', 'shared'), { recursive: true });
-    await mkdir(join(runtimeRoot, 'packages', 'markdown'), { recursive: true });
-    await mkdir(join(runtimeRoot, 'packages', 'collab-editor'), { recursive: true });
-
-    expect(ensurePackagedRuntimeWorkspaceLinks(runtimeRoot, runtimeRoot)).toBe(true);
-
-    for (const name of ['shared', 'markdown', 'collab-editor']) {
-      const linkPath = join(runtimeRoot, 'node_modules', '@marklab', name);
-      expect(existsSync(linkPath)).toBe(true);
-      expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
-      expect(await readlink(linkPath)).toBe(`../../packages/${name}`);
-    }
-  });
-
   it('runs help and command help from a clean install without a repo checkout', async () => {
     const temp = await mkdtemp(join(tmpdir(), 'marklab-cli-pack-'));
     const packed = await run('npx', ['-y', 'pnpm@10.0.0', 'pack', '--pack-destination', temp], {
@@ -109,8 +71,6 @@ describe('packed @marklab/cli install smoke', () => {
       cwd: installDir,
       env: {
         MARKLAB_DOCTOR_SKIP_NETWORK: '1',
-        MARKLAB_API_PORT: String(await freePort()),
-        MARKLAB_WEB_PORT: String(await freePort()),
         PATH: `${npmBinDir}${delimiter}${nodeBinDir}${delimiter}/usr/bin:/bin`,
       },
     });
@@ -119,7 +79,7 @@ describe('packed @marklab/cli install smoke', () => {
     expect(body.ok).toBe(true);
     expect(body.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        name: 'milkdown_headless_runtime',
+        name: 'api_health',
         status: 'warning',
         message: expect.stringContaining('Skipped'),
       }),

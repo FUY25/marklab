@@ -58,7 +58,6 @@ enum MarkEditShellCommand: Equatable {
   case createViewLink
   case copyLink
   case revokeLink
-  case restoreLatestVersion
 }
 
 struct MarkEditDocumentWindowMetrics: Equatable {
@@ -112,7 +111,6 @@ struct MarkEditShellDescriptor: Equatable {
       .createViewLink,
       .copyLink,
       .revokeLink,
-      .restoreLatestVersion,
     ]
   )
 }

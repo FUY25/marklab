@@ -244,8 +244,6 @@ struct NativeCollaboratorPresence: Identifiable, Equatable {
       return "Browser"
     case "agent":
       return "Agent"
-    case "daemon":
-      return "Daemon"
     case "api":
       return "API"
     default:
@@ -291,7 +289,6 @@ final class MarkLabAppModel: ObservableObject {
   @Published var filePath: String?
   @Published var conflict: MarkLabConflict?
   @Published var pendingDiskIngestion: PendingDiskIngestion?
-  @Published var localDaemonContext: NativeAppContext?
   @Published var resolvedConflictMarkdown = ""
   @Published var resolvedConflictConfirmation = ""
   @Published var localAutosaveEnabled: Bool
@@ -305,7 +302,6 @@ final class MarkLabAppModel: ObservableObject {
   let nativeBearerToken: String?
   private let beforeDiskIngestionReplace: (() -> Void)?
   private let settingsDefaults: UserDefaults
-  private var nativeShareController: NativeShareController?
   private var lastProjectedMarkdown: String?
   private var pendingSharedMarkdown: String?
   private var projectionTask: Task<Void, Never>?
@@ -451,8 +447,6 @@ final class MarkLabAppModel: ObservableObject {
       activeCollaborators = []
       embeddedCollabURL = nil
       pendingDiskIngestion = nil
-      localDaemonContext = nil
-      nativeShareController = nil
       pendingSharedMarkdown = nil
       lastProjectedMarkdown = (try? baselineStore.loadBaseline(fileURL: url))?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
@@ -764,7 +758,6 @@ final class MarkLabAppModel: ObservableObject {
         status: .synced,
         lastSyncAt: Date()
       )
-      ensureCLILocalDaemonBoundary(fileURL: fileURL)
       statusText = "Shared \(fileURL.lastPathComponent) as \(shared.docId). App editor connected as workspace user."
       return shared
     } catch {
@@ -866,8 +859,6 @@ final class MarkLabAppModel: ObservableObject {
     latestGrantId = nil
     managedAccessLinks = []
     activeCollaborators = []
-    localDaemonContext = nil
-    nativeShareController = nil
     lastProjectedMarkdown = nil
 
     if let fileURL {
@@ -989,28 +980,6 @@ final class MarkLabAppModel: ObservableObject {
       return serverLinks
     } catch {
       return managedAccessLinks.filter { $0.status == .active }
-    }
-  }
-
-  func restoreLatestVersion() {
-    guard conflict == nil else {
-      statusText = "Resolve the conflict before restoring a version."
-      return
-    }
-    guard
-      let nativeShareController,
-      let versionId = localDaemonContext?.versions.first?.versionId
-    else {
-      return
-    }
-    Task {
-      do {
-        _ = try await nativeShareController.restoreVersion(versionId: versionId)
-        localDaemonContext = try await nativeShareController.loadContext()
-        statusText = "Restored local version \(versionId)."
-      } catch {
-        statusText = "Unable to restore local version."
-      }
     }
   }
 
@@ -1294,33 +1263,6 @@ final class MarkLabAppModel: ObservableObject {
     }
   }
 
-  private func ensureCLILocalDaemonBoundary(fileURL: URL) {
-    let environment = ProcessInfo.processInfo.environment
-    guard Self.localDaemonBoundaryEnabled(environment: environment) else { return }
-    let command = environment["MARKLAB_CLI_COMMAND"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let cliCommand = command?.isEmpty == false ? command! : "marklab"
-    let registryURL = MarkLabAppModel.daemonRegistryURL(environment: environment)
-    Task.detached { [weak self] in
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-      process.arguments = [cliCommand, "share", fileURL.path, "--json", "--daemon-only"]
-      process.standardOutput = Pipe()
-      process.standardError = Pipe()
-      do {
-        try process.run()
-        process.waitUntilExit()
-        await self?.connectLocalDaemonBoundary(fileURL: fileURL, registryURL: registryURL)
-      } catch {
-        // The hosted collaboration path is still usable if the optional local daemon bridge is unavailable.
-      }
-    }
-  }
-
-  static func localDaemonBoundaryEnabled(environment: [String: String]) -> Bool {
-    if environment["MARKLAB_APP_SKIP_LOCAL_DAEMON"] == "1" { return false }
-    return environment["MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY"] == "1"
-  }
-
   private func setConflict(_ nextConflict: MarkLabConflict, status: String) {
     let persistedConflict = nextConflict.withSharedEditorURL(storableConflictSharedEditorURL(embeddedCollabURL))
     conflict = persistedConflict
@@ -1388,44 +1330,6 @@ final class MarkLabAppModel: ObservableObject {
   private func stopFileWatcher() {
     fileWatcher?.cancel()
     fileWatcher = nil
-  }
-
-  private func connectLocalDaemonBoundary(fileURL: URL, registryURL: URL) async {
-    await MainActor.run {
-      do {
-        let registry = try NativeDaemonRegistry(fileURL: registryURL).read()
-        let canonicalPath = NativeLocalDocumentIdentity.canonicalPath(fileURL: fileURL)
-        guard let entry = registry.daemons.first(where: { $0.realpath == canonicalPath }) else { return }
-        let controller = NativeShareController(
-          daemonClient: NativeDaemonClient(apiBaseURL: entry.apiUrl, bearerToken: entry.token)
-        )
-        nativeShareController = controller
-        if let hostedShareController {
-          embeddedCollabURL = try? hostedShareController.appEditorURL()
-        }
-        Task {
-          do {
-            localDaemonContext = try await controller.loadContext()
-            if let context = localDaemonContext {
-              statusText = "Shared \(context.document.displayName). Local daemon boundary ready."
-            }
-          } catch {
-            statusText = "Shared file, but local daemon context is unavailable."
-          }
-        }
-      } catch {
-        statusText = "Shared file, but local daemon registry is unavailable."
-      }
-    }
-  }
-
-  private static func daemonRegistryURL(environment: [String: String]) -> URL {
-    if let override = environment["MARKLAB_LOCAL_DAEMON_REGISTRY_PATH"], !override.isEmpty {
-      return URL(fileURLWithPath: override)
-    }
-    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MarkLab", directoryHint: .isDirectory)
-    return appSupport.appending(path: "local-daemons.json")
   }
 
   private func registerSharedSession(

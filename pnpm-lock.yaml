@@ -103,59 +103,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.17)(jsdom@27.4.0(@noble/hashes@1.8.0))(tsx@4.21.0)
 
-  apps/cli:
-    dependencies:
-      '@marklab/markdown':
-        specifier: file:../../packages/markdown
-        version: link:../../packages/markdown
-      '@marklab/shared':
-        specifier: file:../../packages/shared
-        version: link:../../packages/shared
-      '@vitejs/plugin-react':
-        specifier: ^5.0.0
-        version: 5.2.0(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0))
-      crossws:
-        specifier: ^0.3.5
-        version: 0.3.5
-      express:
-        specifier: ^5.0.0
-        version: 5.2.1
-      jsdom:
-        specifier: ^27.4.0
-        version: 27.4.0(@noble/hashes@1.8.0)
-      lucide-react:
-        specifier: ^1.14.0
-        version: 1.14.0(react@19.2.5)
-      pg:
-        specifier: ^8.13.0
-        version: 8.20.0
-      prettier:
-        specifier: ^3.3.0
-        version: 3.8.3
-      react:
-        specifier: ^19.0.0
-        version: 19.2.5
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.5(react@19.2.5)
-      tsx:
-        specifier: ^4.19.0
-        version: 4.21.0
-      vite:
-        specifier: ^6.0.0
-        version: 6.4.2(@types/node@22.19.17)(tsx@4.21.0)
-      ws:
-        specifier: ^8.18.0
-        version: 8.20.0
-      y-protocols:
-        specifier: ^1.0.6
-        version: 1.0.7(yjs@13.6.30)
-      yjs:
-        specifier: ^13.6.0
-        version: 13.6.30
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
+  apps/cli: {}
 
   apps/collab-web:
     dependencies:
@@ -278,67 +226,6 @@ importers:
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
-      typescript:
-        specifier: ^5.8.0
-        version: 5.9.3
-
-  apps/web:
-    dependencies:
-      '@hocuspocus/provider':
-        specifier: ^4.0.0
-        version: 4.0.0(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30)
-      '@milkdown/crepe':
-        specifier: ^7.20.0
-        version: 7.20.0(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(typescript@5.9.3)
-      '@milkdown/kit':
-        specifier: ^7.20.0
-        version: 7.20.0(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.1)(typescript@5.9.3)
-      '@milkdown/plugin-collab':
-        specifier: ^7.20.0
-        version: 7.20.0(y-prosemirror@1.3.7(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30))(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30)
-      '@milkdown/react':
-        specifier: ^7.20.0
-        version: 7.20.0(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.1)(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@vitejs/plugin-react':
-        specifier: ^5.0.0
-        version: 5.2.0(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0))
-      lucide-react:
-        specifier: ^1.14.0
-        version: 1.14.0(react@19.2.5)
-      react:
-        specifier: ^19.0.0
-        version: 19.2.5
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.5(react@19.2.5)
-      vite:
-        specifier: ^6.0.0
-        version: 6.4.2(@types/node@22.19.17)(tsx@4.21.0)
-      y-prosemirror:
-        specifier: ^1.2.15
-        version: 1.3.7(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30)
-      y-protocols:
-        specifier: ^1.0.6
-        version: 1.0.7(yjs@13.6.30)
-      yjs:
-        specifier: ^13.6.0
-        version: 13.6.30
-    devDependencies:
-      '@playwright/test':
-        specifier: ^1.50.0
-        version: 1.59.1
-      '@types/pg':
-        specifier: ^8.11.0
-        version: 8.20.0
-      '@types/react':
-        specifier: ^19.0.0
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.0.0
-        version: 19.2.3(@types/react@19.2.14)
-      pg:
-        specifier: ^8.13.0
-        version: 8.20.0
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
@@ -960,12 +847,6 @@ packages:
   '@hocuspocus/common@4.0.0':
     resolution: {integrity: sha512-7BE8TsKBkdiOZO6tfm3ny6bIHPbxkIZb3hsYdVn/X5xbXI8n8w9pnE6pXgEMKQhJm6zsWsa9IDRJIp/c9u+DmA==}
 
-  '@hocuspocus/provider@4.0.0':
-    resolution: {integrity: sha512-08gpeNZ6x2pmRD6m4XwRD52yQKnTl32a0HS9VSXZ5A1dIBVqxMz/x8Z06XbkKM2X8sp6vWEUCZCtzAGFSsofgg==}
-    peerDependencies:
-      y-protocols: ^1.0.6
-      yjs: ^13.6.8
-
   '@hocuspocus/server@4.0.0':
     resolution: {integrity: sha512-Pgm+kVtTrVvybIJUVot5XumSzD8rPLQglUV0QAAiN6J64dkYc2wWNdGcMwJz3q3yJPV0dO+eRU9JEck+iVdgzQ==}
     engines: {node: '>=22'}
@@ -1040,9 +921,6 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@lifeomic/attempt@3.1.0':
-    resolution: {integrity: sha512-QZqem4QuAnAyzfz+Gj5/+SLxqwCAw2qmt7732ZXodr6VDWGeYLG6w1i/vYLa55JQM9wRuBKLmXmiZ2P0LtE5rw==}
-
   '@marijn/find-cluster-break@1.0.2':
     resolution: {integrity: sha512-l0h88YhZFyKdXIFNfSWpyjStDjGHwZ/U7iobcK1cQQD8sejsONdQtTVU+1wVN1PBw40PiiHB1vA5S7VTfQiP9g==}
 
@@ -1113,12 +991,6 @@ packages:
 
   '@milkdown/prose@7.20.0':
     resolution: {integrity: sha512-Qe6jmKcXsjOfpk8duDFdkLCEo5044L8HSyKVn7ewAe7XJJPUM6bPQaP130UAznq75/+TiKxFCzurcrBO3LzNRg==}
-
-  '@milkdown/react@7.20.0':
-    resolution: {integrity: sha512-uuMuMfTmp2SZJtmKhX+tmVkJNasKnzxlYoHtUwjxuZcy90cWQVYpGXnmwpFgjcXY38lMLsAOLx2jjXrqe7ZOuQ==}
-    peerDependencies:
-      react: '*'
-      react-dom: '*'
 
   '@milkdown/transformer@7.20.0':
     resolution: {integrity: sha512-h7KGFr1o5AYwc+hEfnA3Dldo4jRrYOB/7KExaqelcjUz++KYI/9LXMOsV7CpgjtLI3Xtf2IIRTZND1+p2nsOaw==}
@@ -3467,18 +3339,6 @@ snapshots:
     dependencies:
       lib0: 0.2.117
 
-  '@hocuspocus/provider@4.0.0(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30)':
-    dependencies:
-      '@hocuspocus/common': 4.0.0
-      '@lifeomic/attempt': 3.1.0
-      lib0: 0.2.117
-      ws: 8.20.0
-      y-protocols: 1.0.7(yjs@13.6.30)
-      yjs: 13.6.30
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-
   '@hocuspocus/server@4.0.0(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30)':
     dependencies:
       '@hocuspocus/common': 4.0.0
@@ -3602,8 +3462,6 @@ snapshots:
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
-
-  '@lifeomic/attempt@3.1.0': {}
 
   '@marijn/find-cluster-break@1.0.2': {}
 
@@ -3856,22 +3714,6 @@ snapshots:
       prosemirror-tables: 1.8.5
       prosemirror-transform: 1.12.0
       prosemirror-view: 1.41.8
-
-  '@milkdown/react@7.20.0(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.1)(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
-    dependencies:
-      '@milkdown/crepe': 7.20.0(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(typescript@5.9.3)
-      '@milkdown/kit': 7.20.0(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.1)(typescript@5.9.3)
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
-    transitivePeerDependencies:
-      - '@codemirror/language'
-      - '@codemirror/state'
-      - '@codemirror/view'
-      - prosemirror-model
-      - prosemirror-state
-      - prosemirror-view
-      - supports-color
-      - typescript
 
   '@milkdown/transformer@7.20.0':
     dependencies:

@@ -67,10 +67,8 @@ function matchesEnvTokenHash(token: string, envName: string): boolean {
 
 function isMarkLabControlPlaneToken(token: string | undefined): boolean {
   if (!token) return false;
-  if (/^ml_(?:user|share|access|agent|workspace|relay)_/u.test(token)) return true;
+  if (/^ml_(?:user|share|access|agent|workspace)_/u.test(token)) return true;
   if (matchesEnvTokenHash(token, 'MARKLAB_ADMIN_TOKEN_HASH')) return true;
-  if (matchesEnvToken(token, 'MARKLAB_RELAY_MANAGEMENT_TOKEN')) return true;
-  if (matchesEnvToken(token, 'MARKLAB_LOCAL_TOKEN')) return true;
   return false;
 }
 

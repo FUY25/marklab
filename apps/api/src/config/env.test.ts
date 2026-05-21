@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { loadApiEnv } from './env';
-import { loadRelayProductionConfig } from '../relay/relay-production-config';
 
 const productionBaseEnv = {
   NODE_ENV: 'production',
@@ -18,22 +17,12 @@ const productionBaseEnv = {
   MARKLAB_ALLOWED_ORIGINS: 'https://marklab.fly.dev',
 };
 
-const legacyRelayProductionEnv = {
-  ...productionBaseEnv,
-  MARKLAB_ENABLE_LEGACY_RELAY: 'true',
-  MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://marklab.fly.dev/relay',
-  MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: '86400',
-  MARKLAB_RELAY_HOST_LEASE_SECONDS: '30',
-  MARKLAB_RELAY_MAX_ROOM_CONNECTIONS: '32',
-  MARKLAB_RELAY_MAX_MESSAGE_BYTES: '1048576',
-};
-
 function expectInvalid(env: Record<string, string | undefined>, issue: string) {
   expect(() => loadApiEnv(env)).toThrow(issue);
 }
 
 describe('loadApiEnv', () => {
-  it('rejects missing production DATABASE_URL and public URLs', () => {
+  it('rejects missing production database, public URLs, and provider secrets', () => {
     expectInvalid({ NODE_ENV: 'production', MARKLAB_REQUIRE_AUTH: 'true' }, 'DATABASE_URL');
     expectInvalid({ ...productionBaseEnv, DATABASE_URL: undefined }, 'DATABASE_URL');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: undefined }, 'MARKLAB_PUBLIC_WEB_URL');
@@ -49,22 +38,10 @@ describe('loadApiEnv', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_REQUIRE_AUTH: undefined }, 'MARKLAB_REQUIRE_AUTH');
   });
 
-  it('only requires legacy relay production settings when legacy relay is explicitly enabled', () => {
-    expect(() => loadApiEnv(productionBaseEnv)).not.toThrow();
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_PUBLIC_RELAY_WS_URL: undefined }, 'MARKLAB_PUBLIC_RELAY_WS_URL');
-  });
-
-  it('rejects invalid legacy relay numeric production settings', () => {
+  it('rejects invalid primitive production settings', () => {
     expectInvalid({ ...productionBaseEnv, PORT: '0' }, 'PORT');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS: '-1' }, 'MARKLAB_RELAY_EPHEMERAL_TTL_SECONDS');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_RELAY_HOST_LEASE_SECONDS: '1.5' }, 'MARKLAB_RELAY_HOST_LEASE_SECONDS');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_RELAY_MAX_ROOM_CONNECTIONS: 'abc' }, 'MARKLAB_RELAY_MAX_ROOM_CONNECTIONS');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_RELAY_MAX_MESSAGE_BYTES: '0' }, 'MARKLAB_RELAY_MAX_MESSAGE_BYTES');
-  });
-
-  it('requires a wss public relay URL when the legacy hosted relay is enabled', () => {
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_PUBLIC_RELAY_WS_URL: 'ws://marklab.fly.dev/relay' }, 'wss://');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_PUBLIC_RELAY_WS_URL: 'https://marklab.fly.dev/relay' }, 'wss://');
+    expectInvalid({ ...productionBaseEnv, PORT: '1.5' }, 'PORT');
+    expectInvalid({ ...productionBaseEnv, MARKLAB_REQUIRE_AUTH: 'yes' }, 'MARKLAB_REQUIRE_AUTH');
   });
 
   it('requires an https provider public URL in hosted production mode', () => {
@@ -95,35 +72,32 @@ describe('loadApiEnv', () => {
   it('rejects localhost and loopback public URLs in hosted production mode', () => {
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_WEB_URL: 'https://localhost:5175' }, 'localhost');
     expectInvalid({ ...productionBaseEnv, MARKLAB_PUBLIC_API_URL: 'https://127.0.0.1:3001' }, 'loopback');
-    expectInvalid({ ...legacyRelayProductionEnv, MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://[::1]:3001/relay' }, 'loopback');
     expectInvalid({ ...productionBaseEnv, MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'http://127.0.0.1:8080' }, 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX');
   });
 
   it('rejects host mismatches unless MARKLAB_ALLOWED_ORIGINS includes each host', () => {
     expectInvalid(
       {
-        ...legacyRelayProductionEnv,
+        ...productionBaseEnv,
         MARKLAB_PUBLIC_WEB_URL: 'https://app.example.com',
         MARKLAB_PUBLIC_API_URL: 'https://api.example.com',
-        MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://relay.example.com/relay',
+        MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://api.example.com',
         MARKLAB_ALLOWED_ORIGINS: 'https://app.example.com',
       },
       'MARKLAB_ALLOWED_ORIGINS',
     );
 
     const env = loadApiEnv({
-        ...legacyRelayProductionEnv,
-        MARKLAB_PUBLIC_WEB_URL: 'https://app.example.com',
-        MARKLAB_PUBLIC_API_URL: 'https://api.example.com',
-        MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://api.example.com',
-        MARKLAB_PUBLIC_RELAY_WS_URL: 'wss://relay.example.com/relay',
-        MARKLAB_ALLOWED_ORIGINS: 'https://app.example.com, https://api.example.com, https://relay.example.com',
-      });
+      ...productionBaseEnv,
+      MARKLAB_PUBLIC_WEB_URL: 'https://app.example.com',
+      MARKLAB_PUBLIC_API_URL: 'https://api.example.com',
+      MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'https://api.example.com',
+      MARKLAB_ALLOWED_ORIGINS: 'https://app.example.com, https://api.example.com',
+    });
 
     expect(env.allowedOrigins).toEqual([
       'https://app.example.com',
       'https://api.example.com',
-      'https://relay.example.com',
     ]);
   });
 
@@ -136,23 +110,7 @@ describe('loadApiEnv', () => {
     expect(env.requireAuth).toBe(false);
     expect(env.publicWebUrl).toBe('http://127.0.0.1:5175');
     expect(env.publicApiUrl).toBe('http://127.0.0.1:3001');
-    expect(env.publicRelayWebSocketUrl).toBe('ws://127.0.0.1:3001/relay');
     expect(env.allowedOrigins).toContain('http://127.0.0.1:5175');
-  });
-
-  it('allows local file mode without DATABASE_URL', () => {
-    const env = loadApiEnv({
-      NODE_ENV: 'production',
-      MARKLAB_LOCAL_FILE: '/tmp/doc.md',
-      MARKLAB_REQUIRE_AUTH: 'false',
-      MARKLAB_PUBLIC_WEB_URL: 'http://127.0.0.1:5175',
-      MARKLAB_PUBLIC_API_URL: 'http://127.0.0.1:3001',
-      MARKLAB_PUBLIC_RELAY_WS_URL: 'ws://127.0.0.1:3001/relay',
-    });
-
-    expect(env.mode).toBe('local');
-    expect(env.databaseUrl).toBeUndefined();
-    expect(env.requireAuth).toBe(false);
   });
 
   it('loads the Fly and Neon production happy path', () => {
@@ -165,7 +123,6 @@ describe('loadApiEnv', () => {
       requireAuth: true,
       publicWebUrl: 'https://marklab.fly.dev',
       publicApiUrl: 'https://marklab.fly.dev',
-      legacyRelayEnabled: false,
       ysweetProviderMode: 'process',
       ysweetServerUrl: 'http://127.0.0.1:8080',
       ysweetPublicUrlPrefix: 'https://marklab.fly.dev',
@@ -180,43 +137,6 @@ describe('loadApiEnv', () => {
     });
   });
 
-  it('allows explicit loopback URLs only for local production smoke', () => {
-    const env = loadApiEnv({
-      ...productionBaseEnv,
-      MARKLAB_LOCAL_PRODUCTION_SMOKE: 'true',
-      MARKLAB_PUBLIC_WEB_URL: 'http://127.0.0.1:3001',
-      MARKLAB_PUBLIC_API_URL: 'http://127.0.0.1:3001',
-      MARKLAB_PUBLIC_RELAY_WS_URL: 'ws://127.0.0.1:3001/relay',
-      MARKLAB_ALLOWED_ORIGINS: 'http://127.0.0.1:3001',
-    });
-
-    expect(env).toMatchObject({
-      mode: 'production',
-      publicWebUrl: 'http://127.0.0.1:3001',
-      publicApiUrl: 'http://127.0.0.1:3001',
-      publicRelayWebSocketUrl: 'ws://127.0.0.1:3001/relay',
-    });
-  });
-
-  it('allows local production smoke to run without provider secrets', () => {
-    const env = loadApiEnv({
-      NODE_ENV: 'production',
-      PORT: '3001',
-      DATABASE_URL: 'postgres://marklab:marklab@127.0.0.1:54329/marklab',
-      MARKLAB_LOCAL_PRODUCTION_SMOKE: 'true',
-      MARKLAB_REQUIRE_AUTH: 'true',
-      MARKLAB_PUBLIC_WEB_URL: 'http://127.0.0.1:3001',
-      MARKLAB_PUBLIC_API_URL: 'http://127.0.0.1:3001',
-      MARKLAB_ALLOWED_ORIGINS: 'http://127.0.0.1:3001',
-    });
-
-    expect(env).toMatchObject({
-      mode: 'production',
-      ysweetProviderMode: 'disabled',
-    });
-    expect(env.ysweetConnectionString).toBeUndefined();
-  });
-
   it('rejects externally managed provider mode in hosted production alpha', () => {
     expectInvalid({
       ...productionBaseEnv,
@@ -227,24 +147,5 @@ describe('loadApiEnv', () => {
       MARKLAB_YSWEET_AUTH: undefined,
       MARKLAB_YSWEET_SERVER_TOKEN: 'external-token',
     }, 'MARKLAB_YSWEET_PROVIDER_MODE must be process');
-  });
-});
-
-describe('loadRelayProductionConfig', () => {
-  it('rejects the legacy relay production config unless the legacy relay is explicitly enabled', () => {
-    expect(() => loadRelayProductionConfig(productionBaseEnv)).toThrow('MARKLAB_ENABLE_LEGACY_RELAY');
-  });
-
-  it('returns the production relay limits and public URL contract', () => {
-    expect(loadRelayProductionConfig(legacyRelayProductionEnv)).toEqual({
-      publicWebUrl: 'https://marklab.fly.dev',
-      publicApiUrl: 'https://marklab.fly.dev',
-      publicRelayWebSocketUrl: 'wss://marklab.fly.dev/relay',
-      allowedOrigins: ['https://marklab.fly.dev'],
-      ephemeralTtlSeconds: 86400,
-      hostLeaseSeconds: 30,
-      maxRoomConnections: 32,
-      maxMessageBytes: 1048576,
-    });
   });
 });

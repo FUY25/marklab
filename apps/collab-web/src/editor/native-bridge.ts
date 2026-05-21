@@ -9,7 +9,7 @@ export interface NativeCollaboratorSummary {
   color: string;
   colorLight: string;
   kind: 'human' | 'agent';
-  clientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest' | 'api' | undefined;
+  clientKind?: 'browser' | 'app' | 'agent' | 'guest' | 'api' | undefined;
 }
 
 export type NativeDiskMarkdownApplyResult =

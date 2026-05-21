@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { RequestHandler } from 'express';
@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import type { DbPool } from '../db/client';
 import { createUnavailableLiveMarkdownWriter } from '../services/live-writer';
 import { createHttpApp, type HttpHealthOptions } from './app';
-import { createInMemoryRelayRoomService } from '../relay/relay-room-service';
 
 function createLocalOnlyPool(): DbPool {
   async function unavailable(): Promise<never> {
@@ -68,47 +67,12 @@ async function createWebDist(label = 'MarkLab', asset = 'asset') {
 }
 
 describe('http app hosted web serving', () => {
-  it('keeps local-mode relay compatibility wired to remote or in-memory relay services', async () => {
-    const indexSource = await readFile('apps/api/src/index.ts', 'utf8');
-
-    expect(indexSource).toContain('...(relayService ? { relayRouteService: relayService } : {})');
-    expect(indexSource).toContain('...(localRelayService ? { relayService: localRelayService } : {})');
-    expect(indexSource).toContain('...(relay ? { relayServer: relay } : {})');
-    expect(indexSource).not.toContain('...(localRelayService && relay');
-    expect(indexSource).toContain("collab_sessions: ['refresh_token_hash', 'is_guest', 'status', 'expires_at']");
-  });
-
-  it('serves built web assets and falls hosted relay routes back to index.html', async () => {
-    const distDir = await createWebDist();
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
-      staticWeb: { distDir },
-    });
-
-    await expect(request(app).get('/asset.txt').expect(200)).resolves.toMatchObject({ text: 'asset' });
-    await expect(request(app).get('/relay/room_1?token=secret').expect(200)).resolves.toMatchObject({
-      text: expect.stringContaining('MarkLab'),
-    });
-  });
-
-  it('does not let the single-page app fallback shadow API routes or health', async () => {
-    const distDir = await createWebDist();
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
-      staticWeb: { distDir },
-    });
-
-    await request(app).get('/healthz').expect(200);
-    await request(app).get('/api/not-a-real-route').expect(404);
-  });
-
-  it('serves collab-web routes without taking over existing hosted web routes', async () => {
-    const webDist = await createWebDist('Hosted Web', 'web asset');
+  it('serves collab-web assets and routes without shadowing API or legacy relay paths', async () => {
     const collabDist = await createWebDist('Collab Web', 'collab asset');
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
-      staticWeb: { distDir: webDist },
       staticCollabWeb: { distDir: collabDist },
     });
 
-    await expect(request(app).get('/asset.txt').expect(200)).resolves.toMatchObject({ text: 'web asset' });
     await expect(request(app).get('/collab-web/asset.txt').expect(200)).resolves.toMatchObject({ text: 'collab asset' });
     await expect(request(app).get('/collab?mode=edit&docId=doc_1&branchId=main').expect(200)).resolves.toMatchObject({
       text: expect.stringContaining('Collab Web'),
@@ -116,20 +80,10 @@ describe('http app hosted web serving', () => {
     await expect(request(app).get('/workspaces/ws_1/settings').expect(200)).resolves.toMatchObject({
       text: expect.stringContaining('Collab Web'),
     });
-    await expect(request(app).get('/relay/room_1?token=secret').expect(200)).resolves.toMatchObject({
-      text: expect.stringContaining('Hosted Web'),
-    });
-  });
-
-  it('does not mount legacy relay API routes in the hosted control-plane app', async () => {
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
-      relayService: createInMemoryRelayRoomService(),
-    });
-
-    await request(app)
-      .post('/api/relay/rooms')
-      .send({ hostSessionId: 'host_1', hostAuthToken: 'host_secret' })
-      .expect(404);
+    await request(app).get('/healthz').expect(200);
+    await request(app).get('/api/not-a-real-route').expect(404);
+    await request(app).get('/relay/room_1?token=secret').expect(404);
+    await request(app).post('/api/relay/rooms').send({ hostSessionId: 'host_1', hostAuthToken: 'host_secret' }).expect(404);
   });
 
   it('allows credentialed cookie auth from configured web origins', async () => {
@@ -156,43 +110,18 @@ describe('http app hosted web serving', () => {
     };
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
       providerHttpProxy,
-      staticWeb: { distDir },
+      staticCollabWeb: { distDir },
     });
 
     await expect(request(app).get('/d/doc_1/as-update?z=cache').expect(203)).resolves.toMatchObject({
       text: 'proxied',
     });
     expect(proxied).toEqual(['/d/doc_1/as-update?z=cache']);
-    await expect(request(app).get('/not-provider-route').expect(200)).resolves.toMatchObject({
-      text: expect.stringContaining('MarkLab'),
-    });
+    await request(app).get('/not-provider-route').expect(404);
   });
 });
 
 describe('http app readiness', () => {
-  it('can report relay readiness for a remote hosted relay adapter without a local relay websocket server', async () => {
-    const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
-      health: {
-        relayRequired: true,
-        relayReady: true,
-      },
-    });
-
-    await request(app)
-      .get('/healthz')
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body).toMatchObject({
-          ok: true,
-          relay: {
-            required: true,
-            ready: true,
-            connectionCount: 0,
-          },
-        });
-      });
-  });
-
   it('returns 503 when a required provider is down', async () => {
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
       health: {
@@ -297,9 +226,6 @@ describe('http app readiness', () => {
           'subscriptions',
           'document_access_sessions',
           'share_links',
-          'relay_rooms',
-          'relay_access_grants',
-          'relay_access_sessions',
           'document_branch_states',
           'collab_sessions',
           'provider_token_issuances',
@@ -338,9 +264,6 @@ describe('http app readiness', () => {
             'document_access_grants',
             'document_access_sessions',
             'share_links',
-            'relay_rooms',
-            'relay_access_grants',
-            'relay_access_sessions',
             'document_branch_states',
             'collab_sessions',
             'provider_token_issuances',

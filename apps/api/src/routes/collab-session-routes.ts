@@ -34,7 +34,7 @@ import {
 
 const collabSessionSchema = z.object({
   mode: z.enum(['view', 'edit']),
-  clientKind: z.enum(['browser', 'app', 'daemon', 'agent', 'guest']).default('browser'),
+  clientKind: z.enum(['browser', 'app', 'agent', 'guest']).default('browser'),
   displayName: z.string().trim().min(1).max(80).default('Guest'),
 });
 
@@ -72,7 +72,6 @@ function serverClientKind(
   if (requestedClientKind === 'app') {
     return nativeAppProof && !accessIsGuest(actor) ? 'app' : 'browser';
   }
-  if (requestedClientKind === 'daemon') return requestedClientKind;
   return 'browser';
 }
 
@@ -114,7 +113,7 @@ function documentAccessActorKind(
 }
 
 function documentAccessClientKind(clientKind: ProviderTokenClientKind) {
-  if (clientKind === 'app' || clientKind === 'daemon' || clientKind === 'agent') return clientKind;
+  if (clientKind === 'app' || clientKind === 'agent') return clientKind;
   return 'browser';
 }
 

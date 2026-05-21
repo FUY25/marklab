@@ -2,8 +2,8 @@
 
 This page describes the new relay/native pilot deployment shape.
 
-The intended external pilot target can reuse Fly.io plus Neon, but the deployed service must be the current control-plane/Y-Sweet stack, not the archived anonymous relay daemon stack.
-The production pilot does not set `MARKLAB_PUBLIC_RELAY_WS_URL` or `MARKLAB_ENABLE_LEGACY_RELAY`; those remain compatibility-only knobs for archived daemon testing.
+The intended external pilot target can reuse Fly.io plus Neon, but the deployed service must be the current control-plane/Y-Sweet stack, not the archived anonymous daemon stack.
+The production pilot does not configure the old anonymous relay websocket path; those knobs have been removed from the active service.
 
 ## Target Shape
 

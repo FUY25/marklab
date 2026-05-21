@@ -13,7 +13,7 @@ struct NativeHostedWebViewSecurityTests {
       expectedURL: expectedURL
     ))
     #expect(!nativeHostedWebViewURLIsAllowed(
-      try #require(URL(string: "https://app.example.test/collab?clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&localDocId=local_1#localDaemonToken=local-secret&localApiUrl=http://127.0.0.1:3011")),
+      try #require(URL(string: "https://app.example.test/collab?clientKind=app&mode=edit&branchId=branch_1&docId=doc_1&localDocId=local_1#unexpected=secret")),
       expectedURL: expectedURL
     ))
     #expect(!nativeHostedWebViewURLIsAllowed(

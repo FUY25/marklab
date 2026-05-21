@@ -32,7 +32,7 @@ function createPool(input: {
   activeSessionActorId?: string | null;
   activeSessionActorGrantId?: string | null;
   activeSessionActorType?: 'agent' | 'user';
-  activeSessionClientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
+  activeSessionClientKind?: 'browser' | 'app' | 'agent' | 'guest';
   activeSessionStatus?: 'pending' | 'issued' | 'failed' | 'revoked';
   activeSessionRole?: 'view' | 'edit' | null;
   activeSessionExpired?: boolean;
@@ -498,19 +498,21 @@ describe('collab session routes', () => {
     })]);
   });
 
-  it('preserves native app and daemon client kinds in server-side session metadata', async () => {
-    const auth = createAuth({ grantId: 'grant_1', actorId: 'access:token_hash' });
+  it('preserves native app client kind in server-side session metadata', async () => {
+    const auth = createAuth({ grantId: null, actorId: 'user_1' });
     const providerTokenService = createProviderTokenService();
     const pool = createPool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
 
     const response = await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session')
-      .send({ mode: 'edit', clientKind: 'daemon', displayName: 'Alice' })
+      .set('Authorization', 'Bearer ml_user_native')
+      .set('X-MarkLab-Native-App', '1')
+      .send({ mode: 'edit', clientKind: 'app', displayName: 'Alice' })
       .expect(201);
 
-    expect(response.body.session.clientKind).toBe('daemon');
-    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['daemon', 'user']));
+    expect(response.body.session.clientKind).toBe('app');
+    expect(pool.issuances[0]).toEqual(expect.arrayContaining(['app', 'user']));
   });
 
   it('does not let browser callers claim agent client kind', async () => {
@@ -1116,7 +1118,7 @@ describe('collab session routes', () => {
     const response = await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session')
       .set('Cookie', 'marklab_session=reader-token')
-      .send({ mode: 'view', clientKind: 'daemon', displayName: 'Reader' })
+      .send({ mode: 'view', clientKind: 'browser', displayName: 'Reader' })
       .expect(200);
 
     expect(pool.collabSessions[0]).toEqual(expect.arrayContaining([
@@ -1124,7 +1126,7 @@ describe('collab session routes', () => {
       'doc_1',
       'branch_1',
       'view',
-      'daemon',
+      'browser',
       'user',
       'user_reader',
       null,
@@ -1136,7 +1138,7 @@ describe('collab session routes', () => {
       'doc_1',
       'branch_1',
       response.body.session.sessionId,
-      'daemon',
+      'browser',
       'user',
       'user_reader',
       'Reader',
@@ -1220,16 +1222,16 @@ describe('collab session routes', () => {
 
     const response = await request(app)
       .post('/api/docs/doc_1/branches/branch_1/collab/session')
-      .send({ mode: 'view', clientKind: 'daemon', displayName: 'User' })
+      .send({ mode: 'view', clientKind: 'agent', displayName: 'User' })
       .expect(200);
 
-    expect(response.body.session.clientKind).toBe('daemon');
+    expect(response.body.session.clientKind).toBe('browser');
     expect(pool.documentAccessSessions[0]).toEqual([
       'grant_1',
       'doc_1',
       'branch_1',
       response.body.session.sessionId,
-      'daemon',
+      'browser',
       'guest',
       `session:${response.body.session.sessionId}`,
       'User',

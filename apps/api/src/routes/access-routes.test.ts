@@ -36,7 +36,7 @@ interface SessionRecord {
   doc_id?: string;
   branch_id?: string;
   client_id: string;
-  client_kind: 'browser' | 'app' | 'daemon' | 'agent' | 'api';
+  client_kind: 'browser' | 'app' | 'agent' | 'api';
   display_name: string;
   color: string;
   last_branch_id: string | null;
@@ -274,7 +274,7 @@ function createAccessRoutePool() {
         doc_id: String(params?.[1]),
         branch_id: String(params?.[2]),
         client_id: String(params?.[3]),
-        client_kind: params?.[4] as 'browser' | 'app' | 'daemon' | 'agent' | 'api',
+        client_kind: params?.[4] as 'browser' | 'app' | 'agent' | 'api',
         display_name: String(params?.[5]),
         color: String(params?.[6]),
         last_branch_id: String(params?.[7]),

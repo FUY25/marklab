@@ -52,4 +52,4 @@ The old daemon alpha used private URLs like:
 http://127.0.0.1:<port>/local#token=...
 ```
 
-That path is archived compatibility behavior and is disabled by default. Do not send localhost URLs to collaborators.
+That path is archived behavior and is not part of the current pilot. Do not send localhost URLs to collaborators.

@@ -139,7 +139,7 @@ export async function readProviderDocSeedStateForUpdate(pool: DbExecutor, input:
   };
 }
 
-export type ProviderTokenClientKind = 'browser' | 'app' | 'daemon' | 'agent' | 'guest';
+export type ProviderTokenClientKind = 'browser' | 'app' | 'agent' | 'guest';
 
 export interface ActiveProviderTokenSession {
   providerDocId: string;

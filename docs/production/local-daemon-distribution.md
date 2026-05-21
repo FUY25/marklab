@@ -22,26 +22,9 @@ marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 
 The command opens a `marklab://join?...` deep link. View links remain browser-only.
 
-## Archived Compatibility Opt-In
+## Archived Compatibility Status
 
-The old daemon CLI commands are disabled by default.
-
-For archived compatibility testing only:
-
-```bash
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab status
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab open README.md --background
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab create-link README.md --role edit
-MARKLAB_ENABLE_LEGACY_CLI=1 marklab stop --all
-```
-
-The native app also keeps its legacy local daemon boundary disabled unless explicitly enabled:
-
-```bash
-MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1
-```
-
-Do not enable that boundary for the new relay/native pilot unless you are testing archived behavior.
+The old daemon CLI commands and the native app's optional daemon boundary have been removed from the active pilot. Historical commands in old plans are reference material only and are not expected to run from the current package.
 
 ## Why This Is Archived
 

@@ -90,7 +90,7 @@ const createAccessGrantSchema = z.object({
 
 const createAccessSessionSchema = z.object({
   clientId: z.string().min(1),
-  clientKind: z.enum(['browser', 'app', 'daemon', 'agent', 'api']).optional().default('browser'),
+  clientKind: z.enum(['browser', 'app', 'agent', 'api']).optional().default('browser'),
   displayName: z.string().default(''),
 });
 

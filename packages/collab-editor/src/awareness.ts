@@ -6,7 +6,7 @@ export interface MarkLabAwarenessUser {
   color: string;
   colorLight: string;
   kind: 'human' | 'agent';
-  clientKind?: 'browser' | 'app' | 'daemon' | 'agent' | 'guest' | 'api';
+  clientKind?: 'browser' | 'app' | 'agent' | 'guest' | 'api';
 }
 
 export interface MarkLabAwarenessCursor {
@@ -102,7 +102,6 @@ function normalizeAwarenessClientKind(value: unknown): MarkLabAwarenessUser['cli
   switch (value) {
     case 'browser':
     case 'app':
-    case 'daemon':
     case 'agent':
     case 'guest':
     case 'api':
