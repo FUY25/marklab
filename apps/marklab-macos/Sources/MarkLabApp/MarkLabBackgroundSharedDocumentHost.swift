@@ -25,6 +25,10 @@ final class MarkLabBackgroundSharedDocumentHost {
 
   func retain(_ model: MarkLabAppModel, fileURL: URL) {
     let key = canonicalKey(fileURL)
+    if let retainedModel = retainedModels[key], retainedModel !== model {
+      hiddenControllers[key]?.close()
+      hiddenControllers[key] = nil
+    }
     retainedModels[key] = model
     guard createHiddenWindow, hiddenControllers[key] == nil else { return }
     let rootView = MarkEditDocumentShellView(model: model, retainsSharedDocumentOnDisappear: false)

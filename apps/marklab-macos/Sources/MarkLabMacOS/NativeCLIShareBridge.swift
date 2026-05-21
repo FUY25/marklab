@@ -193,8 +193,13 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
       .map { $0.deletingPathExtension().lastPathComponent }
       .sorted()
     var pending: [String] = []
-    for requestId in requestIds where !fileManager.fileExists(atPath: responseURL(requestId).path) {
-      guard let request = try loadRequest(requestId: requestId), !isStale(request) else { continue }
+    for requestId in requestIds {
+      guard let request = try loadRequest(requestId: requestId) else { continue }
+      if isStale(request) {
+        try removeRequestFiles(requestId: requestId)
+        continue
+      }
+      guard !fileManager.fileExists(atPath: responseURL(requestId).path) else { continue }
       pending.append(requestId)
     }
     return pending
@@ -218,6 +223,12 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
     appSupportDirectory
       .appending(path: "cli-responses", directoryHint: .isDirectory)
       .appending(path: "\(requestId).json", directoryHint: .notDirectory)
+  }
+
+  private func removeRequestFiles(requestId: String) throws {
+    for url in [requestURL(requestId), responseURL(requestId)] where fileManager.fileExists(atPath: url.path) {
+      try fileManager.removeItem(at: url)
+    }
   }
 
   private func write<T: Encodable>(_ value: T, to url: URL) throws {

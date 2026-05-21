@@ -1,12 +1,14 @@
 # Reconnect Conflict Hardening Implementation Plan
 
+> **Status, 2026-05-21:** Partially superseded by the current MarkLab.app native conflict inspector, hosted `/collab` control-plane/Y-Sweet path, and app-support-file status model. Do not execute local-daemon/API-local steps directly. References below to `apps/api/src/local/*`, local conflict routes, daemon registries, or daemon opt-in flags are historical notes from the removed daemon/local API approach.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make offline/reconnect behavior and Relay-like conflict UX reliable enough for alpha users.
 
 **Architecture:** The reconciliation engine from Plan 1A opens conflicts when disk and provider diverge from `lastProjectedMarkdown`. This plan builds the user-facing review flow, pauses only the affected document, records snapshots, and proves the core failure modes with E2E tests.
 
-**Tech Stack:** Existing local conflict store/routes, browser UI, native UI, Yjs, Vitest, Playwright, CLI smoke scripts.
+**Tech Stack:** Current browser UI, native UI, Yjs, Vitest, Playwright, CLI smoke scripts, and app-support-file conflict/session stores.
 
 ## Reference Implementations (MIT — OK to copy)
 
@@ -60,12 +62,12 @@ This plan does not add AI-assisted merge or hunk-level merge. It ships the simpl
 
 ## Native Facts From Plans 4 And 5.5
 
-- Native source now lives in this monorepo at `apps/marklab-macos/` as a SwiftPM package using a Port MarkEdit UI shell strategy. The app owns a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local editor surface, share UI, native conflict inspector, hosted collaboration WKWebView bridge, local daemon client, and app-owned daemon registry format.
+- Native source now lives in this monorepo at `apps/marklab-macos/` as a SwiftPM package using a Port MarkEdit UI shell strategy. The app owns a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local editor surface, share UI, native conflict inspector, hosted collaboration WKWebView bridge, and app-support-file session/conflict stores.
 - The first native collaboration editor embeds the hosted `/collab` CodeMirror/Yjs app with `clientKind=app`; it does not yet ship a fully bundled native Yjs runtime. Shared browser/native editor semantics live in `packages/collab-editor/` and should be reused by browser conflict UI.
 - The app editor URL is first-party and grantless. Public edit/view access grants are collaborator links only. The WKWebView injects `Authorization: Bearer ml_user_...` and `X-MarkLab-Native-App: 1` only into same-origin `/api/` fetches; the API downgrades app kind unless that authenticated native marker resolves to a non-guest actor.
 - MarkLab.app watches the opened shared file with a macOS file-system dispatch source and also runs a timer fallback. One-sided disk changes are sent back into the embedded Y.Text editor only if live provider text still matches the expected baseline. Divergent disk/shared changes already open the native conflict surface.
 - Native projection baselines are durable before in-memory advancement and store the full tuple: `lastProjectedMarkdown`, `lastProjectedHash`, `lastProviderStateFingerprint`, and `updatedAt`. The hosted-WKWebView MVP uses explicit `provider-ytext:sha256:...` fingerprints, not binary Yjs state fingerprints.
-- The legacy local daemon boundary (`marklab share --json --daemon-only` plus `/api/local/app-context`) is disabled by default for the new relay/Y-Sweet pilot. Reconnect/conflict testing should use the hosted `/collab` control-plane/Y-Sweet path unless compatibility testing explicitly sets `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1`; the compatibility path must not create a hidden local relay edit grant.
+- The legacy local daemon boundary and local app-context routes have been removed from the active pilot. Reconnect/conflict testing should use the hosted `/collab` control-plane/Y-Sweet path, native app-support-file state, and current `marklab status`, `marklab wait <file.md> --synced`, and `marklab conflict` commands.
 - Native smoke command: `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. It proves app-kind/browser convergence, disk projection, MarkEdit shell strategy, Swift build/runtime gates, and bidirectional cursor awareness, but it does not launch a GUI WKWebView automation harness. Keep that limitation explicit when expanding the conflict/reconnect matrix.
 
 ## File Structure

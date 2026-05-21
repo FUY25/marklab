@@ -1,5 +1,7 @@
 # Y-Sweet Single-File Collaboration Foundation Implementation Plan
 
+> **Status, 2026-05-21:** Superseded by the current hosted control-plane/Y-Sweet, `apps/collab-web`, and MarkLab.app app-support-file architecture. Do not execute this plan directly. References below to `apps/api/src/local/*` are historical implementation notes from the archived daemon/local API approach; new work should use the current API control-plane routes, provider services, `packages/collab-editor`, `apps/collab-web`, and `apps/marklab-macos`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the first safe implementation slice for MarkLab's Relay/Y-Sweet-style single-file collaboration model without allowing stale disk state, public view links, or client-writable identity metadata to become write or audit authority.

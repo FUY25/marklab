@@ -1,12 +1,14 @@
 # MarkLab Native Integration Implementation Plan
 
+> **Status, 2026-05-21:** Mostly implemented and partially superseded by the current MarkLab.app bridge, hosted `/collab` control-plane/Y-Sweet path, and app-support-file status/conflict model. Do not recreate the legacy local daemon or `apps/api/src/local/*` routes referenced by older task text below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the MarkLab.app native/local editor surface based on MarkEdit behavior and connect it to the same single-file collaboration model as browser collaborators.
 
 **Architecture:** MarkLab.app is the first-class local-file entry point. It opens a user-owned `.md` file, binds native CodeMirror/MarkEdit editing to `Y.Text("contents")` for shared files, projects provider changes back to disk, ingests local file watcher changes, and exposes share/manage actions through app UI and CLI.
 
-**Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, hosted control-plane/Y-Sweet APIs, and legacy `apps/cli`/local-daemon compatibility behind explicit opt-in.
+**Tech Stack:** MarkEdit reference code, macOS native app stack selected during implementation, CodeMirror, Yjs, local file watcher, hosted control-plane/Y-Sweet APIs, current `apps/cli` native app bridge, and app-support-file status/conflict stores.
 
 ## Reference Implementations (MIT — OK to copy)
 
@@ -83,7 +85,7 @@ Historical note: the old API-local route files from this plan were removed durin
 ### Task 2: Local File Open And Save
 
 - [ ] Implement native file open for one `.md` file.
-- [ ] Use the hosted control-plane/Y-Sweet path by default. Legacy local daemon APIs for summary, versions, restore, and conflict status are compatibility-only and must stay disabled unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set.
+- [ ] Use the hosted control-plane/Y-Sweet path and current app-support-file status/conflict stores. Do not recreate legacy local daemon APIs for summary, versions, restore, or conflict status.
 - [ ] Preserve normal local editing when a file is not shared.
 - [ ] Acceptance: opening, editing, saving, closing, and reopening a file preserves exact Markdown bytes except intentional LF normalization for shared files.
 
@@ -118,11 +120,11 @@ Historical note: the old API-local route files from this plan were removed durin
 ### Task 6: CLI/App Boundary
 
 - [ ] Ensure `marklab status`, `wait`, `conflict`, and `export` can operate against the native app/control-plane contract without requiring the legacy local-daemon share route.
-- [ ] Keep legacy local-daemon CLI discovery/startup behind `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` and ensure it does not steal focus from the native app when explicitly enabled.
+- [ ] Keep CLI discovery/startup on the current MarkLab.app request bridge and app-support-file status model; do not restore legacy local-daemon startup.
 - [ ] Ensure native edit sessions refresh provider tokens through the same control-plane endpoint as browser edit sessions.
 - [ ] Persist and use the control-plane session refresh token returned by the edit-session route; do not attempt refresh with the original share token or with provider token internals.
 - [ ] Use the `ClientToken` returned by the control plane as the source of provider connection URLs; do not duplicate `MARKLAB_YSWEET_PUBLIC_URL_PREFIX` or provider route construction in native code.
-- [ ] Acceptance command: native app Start Sharing creates control-plane `/collab` links while the opened file is owned by the app and does not start the legacy daemon unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is set.
+- [ ] Acceptance command: native app Start Sharing creates control-plane `/collab` links while the opened file is owned by the app and does not start or require a legacy daemon.
 
 ### Task 7: Native E2E Smoke
 
@@ -139,7 +141,7 @@ Historical note: the old API-local route files from this plan were removed durin
 ### Task 8: Verification
 
 - [ ] Run native build/test command selected by the MarkEdit strategy.
-- [ ] Run `npx -y pnpm@10.0.0 test apps/api/src/local apps/cli`.
+- [ ] Run `npx -y pnpm@10.0.0 test apps/cli` and current API/provider tests.
 - [ ] Run native/browser E2E smoke.
 - [ ] Run `git diff --check`.
 - [ ] Commit with `git commit -m "feat: integrate marklab native collaboration"`.

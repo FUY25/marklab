@@ -232,7 +232,7 @@ The current alpha uses:
 - A Fly volume at `/data/ysweet` for Y-Sweet provider persistence.
 - MarkLab.app as the local-file owner/editor, with browser and app collaborators using the same hosted `/collab` provider path.
 
-The archived anonymous `/relay` host-gated daemon route remains compatibility-only and is disabled by default. It is not the pilot path for new testing.
+The archived anonymous `/relay` host-gated daemon route has been removed from the active pilot and exists only in archived docs/history. It is not the pilot path for new testing.
 
 ### Target Server Model
 

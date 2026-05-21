@@ -1455,9 +1455,16 @@ final class NativeCLIShareAppService: NativeCLIShareService {
     let hostedShareController = makeHostedShareController(request.hostedConfig)
     let nativeBearerToken = nativeBearerToken(from: request.hostedConfig, hostedShareController: hostedShareController)
     let retainedModel = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL)
-    let model = retainedModel?.hasHostedShareController == true || hostedShareController == nil
-      ? (retainedModel ?? makeModel(nil, nil))
-      : makeModel(hostedShareController, nativeBearerToken)
+    let model: MarkLabAppModel
+    if let fixedModel {
+      model = fixedModel
+    } else if request.hostedConfig != nil {
+      model = makeModel(hostedShareController, nativeBearerToken)
+    } else if retainedModel?.hasHostedShareController == true || hostedShareController == nil {
+      model = retainedModel ?? makeModel(nil, nil)
+    } else {
+      model = makeModel(hostedShareController, nativeBearerToken)
+    }
     let result = try await model.createShareLinkForCLI(fileURL: request.fileURL, role: request.role)
     backgroundHost.retain(model, fileURL: request.fileURL)
     return result

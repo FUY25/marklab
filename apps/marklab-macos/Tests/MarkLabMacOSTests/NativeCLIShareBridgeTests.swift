@@ -79,7 +79,18 @@ struct NativeCLIShareBridgeTests {
       action: .share,
       file: "/tmp/stale.md",
       role: .edit,
+      hostedConfig: NativeCLIHostedConfig(
+        apiBaseURL: "https://api.example.test",
+        webBaseURL: "https://app.example.test",
+        bearerToken: "ml_user_stale",
+        workspaceId: "workspace_stale"
+      ),
       createdAt: "1970-01-01T00:00:00.000Z"
+    ))
+    try store.writeResponse(.failure(
+      requestId: "req_stale",
+      code: "native_share_failed",
+      message: "stale response"
     ))
     try store.writeRequest(NativeCLIShareRequest(
       requestId: "req_fresh",
@@ -90,6 +101,8 @@ struct NativeCLIShareBridgeTests {
     ))
 
     #expect(try store.pendingRequestIds() == ["req_fresh"])
+    #expect(try store.loadRequest(requestId: "req_stale") == nil)
+    #expect(try store.loadResponse(requestId: "req_stale") == nil)
   }
 
   @MainActor
@@ -202,6 +215,94 @@ struct NativeCLIShareBridgeTests {
     #expect(transport.requests.first?.jsonBody?["workspaceId"] as? String == "workspace_from_cli")
   }
 
+  @MainActor
+  @Test("native CLI share app service replaces retained same-file model when request hosted config changes")
+  func shareAppServiceUsesFreshHostedConfigForRetainedFile() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "rotating-token.md")
+    try Data("# Rotating token\n".utf8).write(to: fileURL)
+    let transport = TokenRotationHTTPTransport()
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let sessionManager = NativeSharedDocumentSessionManager()
+    var createdModelCount = 0
+    let service = NativeCLIShareAppService(
+      backgroundHost: backgroundHost,
+      makeHostedShareController: { config in
+        guard
+          let config,
+          let apiURL = URL(string: config.apiBaseURL),
+          let webURL = URL(string: config.webBaseURL)
+        else {
+          return nil
+        }
+        return NativeHostedShareController(client: NativeControlPlaneShareClient(
+          apiBaseURL: apiURL,
+          webBaseURL: webURL,
+          bearerToken: config.bearerToken,
+          workspaceId: config.workspaceId,
+          transport: transport
+        ))
+      }
+    ) { hostedShareController, nativeBearerToken in
+      createdModelCount += 1
+      return MarkLabAppModel(
+        hostedShareController: hostedShareController,
+        baselineStore: baselineStore,
+        conflictStore: NativeConflictStore(directoryURL: directory.url.appending(
+          path: "conflicts-\(createdModelCount)",
+          directoryHint: .isDirectory
+        )),
+        sharedDocumentBindingStore: bindingStore,
+        sessionManager: sessionManager,
+        nativeBearerToken: nativeBearerToken
+      )
+    }
+
+    let firstResult = try await service.createShareLink(for: NativeCLIShareServiceRequest(
+      fileURL: fileURL,
+      role: .edit,
+      hostedConfig: NativeCLIHostedConfig(
+        apiBaseURL: "https://api.example.test",
+        webBaseURL: "https://app.example.test",
+        bearerToken: "ml_user_first",
+        workspaceId: "workspace_first"
+      )
+    ))
+    let firstModel = try #require(backgroundHost.retainedModel(fileURL: fileURL))
+
+    let secondResult = try await service.createShareLink(for: NativeCLIShareServiceRequest(
+      fileURL: fileURL,
+      role: .view,
+      hostedConfig: NativeCLIHostedConfig(
+        apiBaseURL: "https://api.example.test",
+        webBaseURL: "https://app.example.test",
+        bearerToken: "ml_user_second",
+        workspaceId: "workspace_second"
+      )
+    ))
+    let secondModel = try #require(backgroundHost.retainedModel(fileURL: fileURL))
+
+    #expect(createdModelCount == 2)
+    #expect(firstModel !== secondModel)
+    #expect(firstResult.link.grantId == "grant_first")
+    #expect(secondResult.link.grantId == "grant_second")
+    let grantPosts = transport.requests.filter {
+      $0.method == "POST" && $0.percentEncodedPath == "/api/docs/doc_rotating/branches/branch_main/access-grants"
+    }
+    #expect(grantPosts.map(\.authorization) == [
+      "Bearer ml_user_first",
+      "Bearer ml_user_second",
+    ])
+    #expect(transport.requests.first?.authorization == "Bearer ml_user_first")
+    #expect(transport.requests.first?.percentEncodedPath == "/api/docs/import")
+    #expect(grantPosts.map(\.percentEncodedPath) == [
+      "/api/docs/doc_rotating/branches/branch_main/access-grants",
+      "/api/docs/doc_rotating/branches/branch_main/access-grants",
+    ])
+  }
+
   @Test("native CLI share processor delegates to native sharing and persists the response")
   @MainActor
   func processorDelegatesToNativeSharingAndPersistsResponse() async throws {
@@ -280,6 +381,44 @@ struct NativeCLIShareBridgeTests {
     #expect(response.ok)
     #expect(response.role == .view)
     #expect(response.grantId == "grant_view")
+  }
+}
+
+private final class TokenRotationHTTPTransport: NativeHTTPTransport {
+  private(set) var requests: [RecordedHTTPRequest] = []
+  private var grantCount = 0
+
+  func send(_ request: NativeHTTPRequest) async throws -> NativeHTTPResponse {
+    requests.append(RecordedHTTPRequest(
+      method: request.method,
+      path: request.url.path,
+      percentEncodedPath: URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? request.url.path,
+      authorization: request.headers["Authorization"],
+      nativeAppProof: request.headers["X-MarkLab-Native-App"],
+      bodyString: request.body.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    ))
+    if request.method == "POST", request.url.path == "/api/docs/import" {
+      return jsonResponse(#"{"docId":"doc_rotating","branchId":"branch_main","versionId":"version_1","hash":"sha256:rotating"}"#, statusCode: 201)
+    }
+    if request.method == "POST", request.url.path == "/api/docs/doc_rotating/branches/branch_main/access-grants" {
+      grantCount += 1
+      if grantCount == 1 {
+        return jsonResponse(#"{"grantId":"grant_first","branchId":"branch_main","token":"ml_access_first","role":"edit","expiresAt":null,"createdAt":"2026-05-19T12:00:00.000Z"}"#, statusCode: 201)
+      }
+      return jsonResponse(#"{"grantId":"grant_second","branchId":"branch_main","token":"ml_access_second","role":"view","expiresAt":null,"createdAt":"2026-05-19T12:01:00.000Z"}"#, statusCode: 201)
+    }
+    if request.method == "GET", request.url.path == "/api/docs/doc_rotating/branches/branch_main/access-grants" {
+      return jsonResponse(#"{"grants":[]}"#)
+    }
+    throw NativeHTTPError.transport("unexpected test request \(request.method) \(request.url.path)")
+  }
+
+  private func jsonResponse(_ json: String, statusCode: Int = 200) -> NativeHTTPResponse {
+    NativeHTTPResponse(
+      statusCode: statusCode,
+      data: Data(json.utf8),
+      headers: ["content-type": "application/json"]
+    )
   }
 }
 
