@@ -1,15 +1,32 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
 import { App, collabClientKindFromParam, collabNativeShellFromParam } from './App';
+
+const providerMock = vi.hoisted(() => ({
+  capturedAwareness: null as { clientID: number; on(eventName: 'update', handler: (event: { removed: number[] }) => void): void } | null,
+  destroy: vi.fn(),
+  off: vi.fn(),
+  on: vi.fn(),
+}));
 
 vi.mock('@y-sweet/client', async () => {
   const actual = await vi.importActual<typeof import('@y-sweet/client')>('@y-sweet/client');
   return {
     ...actual,
-    createYjsProvider: vi.fn(),
+    createYjsProvider: vi.fn((_doc, _providerDocId, _clientTokenFactory, options) => {
+      providerMock.capturedAwareness = (options as { awareness?: typeof providerMock.capturedAwareness }).awareness ?? null;
+      return {
+        clientToken: null,
+        destroy: providerMock.destroy,
+        disconnect: vi.fn(),
+        off: providerMock.off,
+        on: providerMock.on,
+        status: actual.STATUS_CONNECTED,
+      };
+    }),
   };
 });
 
@@ -112,13 +129,48 @@ function nativeEditSessionResponse(): Response {
   });
 }
 
+function nativeHostedEditSessionResponse(): Response {
+  return new Response(JSON.stringify({
+    mode: 'edit',
+    session: {
+      sessionId: 'session_app',
+      clientKind: 'app',
+      displayName: 'MarkLab.app',
+      refreshToken: 'refresh_session_secret',
+    },
+    providerToken: {
+      providerDocId: 'ml_doc_1',
+      sessionId: 'session_app',
+      authorization: 'full',
+      validForSeconds: 600,
+      issuedAt: '2026-05-15T12:00:00.000Z',
+      expiresAt: '2026-05-15T12:10:00.000Z',
+      clientToken: {
+        docId: 'ml_doc_1',
+        url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
+        baseUrl: 'https://api.example.test/d/ml_doc_1',
+        token: 'ysweet_token',
+        authorization: 'full',
+      },
+    },
+  }), {
+    status: 201,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 describe('App routing', () => {
   beforeEach(() => {
     window.history.pushState({}, '', '/?mode=view&docId=doc_1&branchId=branch_1&token=view_token');
     vi.stubGlobal('fetch', vi.fn(async () => viewSessionResponse()));
+    providerMock.capturedAwareness = null;
+    providerMock.destroy.mockReset();
+    providerMock.off.mockReset();
+    providerMock.on.mockReset();
   });
 
   afterEach(() => {
+    cleanup();
     delete window.__marklabNativeApp;
     delete window.__marklabNativeApplyDiskMarkdown;
     delete window.__marklabRunEditorCommand;
@@ -187,5 +239,33 @@ describe('App routing', () => {
       ok: true,
       markdown: 'Resolved\n',
     });
+  });
+
+  it('broadcasts local awareness removal before destroying the hosted provider', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeHostedEditSessionResponse()));
+    const teardownOrder: string[] = [];
+    providerMock.destroy.mockImplementation(() => {
+      teardownOrder.push('provider-destroyed');
+    });
+
+    const { unmount } = render(<App />);
+
+    await waitFor(() => {
+      expect(providerMock.capturedAwareness).not.toBeNull();
+      expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
+    });
+    const awareness = providerMock.capturedAwareness!;
+    awareness.on('update', (event) => {
+      if (event.removed.includes(awareness.clientID)) {
+        teardownOrder.push('awareness-cleared');
+      }
+    });
+
+    unmount();
+
+    expect(providerMock.destroy).toHaveBeenCalledTimes(1);
+    expect(teardownOrder.slice(0, 2)).toEqual(['awareness-cleared', 'provider-destroyed']);
   });
 });
