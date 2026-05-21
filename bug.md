@@ -697,6 +697,7 @@ This file records correctness/security bugs found by plan-level review passes.
   - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app` passed and produced the candidate artifact.
   - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package` passed for bundle identifier `com.marklab.app` and URL scheme `marklab`.
 - Gate 0 findings: no P0/P1 findings from automated baseline.
+- Status: superseded by patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` after P1-001.
 - Next gate: Gate 1 manual pilot acceptance.
 
 ## Pilot Manual Acceptance — 2026-05-21
@@ -704,6 +705,7 @@ This file records correctness/security bugs found by plan-level review passes.
 Target: `https://marklab-relay-alpha.fly.dev`
 Operator: Codex
 Git SHA under test: `c1333b4e7a3a0d47ec6db2269bd97638b27de124`
+Patched RC code SHA after P1-001 fix: `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`
 App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`
 
 ### Findings
@@ -716,4 +718,4 @@ App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/Mar
    - Root cause: the native WebView message bridge rejected `WKScriptMessage` events from default HTTPS origins when `WKSecurityOrigin.port` was reported as `0` instead of `443`. Navigation still worked, so the hosted editor converged live, but `markdown-snapshot` and `selection-change` messages were ignored by the native model.
    - Resolution: normalize an omitted security-origin port (`0`) to the scheme default in `NativeHostedWebViewOrigin.matches`, while keeping custom-port origins strict.
    - Verification: `swift test --package-path apps/marklab-macos` passed with 73 tests; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 80 files and 682 tests; `package:app` and `verify:package` passed; Phase 2.2 was re-run against the patched packaged app and confirmed both app-originated and browser-originated edits projected into `~/marklab-pilot-acceptance/pilot-bridge-fix.md`.
-   - Status: fixed; re-freeze Gate 0 with a new commit/SHA before continuing the full manual pass.
+   - Status: fixed; Gate 0 re-frozen on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` before continuing the full manual pass.

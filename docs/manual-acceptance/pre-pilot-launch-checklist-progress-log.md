@@ -36,9 +36,9 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 
 | Gate | Area | Status | Owner | Evidence |
 | --- | --- | --- | --- | --- |
-| 0 | Release candidate freeze | In progress | TBD | Original RC passed, but P1-001 fix changed code; re-freeze after commit/new SHA. |
+| 0 | Release candidate freeze | Passed | TBD | Patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` passed the Gate 0 baseline. |
 | 1 | Manual pilot acceptance | In progress | TBD | `/healthz` green on 2026-05-21. |
-| 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed and verified; re-freeze Gate 0 before continuing full Gate 1. |
+| 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. |
 | 2.5 | Dead code inventory and safe removal | Not started | TBD | |
 | 3 | Server/data lifecycle audit | Not started | TBD | |
 | 4 | Cost instrumentation and unit economics | Not started | TBD | |
@@ -76,7 +76,7 @@ Progress log:
 | 2026-05-21 | Gate created. No RC selected yet. | This document. | Select RC SHA. |
 | 2026-05-21 | Gate passed. RC selected on `macos-app` at `c1333b4e7a3a0d47ec6db2269bd97638b27de124`; `origin/macos-app` matched local HEAD after fetch. Worktree is intentionally not clean only because this checklist file is still untracked. | `git status -sb`; `git rev-list --left-right --count HEAD...origin/macos-app` returned `0 0`; baseline commands below passed; `bug.md` RC section. | Start Gate 1 manual pilot acceptance. |
 | 2026-05-21 | Baseline passed: TypeScript typecheck, full Vitest suite, Swift native tests, app packaging, and packaged app verification. | `npx -y pnpm@10.0.0 typecheck`; `npx -y pnpm@10.0.0 test` reported 80 files passed, 682 tests passed, 1 skipped; `swift test --package-path apps/marklab-macos` reported 72 tests passed; `package:app`; `verify:package`. | Use `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app` as the Gate 1 candidate artifact. |
-| 2026-05-21 | Gate reopened after P1-001 fix changed native code. The patched working tree passed the automated baseline, but it still needs a committed SHA before it can be the next RC. | `swift test --package-path apps/marklab-macos` reported 73 tests passed; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` reported 80 files passed, 682 tests passed, 1 skipped; `package:app`; `verify:package`; Phase 2.2 re-run passed. | Commit or otherwise freeze the patched SHA, then mark Gate 0 passed for the new RC. |
+| 2026-05-21 | Gate re-frozen after P1-001 fix. Patched RC code commit is `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`. | `swift test --package-path apps/marklab-macos` reported 73 tests passed; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` reported 80 files passed, 682 tests passed, 1 skipped; `package:app`; `verify:package`; Phase 2.2 re-run passed. | Resume Gate 1 Phase 2.3 cursor/presence checks. |
 
 Exit criteria:
 
@@ -117,7 +117,7 @@ Progress log:
 | 2026-05-21 | Phase 1 smoke passed. RC artifact launched `pilot.md`; native accessibility tree showed the MarkEdit shell with ToC, Heading, Bold/Italic, List, Document, and Collaboration toolbar controls; local edit was saved to disk and preserved the expected trailing LF; hosted health stayed green after smoke. | `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`; `~/marklab-pilot-acceptance/pilot.md`; disk check reported `endswith_acceptance_lf: true`; `/healthz` returned `ok: true`, database/schema/provider/store ready. | Run Phase 2 convergence and presence. |
 | 2026-05-21 | Phase 2.1 browser-to-browser convergence passed. Two isolated Chromium contexts opened the same edit grant, each received the other's typed marker, and the final cleaned editor text matched exactly on both sides. | Redacted Playwright check reported 2 provider websockets, zero console errors, zero page errors, final text length 322 on both sides, matching hash `d0a14397be2f`. | Run Phase 2.2 app-to-browser convergence. |
 | 2026-05-21 | Phase 2.2 found P1-001. Native app entered shared mode, created an edit link, browser collaborator joined, app marker appeared in browser, and browser marker appeared in app. However, the local `pilot.md` file did not receive either marker after the shared projection debounce, after an additional wait, or after Cmd+S. | RC app pid 9028; redacted browser collaborator check returned `ok: true`, `appMarkerSeen: true`, `browserMarkerTyped: true`; app accessibility tree showed both markers; disk check stayed at 56 bytes and did not contain either marker after 10+ seconds or Cmd+S. | Stop Gate 1 full pass and move P1-001 into Gate 2. |
-| 2026-05-21 | Phase 2.2 re-run passed after P1-001 fix. Native app entered shared mode from a clean scratch file, created a browser edit link, app marker appeared in browser, browser marker appeared in app, selection status updated from the native bridge, and both app/browser markers projected to the local `.md` file. | Patched `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`; `~/marklab-pilot-acceptance/pilot-bridge-fix.md` contained `from app bridge fixed 1779366352` and `browser-ok-2` after the shared projection debounce; Playwright browser check saw provider websocket and zero errors. | Re-freeze Gate 0 on the patched code before resuming the rest of Gate 1. |
+| 2026-05-21 | Phase 2.2 re-run passed after P1-001 fix. Native app entered shared mode from a clean scratch file, created a browser edit link, app marker appeared in browser, browser marker appeared in app, selection status updated from the native bridge, and both app/browser markers projected to the local `.md` file. | Patched `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`; `~/marklab-pilot-acceptance/pilot-bridge-fix.md` contained `from app bridge fixed 1779366352` and `browser-ok-2` after the shared projection debounce; Playwright browser check saw provider websocket and zero errors. | Resume Phase 2.3 cursor/presence checks on patched RC `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`. |
 
 Exit criteria:
 
@@ -655,13 +655,13 @@ Use this table for cross-gate updates.
 | --- | --- | --- | --- | --- |
 | 2026-05-21 | All | Created the pre-pilot launch control document. | This file. | Start Gate 0. |
 | 2026-05-21 | 2.5, 9.5 | Added safe dead-code removal before lifecycle work and deferred active-code simplification until after pilot evidence. | Gate 2.5 and Gate 9.5 sections. | Keep cleanup evidence-driven. |
-| 2026-05-21 | 2 | Fixed P1-001 native shared-mode disk projection failure. | `NativeHostedWebViewSecurity.swift`; `NativeHostedWebViewSecurityTests.swift`; Phase 2.2 re-run. | Commit/re-freeze patched RC before continuing Gate 1. |
+| 2026-05-21 | 2 | Fixed P1-001 native shared-mode disk projection failure and re-froze patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`. | `NativeHostedWebViewSecurity.swift`; `NativeHostedWebViewSecurityTests.swift`; Phase 2.2 re-run; Gate 0 baseline. | Continue Gate 1 Phase 2.3. |
 
 ## Current Open Decisions
 
 | Decision | Options | Owner | Needed by | Status |
 | --- | --- | --- | --- | --- |
-| RC SHA | Original `c1333b4e7a3a0d47ec6db2269bd97638b27de124`; patched fix pending commit/new SHA | TBD | Gate 0 | Reopen |
+| RC SHA | Original `c1333b4e7a3a0d47ec6db2269bd97638b27de124`; patched code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` | TBD | Gate 0 | Decided for patched RC |
 | Pilot auth path | OIDC vs invite-token bootstrap vs magic link | TBD | Gate 6 | Open |
 | Data retention | 30-day alpha retention vs shorter TTL | TBD | Gate 3 | Open |
 | Provider backup | Fly snapshots only for alpha vs explicit off-volume backup | TBD | Gate 3 | Open |
@@ -673,14 +673,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-P1-001 is fixed. Re-freeze Gate 0 on the patched code before resuming Gate 1:
+Continue Gate 1 on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`.
 
-```sh
-git status --short
-git rev-parse HEAD
-npx -y pnpm@10.0.0 typecheck
-npx -y pnpm@10.0.0 test
-swift test --package-path apps/marklab-macos
-npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app
-npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package
-```
+Next acceptance row: Phase 2.3 cursor/presence checks, then Phase 3 permissions and lifecycle.
