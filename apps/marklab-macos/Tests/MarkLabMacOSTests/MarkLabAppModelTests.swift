@@ -92,7 +92,7 @@ struct MarkLabAppModelTests {
     transport.enqueue(json: #"{"grantId":"grant_second","branchId":"branch_main","token":"ml_access_second","role":"view","expiresAt":null,"createdAt":"2026-05-19T12:01:00.000Z"}"#, statusCode: 201)
     let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
     var createdModelCount = 0
-    let service = NativeCLIShareAppService(backgroundHost: backgroundHost) {
+    let service = NativeCLIShareAppService(backgroundHost: backgroundHost) { _, _ in
       createdModelCount += 1
       return MarkLabAppModel(
         hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(

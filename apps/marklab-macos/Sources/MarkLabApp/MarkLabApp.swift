@@ -65,8 +65,15 @@ final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
     let cliStore = FileNativeCLIShareRequestStore(appSupportDirectory: NativeAppSupportDirectory.url())
     let cliProcessor = NativeCLIShareRequestProcessor(
       store: cliStore,
-      shareService: NativeCLIShareAppService(backgroundHost: .shared) {
-        MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: false)
+      shareService: NativeCLIShareAppService(
+        backgroundHost: .shared,
+        makeHostedShareController: MarkLabAppModel.makeHostedShareController(from:)
+      ) { hostedShareController, nativeBearerToken in
+        MarkLabAppModel(
+          hostedShareController: hostedShareController,
+          nativeBearerToken: nativeBearerToken,
+          opensSelectedFilesInNewDocumentWindow: false
+        )
       }
     )
     cliRequestPump = NativeCLIShareRequestPump(store: cliStore, processor: cliProcessor)
@@ -1355,7 +1362,33 @@ final class MarkLabAppModel: ObservableObject {
     sessionManager.detachWindow(fileURL: fileURL)
   }
 
-  private static func makeHostedShareControllerFromEnvironment() -> NativeHostedShareController? {
+  fileprivate var hasHostedShareController: Bool {
+    hostedShareController != nil
+  }
+
+  fileprivate static func makeHostedShareController(from config: NativeCLIHostedConfig?) -> NativeHostedShareController? {
+    if let config {
+      guard
+        let apiURL = URL(string: config.apiBaseURL),
+        let webURL = URL(string: config.webBaseURL),
+        !config.bearerToken.isEmpty,
+        !config.workspaceId.isEmpty
+      else {
+        return nil
+      }
+      return NativeHostedShareController(
+        client: NativeControlPlaneShareClient(
+          apiBaseURL: apiURL,
+          webBaseURL: webURL,
+          bearerToken: config.bearerToken,
+          workspaceId: config.workspaceId
+        )
+      )
+    }
+    return makeHostedShareControllerFromEnvironment()
+  }
+
+  fileprivate static func makeHostedShareControllerFromEnvironment() -> NativeHostedShareController? {
     let environment = ProcessInfo.processInfo.environment
     guard
       let apiURLString = environment["MARKLAB_CONTROL_PLANE_API_URL"],
@@ -1390,21 +1423,25 @@ enum MarkLabNativeShareAutomationError: Error {
 final class NativeCLIShareAppService: NativeCLIShareService {
   private let fixedModel: MarkLabAppModel?
   private let backgroundHost: MarkLabBackgroundSharedDocumentHost
-  private let makeModel: () -> MarkLabAppModel
+  private let makeHostedShareController: @MainActor (NativeCLIHostedConfig?) -> NativeHostedShareController?
+  private let makeModel: @MainActor (NativeHostedShareController?, String?) -> MarkLabAppModel
   private var inFlightFileKeys: Set<String> = []
 
   init(model: MarkLabAppModel, backgroundHost: MarkLabBackgroundSharedDocumentHost = .shared) {
     fixedModel = model
     self.backgroundHost = backgroundHost
-    makeModel = { model }
+    makeHostedShareController = { _ in nil }
+    makeModel = { _, _ in model }
   }
 
   init(
     backgroundHost: MarkLabBackgroundSharedDocumentHost = .shared,
-    makeModel: @escaping () -> MarkLabAppModel
+    makeHostedShareController: @escaping @MainActor (NativeCLIHostedConfig?) -> NativeHostedShareController? = MarkLabAppModel.makeHostedShareController(from:),
+    makeModel: @escaping @MainActor (NativeHostedShareController?, String?) -> MarkLabAppModel
   ) {
     fixedModel = nil
     self.backgroundHost = backgroundHost
+    self.makeHostedShareController = makeHostedShareController
     self.makeModel = makeModel
   }
 
@@ -1415,7 +1452,12 @@ final class NativeCLIShareAppService: NativeCLIShareService {
     }
     inFlightFileKeys.insert(key)
     defer { inFlightFileKeys.remove(key) }
-    let model = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL) ?? makeModel()
+    let hostedShareController = makeHostedShareController(request.hostedConfig)
+    let nativeBearerToken = nativeBearerToken(from: request.hostedConfig, hostedShareController: hostedShareController)
+    let retainedModel = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL)
+    let model = retainedModel?.hasHostedShareController == true || hostedShareController == nil
+      ? (retainedModel ?? makeModel(nil, nil))
+      : makeModel(hostedShareController, nativeBearerToken)
     let result = try await model.createShareLinkForCLI(fileURL: request.fileURL, role: request.role)
     backgroundHost.retain(model, fileURL: request.fileURL)
     return result
@@ -1428,11 +1470,22 @@ final class NativeCLIShareAppService: NativeCLIShareService {
     }
     inFlightFileKeys.insert(key)
     defer { inFlightFileKeys.remove(key) }
-    let model = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL) ?? makeModel()
+    let model = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL) ?? makeModel(nil, nil)
     let link = try NativeSharedDocumentLink.parse(request.link)
     try model.joinSharedDocument(link: link, localFileURL: request.fileURL)
     backgroundHost.retain(model, fileURL: request.fileURL)
     return NativeCLIJoinServiceResult(docId: link.docId, branchId: link.branchId, opened: false)
+  }
+
+  private func nativeBearerToken(
+    from config: NativeCLIHostedConfig?,
+    hostedShareController: NativeHostedShareController?
+  ) -> String? {
+    guard hostedShareController != nil else { return nil }
+    if let token = config?.bearerToken, !token.isEmpty {
+      return token
+    }
+    return ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"]
   }
 
   private func canonicalKey(_ fileURL: URL) -> String {

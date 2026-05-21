@@ -5,6 +5,20 @@ public enum NativeCLIShareAction: String, Codable, Equatable, Sendable {
   case share
 }
 
+public struct NativeCLIHostedConfig: Codable, Equatable, Sendable {
+  public let apiBaseURL: String
+  public let webBaseURL: String
+  public let bearerToken: String
+  public let workspaceId: String
+
+  public init(apiBaseURL: String, webBaseURL: String, bearerToken: String, workspaceId: String) {
+    self.apiBaseURL = apiBaseURL
+    self.webBaseURL = webBaseURL
+    self.bearerToken = bearerToken
+    self.workspaceId = workspaceId
+  }
+}
+
 public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
   public let schemaVersion: Int
   public let requestId: String
@@ -12,6 +26,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
   public let file: String
   public let role: NativeLinkRole
   public let link: String?
+  public let hostedConfig: NativeCLIHostedConfig?
   public let createdAt: String
 
   public init(
@@ -21,6 +36,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
     file: String,
     role: NativeLinkRole,
     link: String? = nil,
+    hostedConfig: NativeCLIHostedConfig? = nil,
     createdAt: String
   ) {
     self.schemaVersion = schemaVersion
@@ -29,6 +45,7 @@ public struct NativeCLIShareRequest: Codable, Equatable, Sendable {
     self.file = file
     self.role = role
     self.link = link
+    self.hostedConfig = hostedConfig
     self.createdAt = createdAt
   }
 }
@@ -230,10 +247,12 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
 public struct NativeCLIShareServiceRequest: Equatable, Sendable {
   public let fileURL: URL
   public let role: NativeLinkRole
+  public let hostedConfig: NativeCLIHostedConfig?
 
-  public init(fileURL: URL, role: NativeLinkRole) {
+  public init(fileURL: URL, role: NativeLinkRole, hostedConfig: NativeCLIHostedConfig? = nil) {
     self.fileURL = fileURL
     self.role = role
+    self.hostedConfig = hostedConfig
   }
 }
 
@@ -312,7 +331,8 @@ public final class NativeCLIShareRequestProcessor {
       case .share:
         let result = try await shareService.createShareLink(for: NativeCLIShareServiceRequest(
           fileURL: URL(fileURLWithPath: request.file),
-          role: request.role
+          role: request.role,
+          hostedConfig: request.hostedConfig
         ))
         try store.writeResponse(.success(
           requestId: request.requestId,

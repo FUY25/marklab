@@ -372,9 +372,24 @@ function nativeCliRequestId() {
   return `req_${Date.now().toString(36)}_${randomBytes(8).toString('base64url')}`;
 }
 
+function nativeHostedConfigFromEnv(env = process.env) {
+  const apiBaseURL = (env.MARKLAB_CONTROL_PLANE_API_URL || env.MARKLAB_PUBLIC_API_URL || '').trim();
+  const webBaseURL = (env.MARKLAB_PUBLIC_WEB_URL || '').trim();
+  const bearerToken = (env.MARKLAB_USER_TOKEN || '').trim();
+  const workspaceId = (env.MARKLAB_WORKSPACE_ID || '').trim();
+  if (!apiBaseURL || !webBaseURL || !bearerToken || !workspaceId) return null;
+  return {
+    apiBaseURL,
+    webBaseURL,
+    bearerToken,
+    workspaceId,
+  };
+}
+
 async function writeNativeShareRequest({ markdownPath, role }, env = process.env) {
   const requestId = nativeCliRequestId();
   const paths = nativeCliRequestPaths(requestId, env);
+  const hostedConfig = nativeHostedConfigFromEnv(env);
   await mkdir(paths.requestsDir, { recursive: true });
   await mkdir(paths.responsesDir, { recursive: true });
   const request = {
@@ -383,6 +398,7 @@ async function writeNativeShareRequest({ markdownPath, role }, env = process.env
     action: 'share',
     file: markdownPath,
     role,
+    ...(hostedConfig ? { hostedConfig } : {}),
     createdAt: new Date().toISOString(),
   };
   await writeFile(paths.requestPath, JSON.stringify(request, null, 2), { mode: 0o600 });

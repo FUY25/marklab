@@ -104,7 +104,7 @@ struct NativeCLIShareBridgeTests {
     await transport.enqueue(json: #"{"grantId":"grant_view","branchId":"branch_main","token":"ml_access_view","role":"view","expiresAt":null,"createdAt":"2026-05-19T12:01:00.000Z"}"#, statusCode: 201)
     let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
     var createdModelCount = 0
-    let service = NativeCLIShareAppService(backgroundHost: backgroundHost) {
+    let service = NativeCLIShareAppService(backgroundHost: backgroundHost) { _, _ in
       createdModelCount += 1
       return MarkLabAppModel(
         hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
@@ -140,6 +140,66 @@ struct NativeCLIShareBridgeTests {
       "/api/docs/doc_same/branches/branch_main/access-grants",
       "/api/docs/doc_same/branches/branch_main/access-grants",
     ])
+  }
+
+  @MainActor
+  @Test("native CLI share app service can use request-hosted config for an envless app process")
+  func shareAppServiceUsesRequestHostedConfig() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "handoff.md")
+    try Data("# Handoff\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_handoff","branchId":"branch_main","versionId":"version_1","hash":"sha256:handoff"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grantId":"grant_edit","branchId":"branch_main","token":"ml_access_edit","role":"edit","expiresAt":null,"createdAt":"2026-05-19T12:00:00.000Z"}"#, statusCode: 201)
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    let service = NativeCLIShareAppService(
+      backgroundHost: backgroundHost,
+      makeHostedShareController: { config in
+        guard
+          let config,
+          let apiURL = URL(string: config.apiBaseURL),
+          let webURL = URL(string: config.webBaseURL)
+        else {
+          return nil
+        }
+        return NativeHostedShareController(client: NativeControlPlaneShareClient(
+          apiBaseURL: apiURL,
+          webBaseURL: webURL,
+          bearerToken: config.bearerToken,
+          workspaceId: config.workspaceId,
+          transport: transport
+        ))
+      }
+    ) { hostedShareController, nativeBearerToken in
+      #expect(nativeBearerToken == "ml_user_from_cli")
+      return MarkLabAppModel(
+        hostedShareController: hostedShareController,
+        baselineStore: InMemoryNativeProjectionBaselineStore(),
+        conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+        sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+        sessionManager: NativeSharedDocumentSessionManager(),
+        nativeBearerToken: nativeBearerToken
+      )
+    }
+
+    let result = try await service.createShareLink(for: NativeCLIShareServiceRequest(
+      fileURL: fileURL,
+      role: .edit,
+      hostedConfig: NativeCLIHostedConfig(
+        apiBaseURL: "https://api.example.test",
+        webBaseURL: "https://app.example.test",
+        bearerToken: "ml_user_from_cli",
+        workspaceId: "workspace_from_cli"
+      )
+    ))
+
+    #expect(result.docId == "doc_handoff")
+    #expect(result.link.url.absoluteString == "https://app.example.test/collab?docId=doc_handoff&branchId=branch_main&token=ml_access_edit&mode=edit&filename=handoff.md")
+    #expect(transport.requests.map(\.authorization) == [
+      "Bearer ml_user_from_cli",
+      "Bearer ml_user_from_cli",
+    ])
+    #expect(transport.requests.first?.jsonBody?["workspaceId"] as? String == "workspace_from_cli")
   }
 
   @Test("native CLI share processor delegates to native sharing and persists the response")

@@ -328,6 +328,10 @@ describe('marklab CLI', () => {
           MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
           MARKLAB_NO_OPEN: 'true',
           MARKLAB_NATIVE_CLI_TIMEOUT_MS: '5000',
+          MARKLAB_CONTROL_PLANE_API_URL: 'https://api.example.test',
+          MARKLAB_PUBLIC_WEB_URL: 'https://app.example.test',
+          MARKLAB_USER_TOKEN: 'ml_user_session',
+          MARKLAB_WORKSPACE_ID: 'workspace_1',
         },
         (request) => ({
           ok: true,
@@ -350,6 +354,12 @@ describe('marklab CLI', () => {
         action: 'share',
         file: canonicalMarkdownPath,
         role,
+        hostedConfig: {
+          apiBaseURL: 'https://api.example.test',
+          webBaseURL: 'https://app.example.test',
+          bearerToken: 'ml_user_session',
+          workspaceId: 'workspace_1',
+        },
       });
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,

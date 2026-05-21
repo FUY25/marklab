@@ -55,9 +55,9 @@ This plan does not build billing or the full production launch gate. It does inc
 - Native source is `apps/marklab-macos/`, a SwiftPM package using a Port MarkEdit UI shell strategy. Package from this repo; do not assume a separate native repository.
 - The native app now uses a MarkEdit-derived document shell, bundled CodeMirror-in-WebKit local Markdown editor surface, toolbar/status/inspector collaboration layer, and document-scoped conflict panel. Packaging smoke must open the packaged app into that shell; a generic SwiftUI prototype form is no longer the expected UI.
 - The native app embeds the hosted `/collab` editor in a WKWebView for shared editing. Later packaging may bundle a richer/native Yjs runtime, but alpha packaging must include the hosted-collab bridge behavior and its same-origin API authorization injection.
-- The packaged runtime must include workspace links for `packages/shared`, `packages/markdown`, and `packages/collab-editor`. `prepare-package.mjs` already copies `packages/collab-editor`; keep package smokes covering this so clean installs do not fail on `@marklab/collab-editor`.
-- The legacy local daemon boundary (`marklab share --json --daemon-only` plus `/api/local/app-context`) is compatibility-only and disabled by default for the new relay/Y-Sweet pilot. Packaging must not auto-start it unless `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is set, and it must not create hidden relay grants just to bootstrap app local state.
-- The old `marklab` CLI local-daemon commands are inactive by default and require `MARKLAB_ENABLE_LEGACY_CLI=1` for archived compatibility testing until Task 2 replaces them with the new hosted/control-plane command surface.
+- The published CLI is now a slim native-app bridge plus hosted `/collab` helper. Package smokes must verify the shipped tarball includes the CLI entrypoints, agent instruction templates, `doctor`, `share --edit|--view`, and `join`, without relying on removed local-daemon runtime bundles.
+- The legacy local daemon boundary and local app-context routes have been removed from the active package. Packaging must not document or test a daemon opt-in path or mint hidden local relay grants to bootstrap app local state.
+- The old `marklab` CLI local-daemon commands have been removed from the active package. Historical compatibility commands belong in archived docs only; the current package should route share/join through MarkLab.app and hosted control-plane state.
 - Native app/browser smoke command is `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`. The passing smoke returns shell/runtime gates, app-kind/browser convergence, disk projection, and bidirectional cursor-awareness gates. It does not prove a signed `.app` bundle, notarization, or GUI WKWebView automation; Task 4 and Task 6 must add those packaging-specific checks.
 - True app-to-app/local-to-local collaboration is not proven by app-browser smoke. It requires a native join/open-shared-document flow: the same edit link that opens `/collab?...mode=edit` in a browser must be accepted by MarkLab.app, bound to a user-selected local `.md` file, persisted, and reopened without the legacy local daemon.
 - Agents do not appear as collaborators. Agent edits happen by editing the local `.md`; the active MarkLab.app session ingests those disk changes into the shared document.
@@ -67,7 +67,6 @@ This plan does not build billing or the full production launch gate. It does inc
 - Modify `apps/cli/marklab.mjs`
 - Modify `apps/cli/relay-config.mjs`
 - Modify `apps/cli/doctor.mjs`
-- Modify `apps/cli/prepare-package.mjs`
 - Modify `apps/cli/*.test.mjs`
 - Modify native packaging files from `2026-05-11-marklab-native-integration.md`.
 - Modify native share/join UI in `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/`.
@@ -86,14 +85,14 @@ This plan does not build billing or the full production launch gate. It does inc
 - [x] Ensure packaged CLI defaults to hosted alpha API/provider URLs for archived relay compatibility.
 - [x] Ensure local dev can override URLs with env vars for archived relay compatibility.
 - [x] Replace archived daemon `doctor` with a new relay/native doctor that reports native app/open-link configuration, API/web origin, `/healthz.provider.ready`, `/healthz.provider.storeReady`, and `/healthz.schema.ready`.
-- [x] Acceptance command: new `marklab doctor --json` shows hosted/default/local override state without `MARKLAB_ENABLE_LEGACY_CLI=1`.
+- [x] Acceptance command: new `marklab doctor --json` shows hosted/default/local override state without requiring any archived daemon flag.
 
 ### Task 2: CLI Command Coverage
 
 V1 (alpha launch must-have):
 
 - [x] `join` — open the same `/collab?...mode=edit` share link in MarkLab.app without enabling the archived daemon path.
-- [x] `stop` — stop only explicitly enabled compatibility daemons; it must not imply that the new relay path requires a daemon.
+- [x] `stop` — report that the archived daemon stop surface is removed; it must not imply that the new hosted path requires a daemon.
 - [x] `open` — open a local Markdown file in MarkLab.app or a sensible default without the archived daemon path.
 - [x] `share` — open the local file in MarkLab.app and route the user to native Start Sharing, not an archived local-daemon relay link.
 - [x] `status` — show current native relay sync/conflict state for a file.
@@ -112,7 +111,7 @@ Post-alpha (ship if scope permits, otherwise tag as `coming-soon` in help text):
 The CLI is not the home for the agent edit `begin/end` protocol described in the spec; that protocol stays out of v1 (see Task 3).
 
 - [x] Add tests proving `join` preserves `/collab?...` edit URLs and does not rewrite them back to legacy hosted relay routes.
-- [x] Add tests proving `join` never falls back to the archived local-daemon route unless `MARKLAB_ENABLE_LEGACY_CLI=1` is explicitly set.
+- [x] Add tests proving `join` never falls back to the archived local-daemon route.
 - [x] Add tests for new native relay `open/share/status/wait/conflict/doctor` once those commands are rebound.
 - [x] Prove the native app, not the CLI, creates/imports the document into a workspace with `workspaceId` and does not require admin-only auth in hosted mode (`NativeControlPlaneShareTests`).
 - [x] Acceptance command: `npx -y pnpm@10.0.0 test apps/cli` covers the current join/deactivation slice.
@@ -129,10 +128,10 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 ### Task 4: Native Packaging
 
 - [x] Package MarkLab.app using the native packaging path selected in `2026-05-11-marklab-native-integration.md`.
-- [x] Ensure installed app can run the hosted `/collab` control-plane/Y-Sweet path without starting a local daemon by default.
+- [x] Ensure installed app can run the hosted `/collab` control-plane/Y-Sweet path without starting a local daemon.
 - [x] Register or document a native open-link path for edit links, `marklab://join?url=<encoded-collab-url>`.
-- [x] Ensure packaged app bootstrap only uses `marklab share --json --daemon-only` when `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1` is explicitly set and does not mint a hidden local relay edit link.
-- [x] Ensure packaged CLI/runtime includes `packages/collab-editor` so the installed collab-web and native smoke do not depend on repo-relative source paths.
+- [x] Ensure packaged app bootstrap routes through the native request bridge and does not mint a hidden local relay edit link.
+- [x] Ensure packaged CLI includes its runnable entrypoints and agent instruction templates so clean installs do not depend on a repo checkout.
 - [x] Ensure normal app users do not need Terminal after install for open/edit/share/join once env/session is configured.
 - [ ] Acceptance: clean install on a separate macOS user profile can open, edit, share, and quit. This remains a visual/manual packaging pass, not an automated unit test.
 
@@ -159,7 +158,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 
 ### Task 6: Package Smoke
 
-- [x] Run package preparation.
+- [x] Pack the CLI from its published package manifest.
 - [x] Install packaged CLI into a temporary prefix.
 - [x] Run install/open/share/status/wait smoke for the rebound native relay CLI surface. `share` opens MarkLab.app; access-link creation remains native UI-owned.
 - [ ] Run the same package smoke against the Fly.io/Neon pilot target, using a test workspace and disposable document after redeploying the new stack.
