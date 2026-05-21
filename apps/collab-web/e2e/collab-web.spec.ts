@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Route } from '@playwright/test';
 import { PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS } from '@marklab/shared/src/provider-token-policy';
+import { remoteCursorLabelVisibleMs } from '@marklab/collab-editor';
 
 const docId = 'doc_1';
 const branchId = 'branch_1';
@@ -160,6 +161,10 @@ test('edit tabs render remote cursor and selection highlight', async ({ browser 
   await pageA.locator('.cm-content').click();
   await pageA.keyboard.press('End');
   await expect(pageB.locator('.cm-marklab-remote-caret')).toBeVisible();
+  await expect(pageB.locator('.cm-marklab-remote-caret-label-visible')).toBeVisible();
+  await pageB.waitForTimeout(remoteCursorLabelVisibleMs + 200);
+  await expect(pageB.locator('.cm-marklab-remote-caret')).toBeVisible();
+  await expect(pageB.locator('.cm-marklab-remote-caret-label-visible')).toHaveCount(0);
   await pageA.keyboard.down('Shift');
   for (let index = 0; index < 5; index += 1) {
     await pageA.keyboard.press('ArrowLeft');

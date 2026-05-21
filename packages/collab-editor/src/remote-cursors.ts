@@ -34,6 +34,8 @@ export interface ResolvedRemoteCursorSelection extends RemoteCursorSummary {
   head: number;
 }
 
+export const remoteCursorLabelVisibleMs = 1400;
+
 function awarenessRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -91,13 +93,14 @@ class RemoteCaretWidget extends WidgetType {
   constructor(
     private readonly color: string,
     private readonly name: string,
+    private readonly showLabel: boolean,
   ) {
     super();
   }
 
   toDOM(view: EditorView): HTMLElement {
     const caret = view.dom.ownerDocument.createElement('span');
-    caret.className = 'cm-marklab-remote-caret';
+    caret.className = `cm-marklab-remote-caret${this.showLabel ? ' cm-marklab-remote-caret-label-visible' : ''}`;
     caret.style.borderColor = this.color;
     caret.style.backgroundColor = this.color;
 
@@ -114,7 +117,7 @@ class RemoteCaretWidget extends WidgetType {
   }
 
   eq(other: RemoteCaretWidget): boolean {
-    return this.color === other.color && this.name === other.name;
+    return this.color === other.color && this.name === other.name && this.showLabel === other.showLabel;
   }
 
   ignoreEvent(): boolean {
@@ -156,7 +159,7 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
     position: 'absolute',
     bottom: 'calc(100% + 3px)',
     left: '0',
-    transform: 'translateX(-4px)',
+    transform: 'translate(-4px, 2px)',
     padding: '2px 6px',
     borderRadius: '4px',
     backgroundColor: 'inherit',
@@ -170,10 +173,20 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     boxShadow: '0 1px 3px rgba(15, 23, 42, 0.18)',
+    opacity: '0',
+    transition: 'opacity 120ms ease, transform 120ms ease',
+  },
+  '.cm-marklab-remote-caret-label-visible .cm-marklab-remote-caret-label': {
+    opacity: '1',
+    transform: 'translate(-4px, 0)',
   },
 });
 
-function selectionRangesForRemoteCursor(view: EditorView, cursor: ResolvedRemoteCursorSelection): Range<Decoration>[] {
+function selectionRangesForRemoteCursor(
+  view: EditorView,
+  cursor: ResolvedRemoteCursorSelection,
+  showLabel: boolean,
+): Range<Decoration>[] {
   const docLength = view.state.doc.length;
   if (cursor.anchor > docLength || cursor.head > docLength) return [];
 
@@ -208,10 +221,25 @@ function selectionRangesForRemoteCursor(view: EditorView, cursor: ResolvedRemote
 
   ranges.push(Decoration.widget({
     side: cursor.head >= cursor.anchor ? -1 : 1,
-    widget: new RemoteCaretWidget(cursor.color, cursor.name),
+    widget: new RemoteCaretWidget(cursor.color, cursor.name, showLabel),
   }).range(cursor.head));
 
   return ranges;
+}
+
+function buildRemoteCursorDecorationSet(
+  view: EditorView,
+  cursors: ResolvedRemoteCursorSelection[],
+  visibleLabelClientIds: ReadonlySet<number> | undefined,
+): DecorationSet {
+  const ranges = cursors
+    .flatMap((cursor) => selectionRangesForRemoteCursor(
+      view,
+      cursor,
+      visibleLabelClientIds?.has(cursor.clientId) ?? true,
+    ))
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  return Decoration.set(ranges, true);
 }
 
 export function buildRemoteCursorDecorations(
@@ -219,11 +247,13 @@ export function buildRemoteCursorDecorations(
   ytext: Y.Text,
   states: ReadonlyMap<number, MarkLabAwarenessState>,
   localClientId: number,
+  visibleLabelClientIds?: ReadonlySet<number>,
 ): DecorationSet {
-  const ranges = resolveRemoteCursorSelections(ytext, states, localClientId)
-    .flatMap((cursor) => selectionRangesForRemoteCursor(view, cursor))
-    .sort((left, right) => left.from - right.from || left.to - right.to);
-  return Decoration.set(ranges, true);
+  return buildRemoteCursorDecorationSet(
+    view,
+    resolveRemoteCursorSelections(ytext, states, localClientId),
+    visibleLabelClientIds,
+  );
 }
 
 interface AwarenessChangeEvent {
@@ -238,24 +268,44 @@ export function createRemoteCursorExtension(input: {
   localClientId: number;
 }): Extension {
   const remoteCursorRefresh = Annotation.define<boolean>();
+  const cursorSignature = (cursor: ResolvedRemoteCursorSelection): string => [
+    cursor.anchor,
+    cursor.head,
+    cursor.name,
+    cursor.color,
+    cursor.colorLight,
+    cursor.kind,
+    cursor.clientKind ?? '',
+  ].join('|');
 
   return [
     markLabRemoteCursorTheme,
     ViewPlugin.fromClass(class implements PluginValue {
       decorations: DecorationSet;
       private readonly onAwarenessChange: (event: AwarenessChangeEvent) => void;
+      private readonly cursorSignatures = new Map<number, string>();
+      private readonly labelVisibleUntil = new Map<number, number>();
+      private labelTimer: ReturnType<typeof setTimeout> | null = null;
+      private destroyed = false;
 
       constructor(private readonly view: EditorView) {
-        this.decorations = buildRemoteCursorDecorations(
-          this.view,
-          input.ytext,
-          input.awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>,
-          input.localClientId,
+        this.markChangedCursorLabels(
+          this.resolveCursors(),
+          new Set(this.resolveCursors().map((cursor) => cursor.clientId)),
         );
+        this.decorations = this.buildDecorations(this.view);
         this.onAwarenessChange = (event) => {
-          if ([...event.added, ...event.updated, ...event.removed].some((clientId) => clientId !== input.localClientId)) {
-            this.view.dispatch({ annotations: remoteCursorRefresh.of(true) });
+          const changedClientIds = new Set(
+            [...event.added, ...event.updated].filter((clientId) => clientId !== input.localClientId),
+          );
+          const removedClientIds = event.removed.filter((clientId) => clientId !== input.localClientId);
+          if (changedClientIds.size === 0 && removedClientIds.length === 0) return;
+          for (const clientId of removedClientIds) {
+            this.cursorSignatures.delete(clientId);
+            this.labelVisibleUntil.delete(clientId);
           }
+          this.markChangedCursorLabels(this.resolveCursors(), changedClientIds);
+          this.view.dispatch({ annotations: remoteCursorRefresh.of(true) });
         };
         input.awareness.on('change', this.onAwarenessChange);
       }
@@ -265,16 +315,87 @@ export function createRemoteCursorExtension(input: {
           || update.viewportChanged
           || update.transactions.some((transaction) => transaction.annotation(remoteCursorRefresh));
         if (!shouldRebuild) return;
-        this.decorations = buildRemoteCursorDecorations(
-          update.view,
+        this.decorations = this.buildDecorations(update.view);
+      }
+
+      destroy(): void {
+        this.destroyed = true;
+        if (this.labelTimer) {
+          clearTimeout(this.labelTimer);
+          this.labelTimer = null;
+        }
+        input.awareness.off('change', this.onAwarenessChange);
+      }
+
+      private resolveCursors(): ResolvedRemoteCursorSelection[] {
+        return resolveRemoteCursorSelections(
           input.ytext,
           input.awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>,
           input.localClientId,
         );
       }
 
-      destroy(): void {
-        input.awareness.off('change', this.onAwarenessChange);
+      private markChangedCursorLabels(
+        cursors: ResolvedRemoteCursorSelection[],
+        changedClientIds: ReadonlySet<number>,
+      ): void {
+        if (changedClientIds.size === 0) return;
+        const cursorByClientId = new Map(cursors.map((cursor) => [cursor.clientId, cursor]));
+        const now = Date.now();
+        for (const clientId of changedClientIds) {
+          const cursor = cursorByClientId.get(clientId);
+          if (!cursor) {
+            this.cursorSignatures.delete(clientId);
+            this.labelVisibleUntil.delete(clientId);
+            continue;
+          }
+          const nextSignature = cursorSignature(cursor);
+          if (this.cursorSignatures.get(clientId) === nextSignature) continue;
+          this.cursorSignatures.set(clientId, nextSignature);
+          this.labelVisibleUntil.set(clientId, now + remoteCursorLabelVisibleMs);
+        }
+      }
+
+      private visibleLabelClientIds(): Set<number> {
+        const now = Date.now();
+        const visible = new Set<number>();
+        for (const [clientId, visibleUntil] of this.labelVisibleUntil) {
+          if (visibleUntil > now) {
+            visible.add(clientId);
+          } else {
+            this.labelVisibleUntil.delete(clientId);
+          }
+        }
+        return visible;
+      }
+
+      private buildDecorations(view: EditorView): DecorationSet {
+        const decorations = buildRemoteCursorDecorationSet(
+          view,
+          this.resolveCursors(),
+          this.visibleLabelClientIds(),
+        );
+        this.scheduleLabelExpiry();
+        return decorations;
+      }
+
+      private scheduleLabelExpiry(): void {
+        if (this.labelTimer) {
+          clearTimeout(this.labelTimer);
+          this.labelTimer = null;
+        }
+        const now = Date.now();
+        let nextExpiry: number | null = null;
+        for (const visibleUntil of this.labelVisibleUntil.values()) {
+          if (visibleUntil <= now) continue;
+          if (nextExpiry === null || visibleUntil < nextExpiry) nextExpiry = visibleUntil;
+        }
+        if (nextExpiry === null) return;
+        this.labelTimer = setTimeout(() => {
+          this.labelTimer = null;
+          if (this.destroyed) return;
+          this.view.dispatch({ annotations: remoteCursorRefresh.of(true) });
+        }, Math.max(0, nextExpiry - now + 1));
       }
     }, {
       decorations: (plugin) => plugin.decorations,

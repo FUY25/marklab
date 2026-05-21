@@ -2,13 +2,14 @@
 
 import { EditorState, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { createCursorAwareness, type MarkLabAwarenessUser } from './awareness';
 import {
   buildRemoteCursorDecorations,
   createRemoteCursorExtension,
+  remoteCursorLabelVisibleMs,
   resolveRemoteCursorSelections,
   safeAwarenessColor,
   summarizeRemoteCursors,
@@ -147,6 +148,88 @@ describe('remote cursor rendering', () => {
 
     expect(view.dom.querySelector('.cm-marklab-remote-caret')).not.toBeNull();
     expect(view.dom.querySelector('.cm-marklab-remote-selection')).not.toBeNull();
+  });
+
+  it('keeps the remote caret live but only shows the name label briefly after movement', () => {
+    vi.useFakeTimers();
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({ awareness: localAwareness, ytext, localClientId: localDoc.clientID }),
+      ]);
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(view.dom.querySelector('.cm-marklab-remote-caret-label-visible')).not.toBeNull();
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 11, head: 11 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(view.dom.querySelector('.cm-marklab-remote-caret-label-visible')).not.toBeNull();
+
+      vi.advanceTimersByTime(remoteCursorLabelVisibleMs + 1);
+
+      expect(view.dom.querySelector('.cm-marklab-remote-caret')).not.toBeNull();
+      expect(view.dom.querySelector('.cm-marklab-remote-caret-label-visible')).toBeNull();
+    } finally {
+      localAwareness.destroy();
+      remoteAwareness.destroy();
+      localDoc.destroy();
+      remoteDoc.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes the remote caret immediately when a peer clears awareness before disconnecting', () => {
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({ awareness: localAwareness, ytext, localClientId: localDoc.clientID }),
+      ]);
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+      expect(view.dom.querySelector('.cm-marklab-remote-caret')).not.toBeNull();
+
+      remoteAwareness.setLocalState(null);
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelector('.cm-marklab-remote-caret')).toBeNull();
+    } finally {
+      localAwareness.destroy();
+      remoteAwareness.destroy();
+      localDoc.destroy();
+      remoteDoc.destroy();
+    }
   });
 
   it('ignores malformed remote cursor payloads without breaking decorations', () => {

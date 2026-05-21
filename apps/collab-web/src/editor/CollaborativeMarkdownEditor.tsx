@@ -190,6 +190,7 @@ export function CollaborativeMarkdownEditor({
     let provider: MarkLabYjsProvider | null = null;
     let persistence: IndexeddbPersistence | null = null;
     let awareness: Awareness | null = null;
+    let awarenessCleared = false;
     let unavailable = false;
     let nativeEditable = true;
     const ydoc = new Y.Doc();
@@ -209,10 +210,18 @@ export function CollaborativeMarkdownEditor({
       });
     }
 
+    function clearLocalAwareness() {
+      if (!awareness || awarenessCleared) return;
+      awarenessCleared = true;
+      awareness.setLocalState(null);
+      postNativeCollaborators([]);
+    }
+
     function markUnavailable(reason: string) {
       if (disposed) return;
       unavailable = true;
       clearPersistedEditSession(storageKeyInput);
+      clearLocalAwareness();
       provider?.terminate();
       reconfigureEditability();
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -473,6 +482,7 @@ export function CollaborativeMarkdownEditor({
       if (import.meta.env.DEV) {
         delete (window as unknown as { __marklabEditorView?: EditorView }).__marklabEditorView;
       }
+      clearLocalAwareness();
       provider?.destroy();
       persistence?.destroy();
       awareness?.destroy();
