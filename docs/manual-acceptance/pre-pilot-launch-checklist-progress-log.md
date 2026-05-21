@@ -39,7 +39,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 0 | Release candidate freeze | Passed | TBD | Patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` passed the Gate 0 baseline. |
 | 1 | Manual pilot acceptance | Passed | TBD | Phases 1-5 passed on patched RC; no open P0/P1 after P1-001 fix; P2 follow-ups logged. |
 | 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. |
-| 2.5 | Dead code inventory and safe removal | Not started | TBD | |
+| 2.5 | Dead code inventory and safe removal | Passed | TBD | Deleted two confirmed dead tracked files; kept active compatibility paths; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Not started | TBD | |
 | 4 | Cost instrumentation and unit economics | Not started | TBD | |
 | 5 | Clean install and distribution | Not started | TBD | |
@@ -192,52 +192,62 @@ Classification:
 
 Checklist:
 
-- [ ] Create an inventory table of old approach candidates:
-  - [ ] local daemon code;
-  - [ ] old `/relay` or `/local` routes;
-  - [ ] old host-gated local sync tests;
-  - [ ] disabled Playwright specs;
-  - [ ] stale scripts;
-  - [ ] stale docs outside `docs/Archive`;
-  - [ ] unused package scripts;
-  - [ ] unused fixtures or generated artifacts.
-- [ ] For every candidate, record:
-  - [ ] path;
-  - [ ] classification;
-  - [ ] current references from `rg`;
-  - [ ] decision;
-  - [ ] owner;
-  - [ ] rollback note.
-- [ ] Verify active references before deletion:
-  - [ ] TypeScript imports;
-  - [ ] Swift package targets;
-  - [ ] Node package exports;
-  - [ ] `package.json` scripts;
-  - [ ] CI/test commands;
-  - [ ] app route registration;
-  - [ ] CLI entrypoints;
-  - [ ] README/current docs.
-- [ ] Delete only `Delete now` candidates.
-- [ ] Move or mark `Archive only` candidates so they are not discovered by test/build tooling.
-- [ ] Leave `Keep temporarily` candidates in place with a short TODO or tracking note if their status is confusing.
-- [ ] Do not change the active pilot path:
-  - [ ] native app open/share/join;
-  - [ ] `/collab`;
-  - [ ] `/api/*`;
-  - [ ] provider proxy under `/d/<providerDocId>/...`;
-  - [ ] Neon schema;
-  - [ ] Fly Y-Sweet persistence.
-- [ ] Re-run baseline checks after cleanup:
-  - [ ] `npx -y pnpm@10.0.0 typecheck`
-  - [ ] `npx -y pnpm@10.0.0 test`
-  - [ ] `swift test --package-path apps/marklab-macos`
-  - [ ] package verification if package scripts or native app files changed.
+- [x] Create an inventory table of old approach candidates:
+  - [x] local daemon code;
+  - [x] old `/relay` or `/local` routes;
+  - [x] old host-gated local sync tests;
+  - [x] disabled Playwright specs;
+  - [x] stale scripts;
+  - [x] stale docs outside `docs/Archive`;
+  - [x] unused package scripts;
+  - [x] unused fixtures or generated artifacts.
+- [x] For every candidate, record:
+  - [x] path;
+  - [x] classification;
+  - [x] current references from `rg`;
+  - [x] decision;
+  - [x] owner;
+  - [x] rollback note.
+- [x] Verify active references before deletion:
+  - [x] TypeScript imports;
+  - [x] Swift package targets;
+  - [x] Node package exports;
+  - [x] `package.json` scripts;
+  - [x] CI/test commands;
+  - [x] app route registration;
+  - [x] CLI entrypoints;
+  - [x] README/current docs.
+- [x] Delete only `Delete now` candidates.
+- [x] Move or mark `Archive only` candidates so they are not discovered by test/build tooling.
+- [x] Leave `Keep temporarily` candidates in place with a short TODO or tracking note if their status is confusing.
+- [x] Do not change the active pilot path:
+  - [x] native app open/share/join;
+  - [x] `/collab`;
+  - [x] `/api/*`;
+  - [x] provider proxy under `/d/<providerDocId>/...`;
+  - [x] Neon schema;
+  - [x] Fly Y-Sweet persistence.
+- [x] Re-run baseline checks after cleanup:
+  - [x] `npx -y pnpm@10.0.0 typecheck`
+  - [x] `npx -y pnpm@10.0.0 test`
+  - [x] `swift test --package-path apps/marklab-macos`
+  - [x] package verification if package scripts or native app files changed.
 
 Progress log:
 
 | Date | Candidate/Area | Decision | Evidence | Next |
 | --- | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. No inventory yet. | Not started | This document. | Run inventory after Gate 2. |
+| 2026-05-21 | `infra/docker/web.Dockerfile` | Delete now | `rg` found no active build, package script, CI, or production deploy reference. `apps/api/src/config/production-deploy-config.test.ts` explicitly asserts production compose does not reference `infra/docker/web.Dockerfile`, and production API image builds `apps/collab-web`, not `apps/web`. | Deleted; rollback by restoring from git if a future archived-web compatibility build is deliberately revived. |
+| 2026-05-21 | `apps/web/tests/archived/local-file-sync.spec.ts.disabled` | Delete now | File has `.disabled` suffix and is outside Playwright discovery. `rg` found only historical references in `docs/Archive`; active relay/local compatibility coverage remains in `apps/web/tests/relay-collaboration.spec.ts`, API local/relay tests, CLI tests, and manual Gate 1. | Deleted; rollback by restoring from git if the old Hocuspocus-style `/local` browser-to-browser test is needed for forensic comparison. |
+| 2026-05-21 | `apps/web/**` legacy browser app surface | Keep temporarily | Root `package.json` still typechecks `apps/web`; active compatibility tests use `@marklab/web`; CLI repository-mode daemon compatibility checks for `apps/web`; production config tests verify it is not built into the hosted API image. | Do not delete before pilot. Revisit after compatibility path is removed or fully archived. |
+| 2026-05-21 | `apps/api/src/local/**`, `apps/api/src/routes/local-*` | Keep temporarily | Active API local tests, CLI agent/status/version/wait tests, and optional native local-daemon boundary still reference `/api/local/*`. `MarkLab.app` only enables the boundary with `MARKLAB_APP_ENABLE_LOCAL_DAEMON_BOUNDARY=1`, so it is not active pilot default but remains compatibility code. | Leave in place; remove only after CLI/native compatibility replacement is designed and tested. |
+| 2026-05-21 | `apps/api/src/relay/**`, `apps/api/src/routes/relay-routes.ts` | Keep temporarily | Production hosted mode disables legacy relay unless explicitly enabled, but local daemon compatibility and relay tests still reference `/api/relay/*` and `/relay` websocket paths. | Leave in place; keep production guard tests. |
+| 2026-05-21 | `apps/cli/marklab.mjs` legacy daemon commands plus `daemon-supervisor.mjs` and `relay-config.mjs` | Keep temporarily | Legacy commands are disabled unless `MARKLAB_ENABLE_LEGACY_CLI=1`; native relay commands (`open`, `share`, `join`, `status`, `wait`, `conflict`) are active. CLI tests verify both the disabled default and compatibility opt-in. | Do not simplify in Gate 2.5; revisit in Gate 9.5 after pilot evidence. |
+| 2026-05-21 | Current docs outside `docs/Archive` mentioning daemon or `apps/web` | Keep temporarily | `README.md`, `docs/product/*`, and `docs/production/local-daemon-distribution.md` already describe daemon behavior as archived/compatibility. Some `docs/plans/*` preserve execution history and downstream TODOs. | Gate 8 will do public docs cleanup; do not delete planning context in Gate 2.5. |
+| 2026-05-21 | Root `typecheck` inclusion of `apps/web` and `@marklab/web` package scripts | Keep temporarily | The old web app is still compiled to keep compatibility code honest; no production Docker image builds it. Removing it would be active build/test policy change, not dead-code deletion. | Revisit only with a dedicated `apps/web` archival plan. |
+| 2026-05-21 | Legacy schema tables `share_links`, `relay_rooms`, `relay_access_grants`, `relay_access_sessions` | Keep temporarily | Gate 0 health/schema checks still require the tables; `docs/plans/2026-05-11-control-plane-mvp.md` documents them as legacy/read-only until a later migration. | Do not drop schema in cleanup gate; revisit in server/data lifecycle or migration planning. |
+| 2026-05-21 | Gate 2.5 verification | Passed | `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` passed with 80 files and 682 tests plus 1 skipped; `swift test --package-path apps/marklab-macos` passed with 73 tests. Package verification was not required because package scripts and native app packaging files were not changed. | Gate 2.5 passed; continue Gate 3 server/data lifecycle audit. |
 
 Exit criteria:
 
@@ -692,6 +702,7 @@ Use this table for cross-gate updates.
 | 2026-05-21 | 1 | Phase 4.6 external atomic save during conflict passed. | User manual visual/file check; external atomic replacement remained visible after resolution, which proves it was not silently overwritten. | Continue added Phase 4.7/4.8. |
 | 2026-05-21 | 1 | Phase 4.8 active user typing vs agent blind atomic replace passed. | User manual screenshot showed explicit conflict with local disk agent replacement, shared editor user typing, and non-empty diff. | Resolve conflict; then run Phase 4.7 or continue Phase 5. |
 | 2026-05-21 | 1 | Gate 1 manual pilot acceptance passed. | Phase 5 visual check passed; bug summary appended; all findings classified with no open P0/P1. | Start Gate 2.5 dead code inventory and safe removal. |
+| 2026-05-21 | 2.5 | Gate 2.5 dead code inventory and safe removal passed. | Deleted `infra/docker/web.Dockerfile` and `apps/web/tests/archived/local-file-sync.spec.ts.disabled`; kept active compatibility paths; typecheck, root tests, and Swift tests passed. | Continue Gate 3 server/data lifecycle audit. |
 
 ## Current Open Decisions
 
@@ -702,13 +713,14 @@ Use this table for cross-gate updates.
 | Data retention | 30-day alpha retention vs shorter TTL | TBD | Gate 3 | Open |
 | Provider backup | Fly snapshots only for alpha vs explicit off-volume backup | TBD | Gate 3 | Open |
 | Free alpha caps | Workspace/doc/storage/session limits | TBD | Gate 4 | Open |
-| Dead code scope | Delete now vs archive only vs keep temporarily | TBD | Gate 2.5 | Open |
+| Dead code scope | Delete now vs archive only vs keep temporarily | TBD | Gate 2.5 | Decided: delete only confirmed unreferenced tracked files; keep active compatibility paths temporarily. |
+| Pilot P2 timing | Fix before pilot vs defer | TBD | Gate 2.5 | Decided: do not mix P2 fixes into Gate 2.5; consider small P2-003 after lifecycle/install gates if time allows, defer P2-002 and P2-004 unless pilot users hit them. |
 | Active simplification timing | Before pilot only for blockers vs after pilot evidence | TBD | Gate 9.5 | Deferred |
 | Pilot size | 3-10 users vs 10-50 users | TBD | Gate 9 | Open |
 | Paid launch timing | After small pilot vs after broader beta | TBD | Gate 11 | Deferred |
 
 ## Next Action
 
-Start Gate 2.5 dead code inventory and safe removal on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`.
+Start Gate 3 server/data lifecycle audit on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b`.
 
-Next acceptance row: inventory old approach candidates, classify each as `Delete now`, `Archive only`, `Keep temporarily`, or `Simplify later`, and make no active-code simplification unless it is needed to remove confirmed dead paths.
+Next acceptance row: confirm hosted storage lifecycle, Fly volume/Y-Sweet persistence, Neon retention, backup posture, and recovery assumptions before cost/pricing work.
