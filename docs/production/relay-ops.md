@@ -94,6 +94,8 @@ Run a local production-like stack with empty Postgres state:
 docker compose -f infra/docker/docker-compose.prod-smoke.yml up --build
 ```
 
+This compose file runs `NODE_ENV=production` with `MARKLAB_LOCAL_PRODUCTION_SMOKE=true`, so the API still requires Postgres, auth, and process-mode Y-Sweet config, but accepts loopback public URLs for the local smoke.
+
 Reset it with:
 
 ```bash

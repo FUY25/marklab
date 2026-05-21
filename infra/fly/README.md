@@ -174,7 +174,8 @@ MARKLAB_ALPHA_BASE_URL=https://<fly-app>.fly.dev MARKLAB_ALPHA_REQUIRE_AUTH_SMOK
 npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser
 marklab doctor --json
 marklab open README.md
-marklab share README.md
+marklab share README.md --edit
+marklab share README.md --view
 marklab join '<edit-link>'
 ```
 

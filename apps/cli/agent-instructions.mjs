@@ -4,7 +4,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AgentCommandError, agentSuccess } from './agent-json.mjs';
 
-const docsRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../docs/agent');
+const moduleRoot = dirname(fileURLToPath(import.meta.url));
+const packagedTemplatesRoot = resolve(moduleRoot, 'agent-templates');
+const repoDocsRoot = resolve(moduleRoot, '../../docs/agent');
 
 const instructionFiles = Object.freeze({
   codex: 'marklab-codex-instructions.md',
@@ -21,7 +23,10 @@ export function normalizeAgentTarget(target) {
 
 export function instructionPathForTarget(target) {
   const normalized = normalizeAgentTarget(target);
-  return resolve(docsRoot, instructionFiles[normalized]);
+  const filename = instructionFiles[normalized];
+  const packagedPath = resolve(packagedTemplatesRoot, filename);
+  if (existsSync(packagedPath)) return packagedPath;
+  return resolve(repoDocsRoot, filename);
 }
 
 export async function readAgentInstructions(target) {

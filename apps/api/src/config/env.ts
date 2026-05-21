@@ -201,6 +201,9 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
   const productionMode = env.NODE_ENV === 'production';
   const mode: ApiEnvMode = productionMode ? 'production' : 'development';
   const port = parsePositiveInteger(raw(env, 'PORT'), 'PORT', issues, productionMode ? undefined : defaultPort);
+  const localProductionSmoke = productionMode
+    ? parseBoolean(raw(env, 'MARKLAB_LOCAL_PRODUCTION_SMOKE'), 'MARKLAB_LOCAL_PRODUCTION_SMOKE', issues, false)
+    : false;
   const databaseUrl = raw(env, 'DATABASE_URL');
   const requireAuth = parseBoolean(raw(env, 'MARKLAB_REQUIRE_AUTH'), 'MARKLAB_REQUIRE_AUTH', issues, false);
   const publicWebUrl = parseRequiredUrl(raw(env, 'MARKLAB_PUBLIC_WEB_URL'), 'MARKLAB_PUBLIC_WEB_URL', issues, {
@@ -241,7 +244,7 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
     if (!requireAuth) issues.push('MARKLAB_REQUIRE_AUTH must be true in hosted production mode');
     if (ysweetProviderConfig && ysweetProviderConfig.mode !== 'disabled') {
       const ysweetPublicUrl = new URL(ysweetProviderConfig.publicUrlPrefix);
-      if (ysweetPublicUrl.protocol !== 'https:') {
+      if (!localProductionSmoke && ysweetPublicUrl.protocol !== 'https:') {
         issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must use https:// in hosted production mode');
       }
       if (ysweetProviderConfig.mode === 'process' && ysweetPublicUrl.pathname !== '/') {
@@ -251,10 +254,12 @@ export function loadApiEnv(env: EnvSource = process.env): ApiEnv {
         issues.push('MARKLAB_YSWEET_PUBLIC_URL_PREFIX must match MARKLAB_PUBLIC_API_URL origin in process mode');
       }
     }
-    assertNoLoopbackPublicUrl(publicWebUrl, 'MARKLAB_PUBLIC_WEB_URL', issues);
-    assertNoLoopbackPublicUrl(publicApiUrl, 'MARKLAB_PUBLIC_API_URL', issues);
-    if (ysweetProviderConfig && ysweetProviderConfig.mode !== 'disabled') {
-      assertNoLoopbackPublicUrl(new URL(ysweetProviderConfig.publicUrlPrefix), 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX', issues);
+    if (!localProductionSmoke) {
+      assertNoLoopbackPublicUrl(publicWebUrl, 'MARKLAB_PUBLIC_WEB_URL', issues);
+      assertNoLoopbackPublicUrl(publicApiUrl, 'MARKLAB_PUBLIC_API_URL', issues);
+      if (ysweetProviderConfig && ysweetProviderConfig.mode !== 'disabled') {
+        assertNoLoopbackPublicUrl(new URL(ysweetProviderConfig.publicUrlPrefix), 'MARKLAB_YSWEET_PUBLIC_URL_PREFIX', issues);
+      }
     }
     assertAllowedHostCoverage(
       [

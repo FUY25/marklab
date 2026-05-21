@@ -51,6 +51,13 @@ services:
       MARKLAB_PUBLIC_API_URL: http://127.0.0.1:3001
       MARKLAB_ALLOWED_ORIGINS: http://127.0.0.1:3001
       MARKLAB_WEB_ORIGIN: http://127.0.0.1:3001
+      MARKLAB_YSWEET_PROVIDER_MODE: process
+      MARKLAB_YSWEET_SERVER_URL: http://127.0.0.1:8080
+      MARKLAB_YSWEET_PUBLIC_URL_PREFIX: http://127.0.0.1:3001
+      MARKLAB_YSWEET_STORE_PATH: /data/ysweet
+      # Local smoke-only auth pair generated with: y-sweet gen-auth --json
+      MARKLAB_YSWEET_AUTH: yVvmX8G58hazdT9CenPx54LH-j-Ucm6T_oByPKVm
+      MARKLAB_YSWEET_SERVER_TOKEN: AAAgEknvhqq92TkJJCyRNBlytZfVRGtKizfA1T9JiZd8rOk
     ports:
       - "3001:3001"
     healthcheck:

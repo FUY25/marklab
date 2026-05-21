@@ -904,6 +904,6 @@ Only after single-file collaboration is stable:
 
 - Provider single-machine SPOF in Phase 1; horizontal scaling is Phase 2.
 - CRDT garbage collection and checkpoint policy is pinned for alpha: Y-Sweet 0.9.1 default GC stays on, `MARKLAB_YSWEET_SKIP_GC=true` is rejected because the pinned server has no `--skip-gc` flag, and production checkpoint cadence is `MARKLAB_YSWEET_CHECKPOINT_FREQ_SECONDS=10`.
-- CLI transport (IPC to local app vs HTTPS to control plane) is left to the CLI implementation ticket; the user-facing contract for `wait-for-sync` and `status` is specified.
+- CLI transport is now the MarkLab.app bridge for `open`, `share`, and `join`, with app-support-file status reads for `status`, `wait`, and `conflict`.
 - Local persistence format for MarkLab.app's offline Y.Doc state is left to the app implementation ticket (y-leveldb or platform-native equivalent).
-- `apps/web` and `apps/collab-web` coexist in the API process for alpha: existing `apps/web` routes remain the root fallback, `apps/collab-web` assets mount under `/collab-web/`, document links open `/collab`, and workspace settings open `/workspaces/:workspaceId/settings`.
+- The archived `apps/web` Milkdown surface has been removed. `apps/collab-web` is the only browser editor surface in the API image: static assets mount under `/collab-web/`, document links open `/collab`, and workspace settings open `/workspaces/:workspaceId/settings`.

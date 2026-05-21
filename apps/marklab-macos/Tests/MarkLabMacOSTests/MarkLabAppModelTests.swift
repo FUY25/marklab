@@ -260,7 +260,7 @@ struct MarkLabAppModelTests {
     #expect(binding.branchId == "branch_main")
     #expect(binding.token == "ml_access_edit")
     #expect(binding.localDocId == localDocId)
-    #expect(try baselineStore.loadBaseline(fileURL: fileURL)?.lastProjectedMarkdown == "")
+    #expect(try baselineStore.loadBaseline(fileURL: fileURL) == nil)
   }
 
   @MainActor
@@ -346,7 +346,7 @@ struct MarkLabAppModelTests {
 
     #expect(model.text == "Local mirror\n")
     #expect(model.embeddedCollabURL == MarkLabAppModel.markEditNativeShellURL(appEditorURL))
-    #expect(model.statusText == "Joined shared document doc_join.")
+    #expect(model.statusText == "Joined shared document doc_join. Waiting for shared content.")
   }
 
   @MainActor

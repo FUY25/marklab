@@ -181,7 +181,8 @@ The CLI now exposes only the current MarkLab.app + hosted `/collab` pilot comman
 ```sh
 marklab doctor --json
 marklab open README.md
-marklab share README.md
+marklab share README.md --edit
+marklab share README.md --view
 marklab join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
 marklab status README.md --json
 marklab wait README.md --synced --json

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { constants as fsConstants, existsSync, watch } from 'node:fs';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -97,7 +98,31 @@ function validateNativeUrlScheme(scheme) {
   return /^[a-z][a-z0-9+.-]*$/iu.test(scheme);
 }
 
-function addNativeAppChecks(checks, warnings, env, platform = process.platform) {
+function escapeAppleScriptString(value) {
+  return String(value).replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
+}
+
+function detectNativeAppByName(appName, platform = process.platform) {
+  if (platform !== 'darwin') return { found: false, error: 'unsupported_platform' };
+  try {
+    const result = spawnSync('/usr/bin/osascript', ['-e', `id of app "${escapeAppleScriptString(appName)}"`], {
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    if (result.status === 0) {
+      const bundleId = result.stdout.trim();
+      return { found: Boolean(bundleId), bundleId: bundleId || null };
+    }
+    return {
+      found: false,
+      error: truncateProbeText(result.stderr || result.stdout || `osascript exited ${result.status}`),
+    };
+  } catch (error) {
+    return { found: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function addNativeAppChecks(checks, warnings, env, platform = process.platform, nativeAppLookup = detectNativeAppByName) {
   const appPath = resolveNativeAppPath(env);
   const appName = env.MARKLAB_APP_NAME?.trim() || 'MarkLab';
   if (appPath) {
@@ -112,10 +137,22 @@ function addNativeAppChecks(checks, warnings, env, platform = process.platform) 
       addCheck(checks, 'native_app', 'warning', message, { appPath, source: 'environment' });
     }
   } else if (platform === 'darwin') {
-    addCheck(checks, 'native_app', 'ok', 'No MarkLab.app bundle path configured; CLI will ask LaunchServices to open the app by name.', {
-      appName,
-      source: 'launch-services',
-    });
+    const lookup = nativeAppLookup(appName, platform);
+    if (lookup.found) {
+      addCheck(checks, 'native_app', 'ok', 'LaunchServices can resolve MarkLab.app by name.', {
+        appName,
+        source: 'launch-services',
+        ...(lookup.bundleId ? { bundleId: lookup.bundleId } : {}),
+      });
+    } else {
+      const message = 'MarkLab.app was not found by LaunchServices; install the app or set MARKLAB_APP_PATH.';
+      warnings.push({ code: 'native_app_missing', message, details: { appName, source: 'launch-services', error: lookup.error ?? null } });
+      addCheck(checks, 'native_app', 'warning', message, {
+        appName,
+        source: 'launch-services',
+        error: lookup.error ?? null,
+      });
+    }
   } else {
     const message = 'MarkLab.app native routing is only supported on macOS.';
     warnings.push({ code: 'native_app_platform_unsupported', message, details: { platform } });
@@ -183,7 +220,13 @@ export async function runDoctor(input = {}, options = {}) {
     installationMode,
   });
 
-  addNativeAppChecks(checks, warnings, env, options.platform ?? process.platform);
+  addNativeAppChecks(
+    checks,
+    warnings,
+    env,
+    options.platform ?? process.platform,
+    options.nativeAppLookup ?? detectNativeAppByName,
+  );
   const nativeSchemeCheck = checks.find((check) => check.name === 'native_url_scheme');
   if (nativeSchemeCheck?.status === 'error') {
     errors.push({

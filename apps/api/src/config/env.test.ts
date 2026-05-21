@@ -137,6 +137,33 @@ describe('loadApiEnv', () => {
     });
   });
 
+  it('allows local production smoke to use loopback public URLs with process-mode provider config', () => {
+    const env = loadApiEnv({
+      ...productionBaseEnv,
+      PORT: '3001',
+      DATABASE_URL: 'postgres://marklab:marklab@postgres:5432/marklab',
+      MARKLAB_LOCAL_PRODUCTION_SMOKE: 'true',
+      MARKLAB_PUBLIC_WEB_URL: 'http://127.0.0.1:3001',
+      MARKLAB_PUBLIC_API_URL: 'http://127.0.0.1:3001',
+      MARKLAB_YSWEET_SERVER_URL: 'http://127.0.0.1:8080',
+      MARKLAB_YSWEET_PUBLIC_URL_PREFIX: 'http://127.0.0.1:3001',
+      MARKLAB_YSWEET_STORE_PATH: '/data/ysweet',
+      MARKLAB_ALLOWED_ORIGINS: 'http://127.0.0.1:3001',
+    });
+
+    expect(env).toMatchObject({
+      mode: 'production',
+      port: 3001,
+      requireAuth: true,
+      publicWebUrl: 'http://127.0.0.1:3001',
+      publicApiUrl: 'http://127.0.0.1:3001',
+      ysweetProviderMode: 'process',
+      ysweetServerUrl: 'http://127.0.0.1:8080',
+      ysweetPublicUrlPrefix: 'http://127.0.0.1:3001',
+      ysweetStorePath: '/data/ysweet',
+    });
+  });
+
   it('rejects externally managed provider mode in hosted production alpha', () => {
     expectInvalid({
       ...productionBaseEnv,

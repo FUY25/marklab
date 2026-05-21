@@ -579,6 +579,56 @@ describe('marklab CLI', () => {
     }
   });
 
+  it('keeps newly joined shared files pending until a projection baseline exists', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'marklab-cli-native-join-pending-'));
+    const appSupportDirectory = join(directory, 'app-support');
+    await mkdir(appSupportDirectory, { recursive: true });
+    const markdownPath = join(directory, 'joined.md');
+    await writeFile(markdownPath, '', 'utf8');
+    const canonicalMarkdownPath = await realpath(markdownPath);
+
+    await writeFile(join(appSupportDirectory, 'shared-document-bindings.json'), JSON.stringify({
+      schemaVersion: 1,
+      bindings: {
+        [canonicalMarkdownPath]: {
+          schemaVersion: 1,
+          filePath: canonicalMarkdownPath,
+          docId: 'doc_joined',
+          branchId: 'branch_main',
+          mode: 'edit',
+          token: 'ml_access_edit',
+          appEditorURL: 'https://app.example.test/collab?docId=doc_joined&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit',
+          localDocId: 'local_joined',
+          baselineHash: markdownHash(''),
+          createdAt: '2026-05-18T12:00:00Z',
+          updatedAt: '2026-05-18T12:00:00Z',
+        },
+      },
+    }), 'utf8');
+
+    const env = { MARKLAB_APP_SUPPORT_DIR: appSupportDirectory };
+    const status = await runCli(['status', markdownPath, '--json'], env, 30000);
+    expectCliOk(status);
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      ok: true,
+      path: canonicalMarkdownPath,
+      shared: true,
+      syncState: 'pending',
+      baseline: null,
+    });
+
+    const wait = await runCli(['wait', markdownPath, '--synced', '--json', '--timeout', '25'], env, 30000);
+    expect(wait.code).toBe(6);
+    expect(JSON.parse(wait.stdout)).toMatchObject({
+      ok: false,
+      code: 'sync_timeout',
+      details: {
+        syncState: 'pending',
+        observedHash: markdownHash(''),
+      },
+    });
+  });
+
   it('parses current native commands only', () => {
     expect(parseCliArgs(['open', 'README.md'])).toEqual({
       command: 'open',

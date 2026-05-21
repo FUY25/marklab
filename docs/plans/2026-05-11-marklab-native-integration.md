@@ -59,11 +59,10 @@ This plan starts after the control-plane session/grant/token-refresh contract ex
 
 ## File Structure
 
+Historical note: the old API-local route files from this plan were removed during the cleanup. New native work should stay on the current MarkLab.app bridge, hosted `/collab`, and app-support-file status path.
+
 - Create `apps/marklab-macos/` or equivalent native app folder after confirming the MarkEdit import strategy.
-- Modify `apps/api/src/local/local-file-service.ts`
-- Modify `apps/api/src/local/local-file-service.test.ts`
-- Modify `apps/api/src/routes/local-file-routes.ts`
-- Modify `apps/api/src/routes/local-conflict-routes.ts`
+- Do not recreate `apps/api/src/local/*`, `local-file-routes`, or `local-conflict-routes`; those belonged to the archived daemon/local API approach.
 - Modify `apps/cli/marklab.mjs`
 - Modify `apps/cli/marklab-cli.test.mjs`
 - Modify `docs/product/marklab-alpha-user-guide.md`

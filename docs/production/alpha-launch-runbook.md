@@ -89,7 +89,7 @@ The current migration path is the checked-in schema file. It is expected to be s
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
 ```
 
-The launch gate is not just "SQL ran"; `/healthz` must show database, schema, relay, provider, and provider store ready.
+The launch gate is not just "SQL ran"; `/healthz` must show database, schema, provider, and provider store ready.
 
 ```sh
 curl -fsS https://marklab-relay-alpha.fly.dev/healthz | jq .

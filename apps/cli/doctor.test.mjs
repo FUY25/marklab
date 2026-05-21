@@ -143,6 +143,35 @@ describe('doctor command checks', () => {
     ]));
   });
 
+  it('warns when LaunchServices cannot resolve the native app by name', async () => {
+    const result = await runDoctor(
+      {},
+      {
+        platform: 'darwin',
+        env: {
+          MARKLAB_APP_NAME: 'DefinitelyNotInstalledMarkLab',
+          MARKLAB_DOCTOR_SKIP_NETWORK: '1',
+        },
+        nativeAppLookup: () => ({ found: false, error: 'Application not found.' }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'native_app_missing' }),
+    ]));
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'native_app',
+        status: 'warning',
+        details: expect.objectContaining({
+          appName: 'DefinitelyNotInstalledMarkLab',
+          source: 'launch-services',
+        }),
+      }),
+    ]));
+  });
+
   it('fails doctor when the configured native join URL scheme is invalid', async () => {
     await expect(
       runDoctor(

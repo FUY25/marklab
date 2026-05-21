@@ -448,7 +448,8 @@ final class MarkLabAppModel: ObservableObject {
       embeddedCollabURL = nil
       pendingDiskIngestion = nil
       pendingSharedMarkdown = nil
-      lastProjectedMarkdown = (try? baselineStore.loadBaseline(fileURL: url))?.lastProjectedMarkdown ?? opened.markdownForSave()
+      let storedBaseline = try? baselineStore.loadBaseline(fileURL: url)
+      lastProjectedMarkdown = storedBaseline?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
         let bindingURL = sharedBinding.flatMap { Self.markEditNativeShellURL($0.appEditorURL) }
         let normalizedConflict = persistedConflict.withSharedEditorURL(
@@ -463,10 +464,12 @@ final class MarkLabAppModel: ObservableObject {
           fileURL: url,
           docId: sharedBinding.docId,
           branchId: sharedBinding.branchId,
-          status: .synced,
-          lastSyncAt: lastSyncDate(fileURL: url)
+          status: storedBaseline == nil ? .syncing : .synced,
+          lastSyncAt: storedBaseline == nil ? nil : lastSyncDate(fileURL: url)
         )
-        statusText = "Joined shared document \(sharedBinding.docId)."
+        statusText = storedBaseline == nil
+          ? "Joined shared document \(sharedBinding.docId). Waiting for shared content."
+          : "Joined shared document \(sharedBinding.docId)."
         Task {
           await refreshManagedAccessLinksFromServer()
         }
@@ -560,15 +563,9 @@ final class MarkLabAppModel: ObservableObject {
       ),
       fileURL: localFileURL
     )
-    try baselineStore.saveBaseline(
-      NativeProjectionBaselineRecord(
-        markdown: LocalMarkdownDocument.normalizeForSharedSave(baselineMarkdown),
-        providerStateFingerprint: NativeProjectionBaselineRecord.providerYTextFingerprint(
-          LocalMarkdownDocument.normalizeForSharedSave(baselineMarkdown)
-        )
-      ),
-      fileURL: localFileURL
-    )
+    if existingBinding?.matches(link) != true {
+      try baselineStore.clearBaseline(fileURL: localFileURL)
+    }
     loadFile(localFileURL)
     embeddedCollabURL = appEditorURL
     latestLink = link.originalURL.absoluteString

@@ -63,6 +63,11 @@ describe('packed @marklab/cli install smoke', () => {
       expect(result.stdout).toContain('Usage:');
     }
 
+    const agentInstructions = await run(bin, ['agent', 'instructions', '--target', 'codex'], { cwd: installDir });
+    expectOk(agentInstructions);
+    expect(agentInstructions.stdout).toContain('MarkLab Local Agent Rules');
+    expect(agentInstructions.stdout).toContain('marklab share <file.md> --edit');
+
     const markdownPath = join(installDir, 'doctor.md');
     await writeFile(markdownPath, '# Doctor\n', 'utf8');
     const npmBinDir = join(installDir, 'node_modules', '.bin');

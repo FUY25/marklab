@@ -14,6 +14,7 @@
   "files": [
     "README.md",
     "agent-instructions.mjs",
+    "agent-templates",
     "agent-json.mjs",
     "doctor.mjs",
     "marklab.mjs"
