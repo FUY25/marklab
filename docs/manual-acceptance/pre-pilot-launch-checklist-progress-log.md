@@ -268,47 +268,65 @@ Current known storage model:
 
 Checklist:
 
-- [ ] Create a storage map: local file, app support files, Neon tables, Fly volume paths, logs, generated artifacts.
-- [ ] Define document lifecycle:
-  - [ ] local-only file;
-  - [ ] Start Sharing;
-  - [ ] active shared document;
-  - [ ] Stop Sharing;
-  - [ ] document deletion;
-  - [ ] workspace/account deletion.
-- [ ] Define retention policy:
-  - [ ] access grants;
-  - [ ] access sessions;
-  - [ ] collab sessions;
-  - [ ] provider token issuances;
-  - [ ] versions/snapshots;
-  - [ ] provider documents;
-  - [ ] logs.
-- [ ] Define deletion semantics:
-  - [ ] revoke link;
-  - [ ] Stop Sharing;
-  - [ ] delete cloud document;
-  - [ ] delete workspace;
-  - [ ] delete account;
-  - [ ] local file missing/deleted.
-- [ ] Define backup/restore:
-  - [ ] Neon backup/restore;
-  - [ ] Fly volume snapshot/fork restore;
-  - [ ] provider-state restore test;
-  - [ ] RPO/RTO for alpha.
-- [ ] Define cleanup jobs needed before/after pilot:
-  - [ ] expired grants;
-  - [ ] expired sessions;
-  - [ ] stale provider token rows;
-  - [ ] inactive provider docs;
-  - [ ] old version snapshots.
-- [ ] Update public privacy/storage wording if policy differs from existing docs.
+- [x] Create a storage map: local file, app support files, Neon tables, Fly volume paths, logs, generated artifacts.
+- [x] Define document lifecycle:
+  - [x] local-only file;
+  - [x] Start Sharing;
+  - [x] active shared document;
+  - [x] Stop Sharing;
+  - [x] document deletion;
+  - [x] workspace/account deletion.
+- [x] Define retention policy:
+  - [x] access grants;
+  - [x] access sessions;
+  - [x] collab sessions;
+  - [x] provider token issuances;
+  - [x] versions/snapshots;
+  - [x] provider documents;
+  - [x] logs.
+- [x] Define deletion semantics:
+  - [x] revoke link;
+  - [x] Stop Sharing;
+  - [x] Delete Cloud Copy;
+  - [x] Clear Local MarkLab Data;
+  - [x] delete cloud document;
+  - [x] delete workspace;
+  - [x] delete account;
+  - [x] local file missing/deleted.
+- [x] Define backup/restore:
+  - [x] Neon backup/restore;
+  - [x] Fly volume snapshot/fork restore;
+  - [ ] provider-state restore test result;
+  - [ ] RPO/RTO for alpha approved.
+- [x] Define cleanup jobs needed before/after pilot:
+  - [x] expired grants;
+  - [x] expired sessions;
+  - [x] stale provider token rows;
+  - [x] inactive provider docs;
+  - [x] old version snapshots.
+- [x] Update public privacy/storage wording if policy differs from existing docs; corrected Stop Sharing wording to match server-backed active grant refresh and grant-id revocation after relaunch.
+- [x] Decide product action model: `Stop Sharing` keeps hosted copy/version history; `Delete Cloud Copy` is the destructive hosted-content action; `Clear Local MarkLab Data` is the device/browser privacy reset action.
+- [x] Confirm Version History current state: backend data/API exists, but native hosted UI does not expose a complete Versions panel.
+- [x] Align with current native UI pattern: the toolbar uses a menu first, then an active-state `Show Collaboration` item toggles the inspector.
+- [x] Write implementation plan: [Sharing & Versions, Cloud Copy, And Version History Plan](../plans/2026-05-22-sharing-versions-cloud-copy-plan.md).
+- [ ] Rename toolbar menu/item to `Sharing & Versions` / `Show Sharing & Versions`.
+- [ ] Add Stop Sharing hover/help microcopy.
+- [ ] Add `Cloud Copy & Versions` sheet opened from the Sharing & Versions inspector.
+- [ ] Wire Version History UI to existing list/show/manual-save/restore APIs.
+- [ ] Implement or document fallback for Delete Cloud Copy.
+- [ ] Implement or document fallback for Clear Local MarkLab Data.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. Current storage model recorded from existing launch docs. | `fly.toml`, `alpha-launch-runbook.md`, `privacy-and-storage.md` | Write lifecycle policy draft. |
+| 2026-05-22 | Gate 3 started after Gate 2.5 conflict-review follow-up was committed and pushed. | `51e55c4 fix: streamline native conflict review UI`; worktree clean on `macos-app`. | Build implementation-grounded storage/lifecycle map from current schema, app-support stores, Fly config, and production docs. |
+| 2026-05-22 | Gate 3 lifecycle audit draft created and public storage wording corrected. Current implementation is acceptable for a small manual pilot only if hosted content is treated as retained until manual cleanup; cloud document/workspace/account deletion, cleanup jobs, and restore drill evidence are still missing. | `docs/manual-acceptance/server-data-lifecycle-audit.md`; `docs/production/privacy-and-storage.md`; evidence checked in `schema.sql`, native app-support stores, browser localStorage/IndexedDB code, `fly.toml`, and production runbooks. | Confirm manual-pilot retention wording, then either run restore drill before inviting more than 10 users or move to Gate 4 cost instrumentation for the first small pilot. |
+| 2026-05-22 | Gate 3 product lifecycle model accepted. `Stop Sharing` remains a non-destructive sharing/sync stop with hover/help copy; `Delete Cloud Copy` belongs in the `Cloud Copy & Versions` Danger Zone; `Clear Local MarkLab Data` belongs in app Settings Privacy/Support/Reset. | `docs/manual-acceptance/server-data-lifecycle-audit.md`; `docs/production/privacy-and-storage.md` | Implement Stop Sharing microcopy first, then add Delete Cloud Copy and Clear Local MarkLab Data fallbacks/implementation with regression tests. |
+| 2026-05-22 | Version History was pulled into Gate 3 scope. Backend support exists through `document_versions` and version list/show/save/restore routes, but the native hosted UI has no complete Versions panel. | `apps/api/src/routes/version-routes.ts`; `apps/api/src/services/version-service.ts`; `apps/api/src/db/schema.sql`; `docs/product/marklab-alpha-user-guide.md` | Build the `Cloud Copy & Versions` surface with `Versions` and `Danger Zone`; make Version History visible before user-facing Delete Cloud Copy. |
+| 2026-05-22 | Gate 3 UI placement aligned to the existing native pattern. The toolbar menu remains a two-step menu-plus-inspector flow: rename `Collaboration` to `Sharing & Versions`, rename `Show Collaboration` to `Show Sharing & Versions`, and open a wider `Cloud Copy & Versions` sheet from inside the inspector for version preview/restore and Delete Cloud Copy. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `docs/manual-acceptance/server-data-lifecycle-audit.md` | Implement labels and Stop Sharing help first, then build the Cloud Copy & Versions sheet. |
+| 2026-05-22 | Focused Gate 3 implementation plan written for Sharing & Versions, Cloud Copy, Version History, Delete Cloud Copy, Clear Local MarkLab Data, cleanup jobs, and restore drill. | `docs/plans/2026-05-22-sharing-versions-cloud-copy-plan.md` | Start Phase 1: labels and Stop Sharing help copy only. |
 
 Exit criteria:
 
@@ -704,6 +722,7 @@ Use this table for cross-gate updates.
 | 2026-05-21 | 2.5 | Expanded Gate 2.5 cleanup passed. | Removed old `apps/web`, daemon CLI helpers, API local/relay routes/services, native daemon boundary, and relay schema creation from active code; typecheck, root tests, Swift tests, package build, and package verification passed. | Fix non-judgment P1/P2 follow-ups from cleanup review before Gate 3. |
 | 2026-05-21 | 2.5 | Fixed non-judgment Gate 2.5 P1/P2 follow-ups. | Native app shell marker no longer depends on bearer-token injection; malformed CLI request files no longer block later valid requests; P2-003 projection-ingestion failures now render as red operational status; stale active docs no longer present removed `apps/web`/daemon/local API targets as current acceptance paths. Verification: `swift test --package-path apps/marklab-macos`; `npx -y pnpm@10.0.0 typecheck`; `npx -y pnpm@10.0.0 test`; `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`; `npx -y pnpm@10.0.0 --filter @marklab/collab-web test:e2e`; `package:app`; `verify:package`; `git diff --check`. | Discuss remaining judgment/visual P2 items before Gate 3: P2-002 cursor re-anchor latency and P2-004 dedicated conflict review surface. |
 | 2026-05-22 | 2.5 | Fixed P2-004 native conflict review placement. | Conflict review moved from the collaboration inspector into the main editor surface with Diff/Local/Shared/Base/Resolved views and a sticky resolution action bar. The collaboration inspector now shows only a short conflict summary and a Review Conflict focus action. | P2-002 remains deferred; continue Gate 3 after visual spot-check if desired. |
+| 2026-05-22 | 2.5 | Streamlined P2-004 conflict review IA after visual review passed. | Commit `51e55c4`: top-level conflict modes reduced to `Review` and `Manual Merge`; Review shows `Use Shared`/`Use Local`; Manual Merge moves the `APPLY RESOLVED` confirmation into the bottom action bar next to `Apply Manual Merge`. User visual review passed. | P2-002 remains deferred; Gate 3 can start. |
 
 ## Current Open Decisions
 
@@ -722,6 +741,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-Optionally visual spot-check P2-004 in the packaged app, then start Gate 3 server/data lifecycle audit on the current `macos-app` branch.
+Start Gate 3 server/data lifecycle audit on the current `macos-app` branch from clean pushed commit `51e55c4`.
 
 Next acceptance row: confirm hosted storage lifecycle, Fly volume/Y-Sweet persistence, Neon retention, backup posture, and recovery assumptions before cost/pricing work.

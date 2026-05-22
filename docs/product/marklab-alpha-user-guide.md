@@ -114,7 +114,7 @@ Realtime sync keeps connected editors current. It is not a substitute for versio
 
 The API has version routes for manual save, autosave, list, and restore. Those routes flush active collaboration state before saving or restoring.
 
-The new native hosted UI does not yet expose a complete Versions panel. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
+The new native hosted UI does not yet expose a complete Versions panel. The planned `Cloud Copy & Versions` surface should show online version history before `Delete Cloud Copy` becomes user-facing. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
 
 ## Plan And Billing
 

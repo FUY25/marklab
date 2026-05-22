@@ -27,6 +27,8 @@ The hosted service may store:
 
 Raw access tokens should not be logged or stored. Local file paths should be treated as local/private context and should not be used as a hosted authority boundary.
 
+Online version history is part of the hosted copy. It may contain Markdown snapshots until the user or an operator deletes the hosted copy under the product's deletion policy.
+
 ## What The Hosted Service Must Not Be
 
 The hosted service is not:
@@ -44,7 +46,13 @@ An access link is permission. A collaborator session is presence.
 
 Revoking a link removes that grant. It does not delete local files, unrelated links, or unrelated sessions.
 
-`Stop Sharing` returns the app document to local-only mode and revokes active links known to the current app session. A server-backed all-grants list is required before the app can revoke every historical grant after relaunch.
+`Stop Sharing` returns the app document to local-only mode and asks the server for active access grants before revoking the grants it can manage. It keeps the hosted copy and online version history. After relaunch, older links may be listed without a copyable URL because raw access tokens are not stored after creation; revoke still works from the grant id. If the server grant list is temporarily unavailable, the app falls back to active links known to the current app session.
+
+`Version History` is the user-facing view of hosted snapshots. The backend stores version snapshots today; the complete native UI is still pending.
+
+`Delete Cloud Copy` should be the separate destructive action for deleting hosted content and online version history. It is not the same as Stop Sharing and must not delete the user's local Markdown file.
+
+`Clear Local MarkLab Data` should be the separate device/browser privacy and reset action for removing local MarkLab support data and caches. It must not delete hosted content or local Markdown files.
 
 ## Missing Local Files
 
