@@ -127,7 +127,9 @@ Use this when the pilot owner login button says `Continue with Google`.
 1. In Google Cloud Console, create or select the MarkLab pilot project.
 2. Configure the Google Auth / OAuth consent screen:
    - Audience: `External`, unless the pilot is limited to one Google Workspace organization.
-   - Publishing status: `Testing` is acceptable for the small pilot.
+   - Publishing status:
+     - Use `Testing` only when you are willing to add every pilot owner as a test user.
+     - Use `In production` when controlled-discovery self-serve sign-in should work for any Google Account that receives the app URL.
    - App name: `MarkLab`.
    - User support email and developer contact email: an operator email you monitor.
    - Scopes: only `openid`, `email`, and `profile`.
@@ -151,6 +153,8 @@ Use this when the pilot owner login button says `Continue with Google`.
    ```
 
 Do not set `MARKLAB_OIDC_AUTHORIZATION_ENDPOINT` for Google unless discovery is failing; the API can discover Google endpoints from `https://accounts.google.com/.well-known/openid-configuration`.
+
+For the small pilot, `In production` in Google OAuth does not mean MarkLab itself is publicly launched; it only removes Google's test-user allowlist requirement. Keep product discovery controlled operationally until Gate 9. If Google requires brand verification for the configured app name/logo or authorized domain, complete that in Google Cloud before relying on broad Google sign-in.
 
 Local pre-provider regression check:
 
