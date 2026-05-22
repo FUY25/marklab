@@ -31,7 +31,6 @@ enum MarkEditConflictReviewMode: String, CaseIterable, Identifiable {
 enum MarkEditSharingVersionsInspectorMode: String, CaseIterable, Identifiable {
   case sharing
   case versions
-  case settings
 
   var id: String { rawValue }
 
@@ -41,8 +40,6 @@ enum MarkEditSharingVersionsInspectorMode: String, CaseIterable, Identifiable {
       return "Sharing"
     case .versions:
       return "Versions"
-    case .settings:
-      return "Settings"
     }
   }
 }
@@ -58,7 +55,6 @@ struct MarkEditDocumentShellView: View {
   static let showSharingAndVersionsLabel = "Show Sharing & Versions"
   static let cloudCopySectionTitle = "Cloud Copy"
   static let versionHistorySectionTitle = "Version History"
-  static let localFileSettingsSectionTitle = "Local File Settings"
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
 
@@ -331,8 +327,6 @@ struct MarkEditDocumentShellView: View {
           sharingInspectorContent
         case .versions:
           versionsInspectorContent
-        case .settings:
-          settingsInspectorContent
         }
 
         if let conflict = model.conflict {
@@ -438,20 +432,6 @@ struct MarkEditDocumentShellView: View {
 
       inspectorSection("Danger Zone") {
         Text("Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-      }
-    }
-  }
-
-  private var settingsInspectorContent: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      inspectorSection(Self.localFileSettingsSectionTitle) {
-        Toggle("Local Autosave", isOn: Binding(
-          get: { model.localAutosaveEnabled },
-          set: { model.setLocalAutosaveEnabled($0) }
-        ))
-        Text("Applies before sharing. Shared documents use realtime projection to the local Markdown file.")
           .font(.callout)
           .foregroundStyle(.secondary)
       }

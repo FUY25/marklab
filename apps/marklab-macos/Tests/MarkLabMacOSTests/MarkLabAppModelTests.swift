@@ -204,6 +204,38 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("app settings defaults changes refresh local autosave in open models")
+  func appSettingsDefaultsChangesRefreshLocalAutosaveInOpenModels() async throws {
+    let suiteName = "MarkLabAppModelTests.appSettingsAutosave.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer {
+      defaults.removePersistentDomain(forName: suiteName)
+    }
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: URL(fileURLWithPath: NSTemporaryDirectory())),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      settingsDefaults: defaults
+    )
+
+    #expect(!model.localAutosaveEnabled)
+
+    defaults.set(true, forKey: MarkLabAppSettings.localAutosaveEnabledDefaultsKey)
+    NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+    await Task.yield()
+
+    #expect(model.localAutosaveEnabled)
+
+    defaults.set(false, forKey: MarkLabAppSettings.localAutosaveEnabledDefaultsKey)
+    NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+    await Task.yield()
+
+    #expect(!model.localAutosaveEnabled)
+  }
+
+  @MainActor
   @Test("local autosave setting does not write through shared-mode projection")
   func localAutosaveSettingDoesNotWriteThroughSharedModeProjection() throws {
     let directory = try TemporaryDirectory()

@@ -262,12 +262,11 @@ struct MarkLabNativeUIStrategyTests {
     )
     #expect(MarkEditDocumentShellView.cloudCopySectionTitle == "Cloud Copy")
     #expect(MarkEditDocumentShellView.versionHistorySectionTitle == "Version History")
-    #expect(MarkEditDocumentShellView.localFileSettingsSectionTitle == "Local File Settings")
     #expect(
       MarkEditDocumentShellView.cloudCopyRetentionSummary
         == "Cloud copy and online version history are kept after Stop Sharing."
     )
-    #expect(MarkEditSharingVersionsInspectorMode.allCases.map(\.label) == ["Sharing", "Versions", "Settings"])
+    #expect(MarkEditSharingVersionsInspectorMode.allCases.map(\.label) == ["Sharing", "Versions"])
     #expect(
       MarkEditDocumentShellView.sharingVersionsInspectorAvailableForTesting(
         filePath: "/tmp/note.md",
@@ -286,6 +285,13 @@ struct MarkLabNativeUIStrategyTests {
         hasConflict: false
       )
     )
+  }
+
+  @Test("local autosave belongs to app settings")
+  func localAutosaveBelongsToAppSettings() {
+    #expect(MarkLabAppSettings.localAutosaveLabel == "Local Autosave")
+    #expect(MarkLabAppSettings.localAutosaveEnabledDefaultsKey == "MarkLabLocalAutosaveEnabled")
+    #expect(MarkLabAppSettings.localAutosaveDescription == "Automatically save local-only Markdown edits after a short pause. Shared documents use realtime projection to the local file.")
   }
 
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")

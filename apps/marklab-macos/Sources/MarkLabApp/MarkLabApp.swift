@@ -23,6 +23,10 @@ struct MarkLabApp: App {
     .commands {
       MarkLabFileCommands()
     }
+
+    Settings {
+      MarkLabSettingsView()
+    }
   }
 }
 
@@ -284,6 +288,18 @@ struct NativeCollaboratorPresence: Identifiable, Equatable {
   }
 }
 
+private final class NotificationObserverToken: @unchecked Sendable {
+  private let token: NSObjectProtocol
+
+  init(_ token: NSObjectProtocol) {
+    self.token = token
+  }
+
+  func invalidate() {
+    NotificationCenter.default.removeObserver(token)
+  }
+}
+
 @MainActor
 final class MarkLabAppModel: ObservableObject {
   @Published var statusText = "Open a Markdown file to start local editing or sharing."
@@ -313,11 +329,11 @@ final class MarkLabAppModel: ObservableObject {
   private var pendingSharedMarkdown: String?
   private var projectionTask: Task<Void, Never>?
   private var localAutosaveTask: Task<Void, Never>?
+  private var localAutosaveDefaultsObserver: NotificationObserverToken?
   private var diskIngestionRevision = 0
   private var fileWatcher: DispatchSourceFileSystemObject?
   let opensSelectedFilesInNewDocumentWindow: Bool
   private static let localAutosaveDelayNanoseconds: UInt64 = 2_000_000_000
-  private static let localAutosaveEnabledDefaultsKey = "MarkLabLocalAutosaveEnabled"
 
   init(
     hostedShareController: NativeHostedShareController? = MarkLabAppModel.makeHostedShareControllerFromEnvironment(),
@@ -341,19 +357,32 @@ final class MarkLabAppModel: ObservableObject {
     self.settingsDefaults = settingsDefaults
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
     self.localAutosaveEnabled = localAutosaveEnabled ?? Self.defaultLocalAutosaveEnabled(defaults: settingsDefaults)
+    if localAutosaveEnabled == nil {
+      let observer = NotificationCenter.default.addObserver(
+        forName: UserDefaults.didChangeNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in
+          self?.reloadLocalAutosaveSettingFromDefaults()
+        }
+      }
+      localAutosaveDefaultsObserver = NotificationObserverToken(observer)
+    }
     if hostedShareController == nil {
       statusText = "Open a Markdown file. Sign in/workspace environment is required before sharing."
     }
   }
 
   deinit {
+    localAutosaveDefaultsObserver?.invalidate()
     localAutosaveTask?.cancel()
     projectionTask?.cancel()
     fileWatcher?.cancel()
   }
 
   static func defaultLocalAutosaveEnabled(defaults: UserDefaults = .standard) -> Bool {
-    defaults.bool(forKey: localAutosaveEnabledDefaultsKey)
+    defaults.bool(forKey: MarkLabAppSettings.localAutosaveEnabledDefaultsKey)
   }
 
   var actionsEnabled: Bool {
@@ -650,9 +679,19 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func setLocalAutosaveEnabled(_ enabled: Bool) {
+    applyLocalAutosaveEnabled(enabled, persist: true)
+  }
+
+  private func reloadLocalAutosaveSettingFromDefaults() {
+    applyLocalAutosaveEnabled(Self.defaultLocalAutosaveEnabled(defaults: settingsDefaults), persist: false)
+  }
+
+  private func applyLocalAutosaveEnabled(_ enabled: Bool, persist: Bool) {
+    if persist {
+      settingsDefaults.set(enabled, forKey: MarkLabAppSettings.localAutosaveEnabledDefaultsKey)
+    }
     guard localAutosaveEnabled != enabled else { return }
     localAutosaveEnabled = enabled
-    settingsDefaults.set(enabled, forKey: Self.localAutosaveEnabledDefaultsKey)
     if enabled {
       do {
         let saved = try flushLocalAutosave()

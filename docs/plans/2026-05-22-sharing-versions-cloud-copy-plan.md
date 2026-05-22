@@ -72,13 +72,19 @@ Right inspector: Sharing & Versions
     Selected version preview
     Restore confirmation
     Danger Zone
-  Settings
+
+App Settings:
+  Editing
     Local Autosave
+  Privacy/Support/Reset
+    Clear Local MarkLab Data
 ```
 
 The inspector must open even for a local-only file. A user may need to restore from a retained cloud copy after sharing was stopped.
 
 The inspector owns version preview/restore so the current article remains visible in the main editor while the user reviews past versions. Do not open a separate window or sheet for ordinary version history.
+
+Document settings do not belong in the Sharing & Versions inspector. `Local Autosave` belongs in app-level Settings because it is an editor/app behavior, not a cloud-copy or sharing lifecycle action.
 
 `Clear Local MarkLab Data` does not belong in this document inspector. It belongs in app-level Settings under Privacy/Support/Reset.
 
@@ -120,8 +126,8 @@ Scope:
 
 - Allow `Show Sharing & Versions` when a local file is open even if sharing is not active.
 - Remove the standalone toolbar `Document` menu that only contained `Local Autosave`.
-- Redesign the Sharing & Versions inspector around `Sharing`, `Versions`, and `Settings` modes.
-- Add `Local Autosave` under the inspector's `Settings` mode.
+- Redesign the Sharing & Versions inspector around `Sharing` and `Versions` modes.
+- Add `Local Autosave` to app-level Settings.
 - Add a `Cloud Copy` section to the Sharing & Versions inspector.
 - Show concise copy:
   - "Cloud copy and online version history are kept after Stop Sharing."
@@ -138,7 +144,7 @@ Acceptance:
 - Local-only files can open the Sharing & Versions inspector.
 - The current editor remains visible while the user opens the Versions mode.
 - The standalone toolbar autosave menu is gone.
-- Local Autosave is available from the inspector's Settings mode.
+- Local Autosave is available from app-level Settings.
 - No destructive action is exposed yet unless backend support exists.
 
 Testing:
@@ -322,7 +328,7 @@ Acceptance:
 Stop and ask for manual visual review after:
 
 - Phase 1 if `Sharing & Versions` label length looks awkward in the toolbar menu.
-- Phase 2 when the redesigned `Sharing / Versions / Settings` inspector exists.
+- Phase 2 when the redesigned `Sharing / Versions` inspector and app-level `Local Autosave` setting exist.
 - Phase 4 when version list/preview/restore confirmation are visible.
 - Phase 6 when `Delete Cloud Copy` danger-zone UI is visible.
 
