@@ -740,13 +740,14 @@ App artifact: `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/Mar
    - Impact: the conflict workflow is functionally present, but it is embedded below collaboration metadata, active collaborators, local sync status, and the stop-sharing control. In a narrow side panel this mixes operational collaboration UI with the high-stakes conflict review flow, making the conflict harder to scan and the resolution actions feel cramped.
    - Evidence: user manual visual check showed the conflict panel containing local/shared/base snapshots, diff, Accept Local, Keep Shared, Paste Resolved, and confirmation controls inside the same sidebar as collaboration state. User confirmed the functional conflict behavior passed but the UI placement felt uncomfortable.
    - Classification: P2, accepted for small pilot as a usability follow-up because data-safety behavior and conflict resolution controls were present.
-   - Status: open follow-up; move conflict review into a more dedicated surface, such as a full-width lower panel, modal/sheet, or focused review mode separated from active collaborators and sharing metadata.
+   - Resolution: native conflict review now takes over the main editor surface while keeping the embedded shared editor mounted behind it for guarded bridge-based resolution. The review surface has Diff/Local/Shared/Base/Resolved views and a sticky action bar for Keep Shared, Accept Local, and Apply Resolved. The collaboration inspector now shows only a short conflict summary and a Review Conflict focus action instead of the full conflict UI.
+   - Status: fixed in Gate 2.5 follow-up.
 
 ### Final manual acceptance summary
 
 - Result: passed for a small manual pilot on patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` and app artifact `/Users/fuyuming/Desktop/markdown_ai_collab_milkdown_spec/dist/MarkLab.app`.
 - Target: `https://marklab-relay-alpha.fly.dev`.
 - Open blockers: no open P0 and no open P1 after P1-001 was fixed and re-verified.
-- Accepted P2 follow-ups: P2-002 active-editor remote-cursor re-anchor latency, P2-003 neutral styling for native projection-ingestion failures, and P2-004 cramped native conflict review placement.
+- Accepted remaining P2 follow-up: P2-002 active-editor remote-cursor re-anchor latency. P2-003 and P2-004 were fixed in Gate 2.5 follow-up.
 - Manual coverage completed: Phase 1 smoke; Phase 2 convergence/presence; Phase 3 permissions/lifecycle; Phase 4 edge cases including missing-file projection pause, conflict review, guarded resolved save, external atomic save during conflict, and active user typing versus simulated agent blind atomic replace; Phase 5 native shell polish.
 - Note: the lower-risk added Phase 4.7 normal agent local edit/replace smoke was not run as a separate row because external append ingestion was already covered by Phase 2.6 and Phase 4.8, while the higher-risk blind atomic replace race was covered by Phase 4.8 and produced an explicit conflict instead of silent overwrite.

@@ -7,6 +7,36 @@ enum MarkEditOperationalStatusSeverity: Equatable {
   case error
 }
 
+enum MarkEditDocumentSurfaceMode: Equatable {
+  case editor
+  case conflictReview
+}
+
+enum MarkEditConflictReviewTab: String, CaseIterable, Identifiable {
+  case diff
+  case local
+  case shared
+  case base
+  case resolved
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .diff:
+      return "Diff"
+    case .local:
+      return "Local"
+    case .shared:
+      return "Shared"
+    case .base:
+      return "Base"
+    case .resolved:
+      return "Resolved"
+    }
+  }
+}
+
 // Adapted from MarkEdit, MIT licensed.
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/EditorWindowController.swift
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/Views/EditorStatusView.swift
@@ -30,7 +60,9 @@ struct MarkEditDocumentShellView: View {
   var body: some View {
     ZStack(alignment: .bottom) {
       editorSurface
-      editorStatusOverlay
+      if model.conflict == nil {
+        editorStatusOverlay
+      }
     }
     .frame(
       minWidth: 360,
@@ -72,11 +104,6 @@ struct MarkEditDocumentShellView: View {
         model.retainSharedDocumentForBackgroundIfNeeded()
       }
     }
-    .onChange(of: requiresCollaborationInspector) { _, requiresInspector in
-      if requiresInspector {
-        collaborationInspectorPresented = true
-      }
-    }
     .onChange(of: hasCollaborationInspectorContent) { _, hasContent in
       if !hasContent {
         collaborationInspectorPresented = false
@@ -87,28 +114,13 @@ struct MarkEditDocumentShellView: View {
   @ViewBuilder
   private var editorSurface: some View {
     ZStack {
-      if let embeddedCollabURL = model.embeddedCollabURL {
-        HostedCollabWebView(
-          url: embeddedCollabURL,
-          diskIngestion: model.pendingDiskIngestion,
-          nativeBearerToken: model.nativeBearerToken,
-          command: editorCommand,
-          isEditable: model.conflict == nil,
-          onMarkdownSnapshot: { markdown in model.projectSharedMarkdownFromWebView(markdown) },
-          onSelectionStatus: { status in editorSelectionStatus = status },
-          onCollaboratorsChange: { collaborators in model.receiveActiveCollaborators(collaborators) },
-          onDiskIngestionResult: { result in model.handleDiskIngestionBridgeResult(result) }
-        )
-      } else {
-        MarkEditLocalMarkdownEditorView(
-          text: localEditorTextBinding,
-          selectionStatusText: $editorSelectionStatus,
-          isEditable: model.filePath != nil && model.conflict == nil,
-          command: editorCommand
-        )
+      editorHostSurface
+
+      if let conflict = model.conflict {
+        MarkEditConflictReviewView(model: model, conflict: conflict)
       }
 
-      if model.filePath == nil {
+      if model.filePath == nil && model.conflict == nil {
         Text("Open a Markdown file")
           .foregroundStyle(.secondary)
           .padding(12)
@@ -116,6 +128,30 @@ struct MarkEditDocumentShellView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  @ViewBuilder
+  private var editorHostSurface: some View {
+    if let embeddedCollabURL = model.embeddedCollabURL {
+      HostedCollabWebView(
+        url: embeddedCollabURL,
+        diskIngestion: model.pendingDiskIngestion,
+        nativeBearerToken: model.nativeBearerToken,
+        command: editorCommand,
+        isEditable: model.conflict == nil,
+        onMarkdownSnapshot: { markdown in model.projectSharedMarkdownFromWebView(markdown) },
+        onSelectionStatus: { status in editorSelectionStatus = status },
+        onCollaboratorsChange: { collaborators in model.receiveActiveCollaborators(collaborators) },
+        onDiskIngestionResult: { result in model.handleDiskIngestionBridgeResult(result) }
+      )
+    } else {
+      MarkEditLocalMarkdownEditorView(
+        text: localEditorTextBinding,
+        selectionStatusText: $editorSelectionStatus,
+        isEditable: model.filePath != nil && model.conflict == nil,
+        command: editorCommand
+      )
+    }
   }
 
   private var hasCollaborationInspectorContent: Bool {
@@ -259,10 +295,6 @@ struct MarkEditDocumentShellView: View {
     Self.markdownHeadingsForTesting(model.text)
   }
 
-  private var requiresCollaborationInspector: Bool {
-    model.conflict != nil
-  }
-
   private var collaborationInspectorBinding: Binding<Bool> {
     Binding(
       get: { collaborationInspectorPresented && hasCollaborationInspectorContent },
@@ -322,12 +354,27 @@ struct MarkEditDocumentShellView: View {
           }
         }
         if let conflict = model.conflict {
-          MarkEditConflictPanelView(model: model, conflict: conflict)
+          conflictInspectorSummary(conflict)
         }
       }
       .padding(14)
     }
     .background(.regularMaterial)
+  }
+
+  private func conflictInspectorSummary(_ conflict: MarkLabConflict) -> some View {
+    inspectorSection("Conflict") {
+      Text(Self.collaborationInspectorConflictSummaryForTesting(hasConflict: true) ?? "")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      Text("local \(conflict.localHash.prefix(12)) · shared \(conflict.sharedHash.prefix(12)) · base \(conflict.baselineHash.prefix(12))")
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+      Button("Review Conflict") {
+        collaborationInspectorPresented = false
+      }
+    }
   }
 
   private func accessLinkRow(_ link: NativeManagedAccessLink) -> some View {
@@ -475,6 +522,18 @@ struct MarkEditDocumentShellView: View {
       return .error
     }
     return .normal
+  }
+
+  static func documentSurfaceModeForTesting(hasConflict: Bool) -> MarkEditDocumentSurfaceMode {
+    hasConflict ? .conflictReview : .editor
+  }
+
+  static func collaborationInspectorConflictSummaryForTesting(hasConflict: Bool) -> String? {
+    hasConflict ? "Conflict review is shown in the main editor area." : nil
+  }
+
+  static func showsEditorStatusOverlayForTesting(hasConflict: Bool) -> Bool {
+    !hasConflict
   }
 
   static func statusSummaryTextForTesting(
@@ -703,50 +762,193 @@ private struct MarkEditWindowFrameApplier: NSViewRepresentable {
   }
 }
 
-private struct MarkEditConflictPanelView: View {
+private struct MarkEditConflictReviewView: View {
   @ObservedObject var model: MarkLabAppModel
   let conflict: MarkLabConflict
+  @State private var selectedTab: MarkEditConflictReviewTab = .diff
 
   var body: some View {
+    VStack(spacing: 0) {
+      header
+      Divider()
+      reviewContent
+      Divider()
+      actionBar
+    }
+    .background(Color(nsColor: .textBackgroundColor))
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var header: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Conflict")
-        .font(.headline)
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline) {
+          headerTitle
+          Spacer()
+          tabPicker
+        }
+        VStack(alignment: .leading, spacing: 10) {
+          headerTitle
+          tabPicker
+        }
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 14)
+    .background(Color(nsColor: .systemRed).opacity(0.08))
+    .overlay(alignment: .leading) {
+      Rectangle()
+        .fill(Color(nsColor: .systemRed))
+        .frame(width: 4)
+    }
+  }
+
+  private var headerTitle: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("Conflict Review")
+        .font(.title3.weight(.semibold))
       Text("local \(conflict.localHash.prefix(12)) · shared \(conflict.sharedHash.prefix(12)) · base \(conflict.baselineHash.prefix(12))")
         .font(.caption)
         .foregroundStyle(.secondary)
         .textSelection(.enabled)
-      previewBlock("Local disk", conflict.localMarkdown)
-      previewBlock("Shared editor", conflict.sharedMarkdown)
-      previewBlock("Base", conflict.baselineMarkdown)
-      previewBlock("Conflict diff", conflict.diffPreview)
-      HStack {
-        Button("Accept Local") { model.acceptLocalConflictVersion() }
-          .disabled(!model.canResolveConflictThroughSharedEditor)
-        Button("Keep Shared") { model.keepSharedConflictVersion() }
-          .disabled(!model.canResolveConflictThroughSharedEditor)
+    }
+  }
+
+  private var tabPicker: some View {
+    Picker("Conflict view", selection: $selectedTab) {
+      ForEach(MarkEditConflictReviewTab.allCases) { tab in
+        Text(tab.label).tag(tab)
       }
+    }
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .frame(maxWidth: 420)
+  }
+
+  @ViewBuilder
+  private var reviewContent: some View {
+    switch selectedTab {
+    case .diff:
+      VStack(alignment: .leading, spacing: 12) {
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .top, spacing: 12) {
+            codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
+            codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
+          }
+          VStack(alignment: .leading, spacing: 12) {
+            codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
+            codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
+          }
+        }
+        codePane(title: "Conflict diff", detail: nil, markdown: conflict.diffPreview, minHeight: 120, maxHeight: 180)
+      }
+      .padding(20)
+    case .local:
+      codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
+        .padding(20)
+    case .shared:
+      codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
+        .padding(20)
+    case .base:
+      codePane(title: "Base", detail: String(conflict.baselineHash.prefix(12)), markdown: conflict.baselineMarkdown)
+        .padding(20)
+    case .resolved:
+      resolvedEditor
+        .padding(20)
+    }
+  }
+
+  private var resolvedEditor: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .top, spacing: 12) {
+        resolvedTextEditor
+        codePane(title: "Resolved preview", detail: nil, markdown: model.resolvedConflictMarkdown)
+      }
+      VStack(alignment: .leading, spacing: 12) {
+        resolvedTextEditor
+        codePane(title: "Resolved preview", detail: nil, markdown: model.resolvedConflictMarkdown, minHeight: 120)
+      }
+    }
+  }
+
+  private var resolvedTextEditor: some View {
+    VStack(alignment: .leading, spacing: 8) {
       Text("Resolved Markdown")
-        .font(.caption)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
       TextEditor(text: $model.resolvedConflictMarkdown)
         .font(.system(.caption, design: .monospaced))
-        .frame(minHeight: 96)
-      Text("Resolved preview")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      previewBlock(nil, model.resolvedConflictMarkdown, minHeight: 54)
+        .frame(minHeight: 260)
+        .scrollContentBackground(.hidden)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+        }
       TextField("Type APPLY RESOLVED to confirm", text: $model.resolvedConflictConfirmation)
         .textFieldStyle(.roundedBorder)
-      Button("Apply Resolved Markdown") { model.resolveConflictWithMergedMarkdown() }
+    }
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+  }
+
+  private var actionBar: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: 12) {
+        actionBarSummary
+        Spacer()
+        actionButtons
+      }
+      VStack(alignment: .leading, spacing: 10) {
+        actionBarSummary
+        actionButtons
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 12)
+    .background(.regularMaterial)
+  }
+
+  private var actionBarSummary: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text("Resolve before syncing resumes.")
+        .font(.caption.weight(.semibold))
+      Text("Resolution is guarded against new disk or shared edits.")
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var actionButtons: some View {
+    HStack(spacing: 10) {
+      Button("Keep Shared") { model.keepSharedConflictVersion() }
+        .disabled(!model.canResolveConflictThroughSharedEditor)
+      Button("Accept Local") { model.acceptLocalConflictVersion() }
+        .disabled(!model.canResolveConflictThroughSharedEditor)
+      Button("Apply Resolved") { model.resolveConflictWithMergedMarkdown() }
+        .buttonStyle(.borderedProminent)
         .disabled(!model.canApplyResolvedConflictMarkdown)
     }
   }
 
-  private func previewBlock(_ title: String?, _ markdown: String, minHeight: CGFloat = 68) -> some View {
+  private func codePane(
+    title: String,
+    detail: String?,
+    markdown: String,
+    minHeight: CGFloat = 260,
+    maxHeight: CGFloat? = nil
+  ) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      if let title {
+      HStack {
         Text(title)
-          .font(.caption)
+          .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
+        if let detail {
+          Text(detail)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+            .textSelection(.enabled)
+        }
+        Spacer()
       }
       ScrollView {
         Text(markdown.isEmpty ? " " : markdown)
@@ -755,8 +957,13 @@ private struct MarkEditConflictPanelView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(8)
       }
-      .frame(minHeight: minHeight, maxHeight: 132)
+      .frame(minHeight: minHeight, maxHeight: maxHeight)
       .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+      .overlay {
+        RoundedRectangle(cornerRadius: 6)
+          .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+      }
     }
+    .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 }

@@ -36,7 +36,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | Gate | Area | Status | Owner | Evidence |
 | --- | --- | --- | --- | --- |
 | 0 | Release candidate freeze | Passed | TBD | Patched RC code commit `cf3a2691a3601e946d01f3cfb3b67789ce08f31b` passed the Gate 0 baseline. |
-| 1 | Manual pilot acceptance | Passed | TBD | Phases 1-5 passed on patched RC; no open P0/P1 after P1-001 fix; P2-003 fixed; P2-002 and P2-004 remain judgment/visual follow-ups. |
+| 1 | Manual pilot acceptance | Passed | TBD | Phases 1-5 passed on patched RC; no open P0/P1 after P1-001 fix; P2-003 and P2-004 fixed; P2-002 remains an accepted visual latency follow-up. |
 | 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. Cleanup-review P1 native app-marker regression fixed in Gate 2.5 follow-up. |
 | 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; fixed non-judgment cleanup-review P1/P2 follow-ups; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Not started | TBD | |
@@ -703,6 +703,7 @@ Use this table for cross-gate updates.
 | 2026-05-21 | 1 | Gate 1 manual pilot acceptance passed. | Phase 5 visual check passed; bug summary appended; all findings classified with no open P0/P1. | Start Gate 2.5 dead code inventory and safe removal. |
 | 2026-05-21 | 2.5 | Expanded Gate 2.5 cleanup passed. | Removed old `apps/web`, daemon CLI helpers, API local/relay routes/services, native daemon boundary, and relay schema creation from active code; typecheck, root tests, Swift tests, package build, and package verification passed. | Fix non-judgment P1/P2 follow-ups from cleanup review before Gate 3. |
 | 2026-05-21 | 2.5 | Fixed non-judgment Gate 2.5 P1/P2 follow-ups. | Native app shell marker no longer depends on bearer-token injection; malformed CLI request files no longer block later valid requests; P2-003 projection-ingestion failures now render as red operational status; stale active docs no longer present removed `apps/web`/daemon/local API targets as current acceptance paths. Verification: `swift test --package-path apps/marklab-macos`; `npx -y pnpm@10.0.0 typecheck`; `npx -y pnpm@10.0.0 test`; `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos smoke:native-browser`; `npx -y pnpm@10.0.0 --filter @marklab/collab-web test:e2e`; `package:app`; `verify:package`; `git diff --check`. | Discuss remaining judgment/visual P2 items before Gate 3: P2-002 cursor re-anchor latency and P2-004 dedicated conflict review surface. |
+| 2026-05-22 | 2.5 | Fixed P2-004 native conflict review placement. | Conflict review moved from the collaboration inspector into the main editor surface with Diff/Local/Shared/Base/Resolved views and a sticky resolution action bar. The collaboration inspector now shows only a short conflict summary and a Review Conflict focus action. | P2-002 remains deferred; continue Gate 3 after visual spot-check if desired. |
 
 ## Current Open Decisions
 
@@ -714,13 +715,13 @@ Use this table for cross-gate updates.
 | Provider backup | Fly snapshots only for alpha vs explicit off-volume backup | TBD | Gate 3 | Open |
 | Free alpha caps | Workspace/doc/storage/session limits | TBD | Gate 4 | Open |
 | Dead code scope | Delete now vs archive only vs keep temporarily | TBD | Gate 2.5 | Decided: delete only confirmed unreferenced tracked files; keep active compatibility paths temporarily. |
-| Pilot P2 timing | Fix before pilot vs defer | TBD | Gate 2.5 | Decided: fix non-judgment P2 items before Gate 3 when small and testable. P2-003 fixed. P2-002 cursor re-anchor latency and P2-004 dedicated conflict review surface remain open because they need visual/product judgment. |
+| Pilot P2 timing | Fix before pilot vs defer | TBD | Gate 2.5 | Decided: fix small/testable P2 items before Gate 3 when product direction is clear. P2-003 and P2-004 fixed. P2-002 cursor re-anchor latency remains deferred for the small pilot. |
 | Active simplification timing | Before pilot only for blockers vs after pilot evidence | TBD | Gate 9.5 | Deferred |
 | Pilot size | 3-10 users vs 10-50 users | TBD | Gate 9 | Open |
 | Paid launch timing | After small pilot vs after broader beta | TBD | Gate 11 | Deferred |
 
 ## Next Action
 
-Discuss remaining judgment/visual P2 items, then start Gate 3 server/data lifecycle audit on the current `macos-app` branch.
+Optionally visual spot-check P2-004 in the packaged app, then start Gate 3 server/data lifecycle audit on the current `macos-app` branch.
 
 Next acceptance row: confirm hosted storage lifecycle, Fly volume/Y-Sweet persistence, Neon retention, backup posture, and recovery assumptions before cost/pricing work.

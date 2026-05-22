@@ -207,6 +207,21 @@ struct MarkLabNativeUIStrategyTests {
     #expect(readOnlyJavaScript.contains("__marklabSetNativeEditable(false) === true"))
   }
 
+  @Test("native conflict review uses the main editor surface instead of the collaboration inspector")
+  @MainActor
+  func conflictReviewUsesMainEditorSurface() {
+    #expect(MarkEditDocumentShellView.documentSurfaceModeForTesting(hasConflict: true) == .conflictReview)
+    #expect(MarkEditDocumentShellView.documentSurfaceModeForTesting(hasConflict: false) == .editor)
+    #expect(
+      MarkEditDocumentShellView.collaborationInspectorConflictSummaryForTesting(hasConflict: true)
+        == "Conflict review is shown in the main editor area."
+    )
+    #expect(MarkEditDocumentShellView.collaborationInspectorConflictSummaryForTesting(hasConflict: false) == nil)
+    #expect(!MarkEditDocumentShellView.showsEditorStatusOverlayForTesting(hasConflict: true))
+    #expect(MarkEditDocumentShellView.showsEditorStatusOverlayForTesting(hasConflict: false))
+    #expect(MarkEditConflictReviewTab.allCases.map(\.label) == ["Diff", "Local", "Shared", "Base", "Resolved"])
+  }
+
   @Test("hosted app web view native marker is independent from bearer auth injection")
   @MainActor
   func hostedAppWebViewNativeMarkerDoesNotRequireBearerToken() {
