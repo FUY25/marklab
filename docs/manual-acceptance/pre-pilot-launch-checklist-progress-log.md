@@ -40,7 +40,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. Cleanup-review P1 native app-marker regression fixed in Gate 2.5 follow-up. |
 | 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; fixed non-judgment cleanup-review P1/P2 follow-ups; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Passed | TBD | Commit `3e669dec2479ec710ef6bef4a6a03e536bc32558` deployed to Fly release `v13`. Health, authenticated alpha smoke, hosted provider version/restore, Delete Cloud Copy, old link/session/provider-token denial, and autosave retention tests passed. Follow-up lifecycle cleanup added tombstone-driven provider physical cleanup and scheduled stale metadata/cache cleanup. Full Neon/Fly infrastructure restore drill remains in the final launch gate. |
-| 4 | Cost instrumentation and unit economics | Not started | TBD | |
+| 4 | Cost instrumentation and unit economics | Passed | TBD | Passed for the small free pilot scope. Usage reporter was added and run against deployed Fly alpha; public Fly/Neon/Stripe rate-card scenarios and temporary pilot cost guardrails are documented in [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). Actual Fly/Neon billing snapshots, final Free plan packaging, and paid no-loss pricing are deferred to Gate 11. |
 | 5 | Clean install and distribution | Not started | TBD | |
 | 6 | Login, onboarding, workspace UI | Not started | TBD | |
 | 7 | Security, privacy, and ops gate | Not started | TBD | |
@@ -374,47 +374,63 @@ Known cost centers:
 
 Checklist:
 
-- [ ] Add or run a usage-report script that can summarize by workspace:
-  - [ ] active documents;
-  - [ ] provider document count;
-  - [ ] estimated provider store bytes;
-  - [ ] Markdown bytes;
-  - [ ] version snapshot bytes;
-  - [ ] collab session minutes;
-  - [ ] guest edit session count;
-  - [ ] provider token refresh count;
-  - [ ] API request count if available;
-  - [ ] estimated egress if available;
-  - [ ] last active time.
-- [ ] Record current Fly bill/cost explorer snapshot.
-- [ ] Record current Neon usage snapshot.
-- [ ] Estimate pilot cost per active workspace at p50/p90/p99.
-- [ ] Define free alpha caps:
-  - [ ] max workspaces;
-  - [ ] max active shared docs;
-  - [ ] max collaborators;
-  - [ ] max provider storage;
-  - [ ] max version retention;
-  - [ ] inactivity TTL.
-- [ ] Build pricing model:
-  - [ ] fixed infra cost;
-  - [ ] variable infra cost;
-  - [ ] support cost;
-  - [ ] payment fee;
-  - [ ] target gross margin;
-  - [ ] no-loss floor.
+- [x] Add or run a usage-report script that can summarize by workspace:
+  - [x] active documents;
+  - [x] provider document count;
+  - [x] estimated provider store bytes;
+  - [x] Markdown bytes;
+  - [x] version snapshot bytes;
+  - [x] collab session minutes;
+  - [x] guest edit session count;
+  - [x] provider token refresh count;
+  - [x] API request count if available; current result: unavailable because no request meter exists in the schema;
+  - [x] estimated egress if available; current result: unavailable because no per-workspace egress meter exists in the schema/Fly CLI snapshot;
+  - [x] last active time.
+- [x] Record current Fly bill/cost explorer snapshot, or explicitly defer it to Gate 11 if closing Gate 4 for the small free pilot using public-rate assumptions.
+- [x] Record current Neon usage snapshot, or explicitly defer it to Gate 11 if closing Gate 4 for the small free pilot using public-rate assumptions.
+- [x] Estimate pilot cost per active workspace with public-rate scenarios; true p50/p90/p99 requires real pilot workspace distribution after Gate 9 starts.
+- [x] Define temporary pilot cost guardrails, not the final Free plan:
+  - [x] max workspaces;
+  - [x] max active shared docs;
+  - [x] max collaborators;
+  - [x] max provider storage;
+  - [x] max version retention;
+  - [x] inactivity TTL.
+- [x] Build pricing model:
+  - [x] fixed infra cost;
+  - [x] variable infra cost;
+  - [x] support cost as an explicit input;
+  - [x] payment fee;
+  - [x] target gross margin; defer final margin target to Gate 11;
+  - [x] no-loss floor formula and examples; final paid no-loss floor requires Gate 11 bill/support data.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. No usage meter/report is recorded here yet. | Existing cost discussion. | Inventory what usage data is already queryable from Neon/Fly. |
+| 2026-05-22 | Gate 4 started. Added a read-only workspace usage reporter and ran it against the deployed Fly alpha by temporarily copying the script into the running machine so it could use the existing `DATABASE_URL` secret without printing it. The report covers active documents, provider doc count, provider store bytes, Markdown/Yjs/version bytes, collab minutes, guest edit sessions, provider token refreshes, last active time, whole-database size, and largest relation sizes. It explicitly reports API request count and egress as unavailable meters. | [`scripts/marklab-workspace-usage-report.mjs`](../../scripts/marklab-workspace-usage-report.mjs); `MARKLAB_PROVIDER_STORE_PATH=/data/ysweet node /app/scripts/marklab-workspace-usage-report.mjs --since-days 30`; [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). Current snapshot: 1 active workspace, 15 active docs, 15 matched provider docs, 46,977 retained content bytes, 1,435.44 collab-session minutes, 52 guest edit sessions, 223 provider-token refreshes, 10,756,096-byte Neon database. | Capture actual Fly Cost Explorer/invoice and Neon CU-hour/history-storage usage; decide whether to add request/egress meters before pilot expansion. |
+| 2026-05-22 | Public platform rate-card model added from current Fly, Neon, and Stripe pricing. The model separates small-free-pilot close from paid-pricing close: current public rates are enough to bound the small pilot, but paid pricing still needs actual bill/usage and support-time data in Gate 11. Current modeled whole-stack cost is about `$6.08-$29.95/month` across the listed pilot scenarios before support time; at 10 active workspaces this is about `$0.61-$3.00/workspace-month` before support. | [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md); official pricing references recorded for Fly.io, Neon, and Stripe. | Mark Gate 4 passed for the small free pilot scope; keep paid pricing blocked. |
+| 2026-05-22 | Temporary pilot cost guardrails documented. These are not the final Free plan; specific free-plan packaging is deferred to the later billing/pricing gate. | [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). | Continue Gate 5 clean install and distribution. |
+| 2026-05-22 | Gate 4 accepted and passed for the small free pilot scope. Public-rate assumptions are accepted in place of immediate Fly/Neon dashboard billing snapshots for this gate. Actual bill snapshots, true p50/p90/p99 from real pilot workspaces, final Free plan packaging, target margin, and paid no-loss pricing are deferred to Gate 11. | Public-rate scenario summary below; [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). | Start Gate 5. |
+
+Public-rate scenario summary recorded for Gate 4:
+
+| Scenario | Whole stack/month | 1 active workspace | 10 active workspaces | 50 active workspaces |
+| --- | ---: | ---: | ---: | ---: |
+| Neon free/near-zero, 0 GB Fly egress | `$6.08` | `$6.08` | `$0.61` | `$0.12` |
+| Low pilot: 10 Neon CU-hours, 10 GB Fly egress | `$7.54` | `$7.54` | `$0.75` | `$0.15` |
+| Base pilot: 50 Neon CU-hours, 10 GB Fly egress | `$11.78` | `$11.78` | `$1.18` | `$0.24` |
+| Intermittent load: 140 Neon CU-hours, 50 GB Fly egress | `$22.92` | `$22.92` | `$2.29` | `$0.46` |
+| Always-warm low load: 187.5 Neon CU-hours, 100 GB Fly egress | `$29.95` | `$29.95` | `$3.00` | `$0.60` |
+
+Gate 4 conclusion: the small free pilot is cost-bounded while MarkLab remains on the current one-machine Fly architecture and the pilot stays within the documented guardrails. Storage is not the current cost driver; the real variables to watch are Neon compute, Fly egress, support time, and any need to scale beyond one always-on Fly machine.
 
 Exit criteria:
 
 - We can answer "what does one active workspace cost per month?" with a measured range.
-- Free alpha caps are explicit.
-- Paid pricing is not implemented until this gate produces a no-loss floor.
+- Temporary pilot cost guardrails are explicit; final Free plan packaging remains deferred to the billing/pricing gate.
+- Paid pricing is not implemented until Gate 11 produces a real no-loss floor from actual bill/support data.
 
 ## Gate 5 - Clean Install And Distribution
 
@@ -756,7 +772,7 @@ Use this table for cross-gate updates.
 | Pilot auth path | OIDC vs invite-token bootstrap vs magic link | TBD | Gate 6 | Open |
 | Data retention | 30-day alpha retention vs shorter TTL | TBD | Gate 3 | Open |
 | Provider backup | Fly snapshots only for alpha vs explicit off-volume backup | TBD | Gate 3 | Open |
-| Free alpha caps | Workspace/doc/storage/session limits | TBD | Gate 4 | Open |
+| Free alpha caps | Workspace/doc/storage/session limits | TBD | Gate 11 | Deferred; Gate 4 only sets temporary pilot cost guardrails. |
 | Dead code scope | Delete now vs archive only vs keep temporarily | TBD | Gate 2.5 | Decided: delete only confirmed unreferenced tracked files; keep active compatibility paths temporarily. |
 | Pilot P2 timing | Fix before pilot vs defer | TBD | Gate 2.5 | Decided: fix small/testable P2 items before Gate 3 when product direction is clear. P2-003 and P2-004 fixed. P2-002 cursor re-anchor latency remains deferred for the small pilot. |
 | Active simplification timing | Before pilot only for blockers vs after pilot evidence | TBD | Gate 9.5 | Deferred |
@@ -765,6 +781,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-Start Gate 3 server/data lifecycle audit on the current `macos-app` branch from clean pushed commit `51e55c4`.
+Start Gate 5 clean install and distribution from the current `macos-app` branch.
 
-Next acceptance row: confirm hosted storage lifecycle, Fly volume/Y-Sweet persistence, Neon retention, backup posture, and recovery assumptions before cost/pricing work.
+Next acceptance row: prove a non-developer can install and use MarkLab without a repo checkout, then record Gatekeeper/quarantine/signing/notarization behavior.
