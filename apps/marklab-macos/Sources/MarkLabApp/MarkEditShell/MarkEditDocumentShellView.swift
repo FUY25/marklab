@@ -12,27 +12,18 @@ enum MarkEditDocumentSurfaceMode: Equatable {
   case conflictReview
 }
 
-enum MarkEditConflictReviewTab: String, CaseIterable, Identifiable {
-  case diff
-  case local
-  case shared
-  case base
-  case resolved
+enum MarkEditConflictReviewMode: String, CaseIterable, Identifiable {
+  case review
+  case manualMerge
 
   var id: String { rawValue }
 
   var label: String {
     switch self {
-    case .diff:
-      return "Diff"
-    case .local:
-      return "Local"
-    case .shared:
-      return "Shared"
-    case .base:
-      return "Base"
-    case .resolved:
-      return "Resolved"
+    case .review:
+      return "Review"
+    case .manualMerge:
+      return "Manual Merge"
     }
   }
 }
@@ -765,15 +756,23 @@ private struct MarkEditWindowFrameApplier: NSViewRepresentable {
 private struct MarkEditConflictReviewView: View {
   @ObservedObject var model: MarkLabAppModel
   let conflict: MarkLabConflict
-  @State private var selectedTab: MarkEditConflictReviewTab = .diff
+  @State private var selectedMode: MarkEditConflictReviewMode = .review
+  @State private var baseExpanded = false
 
   var body: some View {
     VStack(spacing: 0) {
       header
+        .fixedSize(horizontal: false, vertical: true)
       Divider()
-      reviewContent
+      ScrollView {
+        reviewContent
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color(nsColor: .textBackgroundColor))
       Divider()
       actionBar
+        .fixedSize(horizontal: false, vertical: true)
     }
     .background(Color(nsColor: .textBackgroundColor))
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -793,20 +792,21 @@ private struct MarkEditConflictReviewView: View {
         }
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, 20)
-    .padding(.vertical, 14)
-    .background(Color(nsColor: .systemRed).opacity(0.08))
-    .overlay(alignment: .leading) {
-      Rectangle()
-        .fill(Color(nsColor: .systemRed))
-        .frame(width: 4)
-    }
+    .padding(.vertical, 12)
+    .background(conflictReviewChromeBackground)
   }
 
   private var headerTitle: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text("Conflict Review")
-        .font(.title3.weight(.semibold))
+      HStack(alignment: .firstTextBaseline, spacing: 7) {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(conflictReviewAccent)
+        Text("Conflict Review")
+          .font(.title3.weight(.semibold))
+      }
       Text("local \(conflict.localHash.prefix(12)) · shared \(conflict.sharedHash.prefix(12)) · base \(conflict.baselineHash.prefix(12))")
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -815,47 +815,54 @@ private struct MarkEditConflictReviewView: View {
   }
 
   private var tabPicker: some View {
-    Picker("Conflict view", selection: $selectedTab) {
-      ForEach(MarkEditConflictReviewTab.allCases) { tab in
-        Text(tab.label).tag(tab)
+    Picker("Conflict view", selection: $selectedMode) {
+      ForEach(MarkEditConflictReviewMode.allCases) { mode in
+        Text(mode.label).tag(mode)
       }
     }
     .pickerStyle(.segmented)
     .labelsHidden()
-    .frame(maxWidth: 420)
+    .frame(maxWidth: 300)
   }
 
   @ViewBuilder
   private var reviewContent: some View {
-    switch selectedTab {
-    case .diff:
-      VStack(alignment: .leading, spacing: 12) {
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .top, spacing: 12) {
-            codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
-            codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
-          }
-          VStack(alignment: .leading, spacing: 12) {
-            codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
-            codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
-          }
-        }
-        codePane(title: "Conflict diff", detail: nil, markdown: conflict.diffPreview, minHeight: 120, maxHeight: 180)
-      }
-      .padding(20)
-    case .local:
-      codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
-        .padding(20)
-    case .shared:
-      codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
-        .padding(20)
-    case .base:
-      codePane(title: "Base", detail: String(conflict.baselineHash.prefix(12)), markdown: conflict.baselineMarkdown)
-        .padding(20)
-    case .resolved:
+    switch selectedMode {
+    case .review:
+      reviewMode
+    case .manualMerge:
       resolvedEditor
         .padding(20)
     }
+  }
+
+  private var reviewMode: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 12) {
+          codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
+          codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
+        }
+        VStack(alignment: .leading, spacing: 12) {
+          codePane(title: "Local disk", detail: String(conflict.localHash.prefix(12)), markdown: conflict.localMarkdown)
+          codePane(title: "Shared editor", detail: String(conflict.sharedHash.prefix(12)), markdown: conflict.sharedMarkdown)
+        }
+      }
+      codePane(title: "Conflict diff", detail: nil, markdown: conflict.diffPreview, minHeight: 120, maxHeight: 180)
+      DisclosureGroup("Show Base", isExpanded: $baseExpanded) {
+        codePane(
+          title: "Base",
+          detail: String(conflict.baselineHash.prefix(12)),
+          markdown: conflict.baselineMarkdown,
+          minHeight: 120,
+          maxHeight: 180
+        )
+        .padding(.top, 8)
+      }
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(.secondary)
+    }
+    .padding(20)
   }
 
   private var resolvedEditor: some View {
@@ -885,27 +892,52 @@ private struct MarkEditConflictReviewView: View {
           RoundedRectangle(cornerRadius: 6)
             .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
         }
-      TextField("Type APPLY RESOLVED to confirm", text: $model.resolvedConflictConfirmation)
-        .textFieldStyle(.roundedBorder)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 
   private var actionBar: some View {
     ViewThatFits(in: .horizontal) {
-      HStack(alignment: .center, spacing: 12) {
-        actionBarSummary
-        Spacer()
-        actionButtons
-      }
-      VStack(alignment: .leading, spacing: 10) {
-        actionBarSummary
-        actionButtons
-      }
+      horizontalActionBar
+      verticalActionBar
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 12)
-    .background(.regularMaterial)
+    .background(conflictReviewChromeBackground)
+  }
+
+  @ViewBuilder
+  private var horizontalActionBar: some View {
+    switch selectedMode {
+    case .review:
+      HStack(alignment: .center, spacing: 12) {
+        actionBarSummary
+        Spacer()
+        reviewActionButtons
+      }
+    case .manualMerge:
+      HStack(alignment: .center, spacing: 12) {
+        manualMergeConfirmation
+        Spacer()
+        manualMergeApplyButton
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var verticalActionBar: some View {
+    switch selectedMode {
+    case .review:
+      VStack(alignment: .leading, spacing: 10) {
+        actionBarSummary
+        reviewActionButtons
+      }
+    case .manualMerge:
+      VStack(alignment: .leading, spacing: 10) {
+        manualMergeConfirmation
+        manualMergeApplyButton
+      }
+    }
   }
 
   private var actionBarSummary: some View {
@@ -918,16 +950,43 @@ private struct MarkEditConflictReviewView: View {
     }
   }
 
-  private var actionButtons: some View {
+  private var reviewActionButtons: some View {
     HStack(spacing: 10) {
-      Button("Keep Shared") { model.keepSharedConflictVersion() }
+      Button("Use Shared") { model.keepSharedConflictVersion() }
         .disabled(!model.canResolveConflictThroughSharedEditor)
-      Button("Accept Local") { model.acceptLocalConflictVersion() }
+      Button("Use Local") { model.acceptLocalConflictVersion() }
         .disabled(!model.canResolveConflictThroughSharedEditor)
-      Button("Apply Resolved") { model.resolveConflictWithMergedMarkdown() }
-        .buttonStyle(.borderedProminent)
-        .disabled(!model.canApplyResolvedConflictMarkdown)
     }
+  }
+
+  private var manualMergeConfirmation: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("Confirm manual merge")
+        .font(.caption.weight(.semibold))
+      TextField("Type APPLY RESOLVED to confirm", text: $model.resolvedConflictConfirmation)
+        .textFieldStyle(.roundedBorder)
+        .frame(width: 280)
+    }
+  }
+
+  @ViewBuilder
+  private var manualMergeApplyButton: some View {
+    if model.canApplyResolvedConflictMarkdown {
+      Button("Apply Manual Merge") { model.resolveConflictWithMergedMarkdown() }
+        .buttonStyle(.borderedProminent)
+    } else {
+      Button("Apply Manual Merge") {}
+        .buttonStyle(.bordered)
+        .disabled(true)
+    }
+  }
+
+  private var conflictReviewAccent: Color {
+    Color(nsColor: .systemOrange)
+  }
+
+  private var conflictReviewChromeBackground: Color {
+    Color(nsColor: .controlBackgroundColor).opacity(0.74)
   }
 
   private func codePane(

@@ -219,7 +219,7 @@ struct MarkLabNativeUIStrategyTests {
     #expect(MarkEditDocumentShellView.collaborationInspectorConflictSummaryForTesting(hasConflict: false) == nil)
     #expect(!MarkEditDocumentShellView.showsEditorStatusOverlayForTesting(hasConflict: true))
     #expect(MarkEditDocumentShellView.showsEditorStatusOverlayForTesting(hasConflict: false))
-    #expect(MarkEditConflictReviewTab.allCases.map(\.label) == ["Diff", "Local", "Shared", "Base", "Resolved"])
+    #expect(MarkEditConflictReviewMode.allCases.map(\.label) == ["Review", "Manual Merge"])
   }
 
   @Test("hosted app web view native marker is independent from bearer auth injection")
