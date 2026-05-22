@@ -2,13 +2,13 @@
 
 Date: 2026-05-22
 Baseline branch: `macos-app`
-Baseline commit: `7f47410 feat: add shared version autosave`
+Baseline commit: `3e669de feat: add cloud copy deletion lifecycle`
 
 This audit is for the pre-pilot launch gate. It records what MarkLab stores locally and remotely, what deletion/revocation does today, and what is still missing before a broader launch or paid billing.
 
 ## Gate Verdict
 
-The deploy/version path is verified, and self-serve `Delete Cloud Copy` plus an explicit autosave-version lifecycle policy are now implemented locally. Gate 3 should remain open until full verification and hosted delete/version lifecycle smoke pass. Treating hosted deletion as an operator-only fallback is no longer acceptable for this gate.
+Gate 3 passes for the small manual pilot lifecycle scope. The deploy/version path, self-serve `Delete Cloud Copy`, and explicit autosave-version lifecycle policy are implemented, deployed, and verified against the hosted alpha. Treating hosted deletion as an operator-only fallback is no longer acceptable for this gate.
 
 Implemented now:
 
@@ -29,13 +29,12 @@ Missing or not fully implemented:
 - No API/UI path exists yet for hard-deleting a workspace or account.
 - No scheduled cleanup job was found for expired/revoked grants, expired sessions, old provider-token rows, stale OIDC states, inactive provider docs, old versions, browser IndexedDB entries, or completed CLI response files.
 - Provider-document deletion currently records tombstones and denies future provider access through MarkLab's proxy. Physical `/data/ysweet` compaction/orphan cleanup is still a follow-up cleanup job.
-- Backup/restore guidance exists in the production runbook. Hosted version restore into provider state has been tested on the deployed alpha, but a full Neon/Fly infrastructure restore drill and concrete alpha RPO/RTO have been moved to the final launch gate.
+- Backup/restore guidance exists in the production runbook. Hosted version restore into provider state has been tested on the deployed alpha, and Delete Cloud Copy tombstone/denial behavior has been tested on the deployed alpha. A full Neon/Fly infrastructure restore drill and concrete alpha RPO/RTO have been moved to the final launch gate.
 - Public/privacy wording has been corrected for the current Stop Sharing behavior; it should not promise workspace/account deletion or physical provider-store compaction until those paths exist.
 
 Pilot recommendation:
 
-- Do not mark Gate 3 fully passed until full verification and hosted delete/version lifecycle smoke pass with this implementation.
-- Continue using the deployed alpha for internal/manual verification, but do not invite external pilot users under a promise that workspace/account deletion or physical provider-store cleanup is self-serve.
+- Gate 3 can be marked passed for the small manual pilot. Continue using the deployed alpha for internal/manual verification, but do not invite external pilot users under a promise that workspace/account deletion or physical provider-store cleanup is self-serve.
 - Do not enter paid launch until cleanup jobs, restore drill evidence, and any broader deletion promises are implemented or deliberately scoped into product/legal wording.
 
 Accepted product model:
@@ -68,7 +67,7 @@ Execution plan:
 7. `Clear Local MarkLab Data` native/browser cleanup: before public launch, add a support/settings action for app support files and browser site data guidance or self-cleanup where technically possible.
 8. Version retention and cleanup jobs: autosave-version retention is implemented. Before broad launch or paid billing, add scheduled cleanup for expired/revoked grants, sessions, token audit rows, stale local handoff files, stale browser IndexedDB/localStorage entries, and provider orphans created by deleted cloud copies.
 9. Backup/restore drill: moved to the final launch gate; record Neon and Fly provider restore evidence before broader launch commitments.
-10. Tests: before Gate 3 passes, prove `Stop Sharing` retains hosted content, `Delete Cloud Copy` removes hosted content without touching local disk, autosave retention prunes only eligible autosave rows, and Version History list/show/manual-save/restore keeps working. Before public launch, prove `Clear Local MarkLab Data` removes local traces without touching cloud content.
+10. Tests: Gate 3 evidence proves `Stop Sharing` retention semantics, `Delete Cloud Copy` removes hosted content without touching local disk, autosave retention prunes only eligible autosave rows, and Version History list/show/manual-save/restore keeps working. Before public launch, prove `Clear Local MarkLab Data` removes local traces without touching cloud content.
 
 ## Evidence Checked
 
@@ -282,6 +281,8 @@ Current Gate 3 restore evidence:
 
 - On 2026-05-22, deployed Fly alpha release `v12` at commit `7f47410cf8ba4c19a73c7bf725995722675b5560`.
 - Hosted provider-version smoke created disposable doc `1a600b8a-7e77-4af7-b579-d0f422c909e7`, wrote a marker through a real Y-Sweet websocket, confirmed export read the live provider marker, manual-saved version 2, restored the initial version as version 3, and confirmed export returned restored provider state.
+- On 2026-05-22, deployed Fly alpha release `v13` at commit `3e669dec2479ec710ef6bef4a6a03e536bc32558`, image `deployment-01KS7MG85ZKBRRHHFA3EWQKMQZ`.
+- Hosted delete/version lifecycle smoke created disposable doc `dfa636d1-937f-4c56-b9c1-701962349328`, wrote through a real Y-Sweet provider session, confirmed export read the provider marker, manual-saved version 2, restored the initial version as rollback version 3, deleted the cloud copy, and confirmed old grant access `403`, old provider-token refresh `404`, provider proxy tombstone `410`, and versions route denial `403`.
 - `/healthz` after deploy returned `ok: true` with database, schema, provider, and provider store ready.
 
 What is deferred to the final launch gate:
@@ -356,4 +357,4 @@ These are not blockers for a tiny manual pilot, but they should be implemented b
 - [x] Move full Neon/Fly infrastructure restore drill to the final launch gate.
 - [x] Implement self-serve `Delete Cloud Copy` before Gate 3 passes.
 - [x] Implement autosave-version retention before Gate 3 passes.
-- [ ] Re-run hosted delete/version lifecycle smoke after `Delete Cloud Copy` and retention land.
+- [x] Re-run hosted delete/version lifecycle smoke after `Delete Cloud Copy` and retention land.

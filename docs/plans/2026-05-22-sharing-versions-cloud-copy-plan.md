@@ -236,7 +236,7 @@ Testing:
 
 ### Phase 5 - Delete Cloud Copy Backend
 
-Status: implemented locally; full verification and hosted lifecycle smoke still required before Gate 3 can pass. An operator-only cleanup fallback is no longer sufficient for the pilot gate.
+Status: implemented, deployed, and hosted-smoke verified for Gate 3. An operator-only cleanup fallback is no longer sufficient for the pilot gate.
 
 Scope:
 
@@ -275,7 +275,7 @@ Testing:
 
 ### Phase 6 - Delete Cloud Copy UI
 
-Status: implemented locally; full verification and hosted lifecycle smoke still required before Gate 3 can pass.
+Status: implemented, deployed, and hosted-smoke verified for Gate 3.
 
 Scope:
 
@@ -350,6 +350,7 @@ Acceptance:
 - Cleanup jobs are idempotent.
 - Restore drill is explicitly tracked in the final launch gate.
 - Cost instrumentation can rely on bounded storage categories.
+- Gate 3 hosted lifecycle smoke confirms provider-backed version creation, restore, Delete Cloud Copy, old grant denial, old provider-token refresh denial, provider tombstone denial, and post-delete versions denial.
 
 ## Visual Checkpoints
 
@@ -358,7 +359,7 @@ Stop and ask for manual visual review after:
 - Phase 1 if `Sharing & Versions` label length looks awkward in the toolbar menu.
 - Phase 2 when the redesigned `Sharing / Versions` inspector and app-level `Autosave Local Files` setting exist.
 - Phase 4 when version list/preview/restore confirmation are visible.
-- Phase 6 when `Delete Cloud Copy` danger-zone UI is visible.
+- Phase 6 when `Delete Cloud Copy` danger-zone UI is visible. The destructive action has Swift UI/model coverage and hosted lifecycle smoke; a final manual visual spot-check can be done from the packaged app before inviting pilot users if desired.
 
 Do not ask for visual review for backend-only route/client/test changes.
 
