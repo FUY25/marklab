@@ -246,22 +246,72 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
       const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
       const actor = versionActorFromAccess(access);
       const body = restoreSchema.parse(req.body);
-      await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      await readBranchState(pool, docId, branchId);
-      const applied = await restoreVersionToBranchState({
-        pool,
-        liveWriter,
-        docId,
-        branchId,
-        versionId: body.versionId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-      });
-      await options.collabSnapshotService?.applyMarkdownSnapshot?.({
-        docId,
-        branchId,
-        markdown: applied.canonicalMarkdown,
-      });
+      const liveSnapshot = await options.collabSnapshotService?.readCurrentMarkdownSnapshot({ docId, branchId });
+      let applied: Awaited<ReturnType<typeof restoreVersionToBranchState>>;
+      if (liveSnapshot) {
+        if (!options.collabSnapshotService?.applyMarkdownSnapshot) throw new Error('collab_snapshot_unavailable');
+        const source = await showVersion(pool, docId, body.versionId);
+        if (source.branchId !== branchId) throw new Error('source_version_not_found');
+        await persistBranchMarkdownSnapshot({
+          pool,
+          docId,
+          branchId,
+          markdown: liveSnapshot.markdown,
+          hash: liveSnapshot.hash,
+          yjsState: liveSnapshot.yjsState,
+          operation: 'manual_save',
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+        });
+        let providerRollbackApplied = false;
+        try {
+          await options.collabSnapshotService.applyMarkdownSnapshot({
+            docId,
+            branchId,
+            markdown: source.markdown,
+          });
+          providerRollbackApplied = true;
+          applied = await restoreVersionToBranchState({
+            pool,
+            liveWriter,
+            docId,
+            branchId,
+            versionId: body.versionId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+          });
+        } catch (error) {
+          if (providerRollbackApplied) {
+            try {
+              await options.collabSnapshotService.applyMarkdownSnapshot({
+                docId,
+                branchId,
+                markdown: liveSnapshot.markdown,
+              });
+            } catch {
+              // Preserve the original restore failure; provider compensation is best effort.
+            }
+          }
+          throw error;
+        }
+      } else {
+        await options.flushCollabDocument?.(toRoomName(docId, branchId));
+        await readBranchState(pool, docId, branchId);
+        applied = await restoreVersionToBranchState({
+          pool,
+          liveWriter,
+          docId,
+          branchId,
+          versionId: body.versionId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+        });
+        await options.collabSnapshotService?.applyMarkdownSnapshot?.({
+          docId,
+          branchId,
+          markdown: applied.canonicalMarkdown,
+        });
+      }
       await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {

@@ -71,6 +71,20 @@ interface GrantManagementAccess {
   userId: string | null;
 }
 
+interface RevokedRuntimeAccessTarget {
+  grantId?: string | undefined;
+  agentTokenHash?: string | undefined;
+  docId: string;
+  branchId: string | null;
+  providerError: string;
+  closeProviderDocs: boolean;
+}
+
+interface ProviderRuntimeBranchRow {
+  branch_id: string;
+  provider_doc_id: string | null;
+}
+
 const createAgentTokenSchema = z.object({
   name: z.string().min(1),
   canRead: z.boolean().optional().default(true),
@@ -94,7 +108,7 @@ const createAccessSessionSchema = z.object({
   displayName: z.string().default(''),
 });
 
-type AccessRouteOptions = Pick<HttpAppOptions, 'closeCollabDocumentConnections' | 'authEnvironment'>;
+type AccessRouteOptions = Pick<HttpAppOptions, 'closeCollabDocumentConnections' | 'closeProviderDocConnections' | 'authEnvironment'>;
 
 function accessRouteAuthEnvironment(input?: Partial<HttpAuthEnvironment>): Pick<HttpAuthEnvironment, 'requireAuth' | 'devAnonymousAccess' | 'adminTokenHash'> {
   return {
@@ -263,6 +277,82 @@ function toAccessGrantSummary(row: AccessGrantRow) {
   };
 }
 
+async function closeRuntimeAccessForRevokedTarget(
+  pool: DbPool,
+  options: AccessRouteOptions,
+  target: RevokedRuntimeAccessTarget,
+): Promise<void> {
+  const branches = await pool.query<ProviderRuntimeBranchRow>(
+    `select b.id as branch_id,
+            s.provider_doc_id
+       from document_branches b
+       left join document_branch_states s
+         on s.branch_id = b.id
+      where b.doc_id = $1
+        and ($2 is null or b.id = $2)
+        and b.is_archived = false`,
+    [target.docId, target.branchId],
+  );
+  const providerDocIds = branches.rows
+    .map((row) => row.provider_doc_id)
+    .filter((value): value is string => Boolean(value));
+
+  if (target.grantId) {
+    await pool.query(
+      `update collab_sessions
+          set status = 'closed',
+              expires_at = least(coalesce(expires_at, now()), now()),
+              last_seen_at = now()
+        where doc_id = $1
+          and ($2 is null or branch_id = $2)
+          and actor_grant_id = $3
+          and status = 'active'`,
+      [target.docId, target.branchId, target.grantId],
+    );
+    await pool.query(
+      `update provider_token_issuances
+          set status = 'revoked',
+              provider_error = $4
+        where doc_id = $1
+          and ($2 is null or branch_id = $2)
+          and actor_grant_id = $3
+          and status in ('pending', 'issued')`,
+      [target.docId, target.branchId, target.grantId, target.providerError],
+    );
+  } else if (target.agentTokenHash) {
+    await pool.query(
+      `update collab_sessions
+          set status = 'closed',
+              expires_at = least(coalesce(expires_at, now()), now()),
+              last_seen_at = now()
+        where doc_id = $1
+          and ($2 is null or branch_id = $2)
+          and actor_type = 'agent'
+          and actor_id = 'agent:' || $3
+          and status = 'active'`,
+      [target.docId, target.branchId, target.agentTokenHash],
+    );
+    await pool.query(
+      `update provider_token_issuances
+          set status = 'revoked',
+              provider_error = $4
+        where doc_id = $1
+          and ($2 is null or branch_id = $2)
+          and actor_type = 'agent'
+          and actor_id = 'agent:' || $3
+          and status in ('pending', 'issued')`,
+      [target.docId, target.branchId, target.agentTokenHash, target.providerError],
+    );
+  }
+
+  for (const row of branches.rows) {
+    options.closeCollabDocumentConnections?.(toRoomName(target.docId, row.branch_id));
+  }
+  if (target.closeProviderDocs && providerDocIds.length > 0) {
+    options.closeProviderDocConnections?.(providerDocIds);
+  }
+}
+
 export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {}) {
   const router = Router();
   const authEnvironment = accessRouteAuthEnvironment(options.authEnvironment);
@@ -357,6 +447,15 @@ export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {
     try {
       requireAdmin(req, authEnvironment);
       const tokenId = requiredParam(req, 'tokenId');
+      const tokenResult = await pool.query<{ doc_id: string; branch_id: string | null; token_hash: string; can_write: boolean }>(
+        `select doc_id, branch_id, token_hash, can_write
+           from agent_tokens
+          where id = $1
+            and revoked_at is null`,
+        [tokenId],
+      );
+      const token = tokenResult.rows[0];
+      if (!token) throw new Error('token_not_found');
       const result = await pool.query<{ id: string }>(
         `update agent_tokens
             set revoked_at = now()
@@ -366,6 +465,13 @@ export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {
         [tokenId],
       );
       if (!result.rows[0]) throw new Error('token_not_found');
+      await closeRuntimeAccessForRevokedTarget(pool, options, {
+        docId: token.doc_id,
+        branchId: token.branch_id,
+        agentTokenHash: token.token_hash,
+        providerError: 'agent_token_revoked',
+        closeProviderDocs: token.can_write,
+      });
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -478,7 +584,13 @@ export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {
         [grantId],
       );
       if (!result.rows[0]) throw new Error('access_grant_not_found');
-      options.closeCollabDocumentConnections?.(toRoomName(grant.doc_id, grant.branch_id));
+      await closeRuntimeAccessForRevokedTarget(pool, options, {
+        docId: grant.doc_id,
+        branchId: grant.branch_id,
+        grantId,
+        providerError: 'access_grant_revoked',
+        closeProviderDocs: true,
+      });
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -595,6 +707,13 @@ export function createAccessRoutes(pool: DbPool, options: AccessRouteOptions = {
         [linkId],
       );
       if (!result.rows[0]) throw new Error('share_link_not_found');
+      await closeRuntimeAccessForRevokedTarget(pool, options, {
+        docId: grant.doc_id,
+        branchId: grant.branch_id,
+        grantId: linkId,
+        providerError: 'share_link_revoked',
+        closeProviderDocs: true,
+      });
       res.status(204).end();
     } catch (error) {
       next(error);

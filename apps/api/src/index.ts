@@ -1,4 +1,5 @@
 import http from 'node:http';
+import type { Duplex } from 'node:stream';
 import crossws from 'crossws/adapters/node';
 import type { WebSocketLike } from '@hocuspocus/server';
 import { createCollabServer } from './collab/server';
@@ -67,11 +68,37 @@ async function main() {
       console.warn('data lifecycle cleanup failed', error);
     },
   });
+  const providerDocSockets = new Map<string, Set<Duplex>>();
+
+  function trackProviderDocSocket(providerDocId: string, socket: Duplex): void {
+    let sockets = providerDocSockets.get(providerDocId);
+    if (!sockets) {
+      sockets = new Set();
+      providerDocSockets.set(providerDocId, sockets);
+    }
+    sockets.add(socket);
+    socket.on('close', () => {
+      sockets?.delete(socket);
+      if (sockets?.size === 0) providerDocSockets.delete(providerDocId);
+    });
+  }
+
+  function closeProviderDocConnections(providerDocIds: readonly string[]): void {
+    for (const providerDocId of providerDocIds) {
+      const sockets = providerDocSockets.get(providerDocId);
+      if (!sockets) continue;
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      providerDocSockets.delete(providerDocId);
+    }
+  }
+
   const app = createHttpApp(pool, liveWriter, {
     flushCollabDocument: collab.flushDocument,
     applyCollabDocumentState: collab.applyDocumentState,
     verifyCollabDocumentState: collab.verifyDocumentState,
     closeCollabDocumentConnections: collab.closeDocumentConnections,
+    closeProviderDocConnections,
     ...(providerTokenService ? { providerTokenService } : {}),
     ...(ysweetProvider
       ? {
@@ -190,13 +217,14 @@ async function main() {
             socket.destroy();
             return;
           }
+          trackProviderDocSocket(providerDocId, socket);
           proxyYSweetProviderWebSocketUpgrade(ysweetProvider.serverUrl, request, socket, head);
         }).catch(() => {
           socket.destroy();
         });
         return;
       }
-      proxyYSweetProviderWebSocketUpgrade(ysweetProvider.serverUrl, request, socket, head);
+      socket.destroy();
       return;
     }
 

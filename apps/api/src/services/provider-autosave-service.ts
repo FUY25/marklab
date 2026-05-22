@@ -23,7 +23,7 @@ export interface ProviderAutosaveRunInput {
   collabSnapshotService: CollabSnapshotService;
   limit?: number;
   updatedBefore?: Date;
-  onError?: (error: unknown, branch: ProviderBackedBranch) => void;
+  onError?: (error: unknown, branch?: ProviderBackedBranch) => void;
 }
 
 export interface ProviderAutosaveJob {
@@ -117,7 +117,7 @@ export function startProviderAutosaveCheckpointJob(input: ProviderAutosaveRunInp
   };
 
   const timer = setInterval(() => {
-    void runNow();
+    void runNow().catch((error) => input.onError?.(error));
   }, intervalMs);
   timer.unref?.();
 

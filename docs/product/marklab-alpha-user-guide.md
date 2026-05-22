@@ -35,36 +35,38 @@ Normal browser collaborators do not need Node, pnpm, Postgres, Docker, or Git.
 5. After sharing starts, use:
    - `Create Edit Link` for writable browser/app collaborators.
    - `Create View Link` for read-only browser viewers.
-   - `Show Collaboration` for access links, active collaborators, and local sync state.
+   - `Show Sharing & Versions` for access links, active collaborators, local sync state, retained cloud copy, and online versions.
 6. Created links are copied to the clipboard automatically.
 7. Use `Stop Sharing` when the session should end.
 
-Before sharing, the editor stays local and MarkEdit-style. Sharing controls other than `Start Sharing` stay hidden.
+Before sharing, the editor stays local and MarkEdit-style. The `Sharing & Versions` inspector can still open for local files so the user can see Start Sharing and retained-cloud-copy state.
 
-After sharing starts, the persistent state is `Sharing On`. Access-link and collaboration controls appear only then.
+After sharing starts, the persistent state is `Sharing On`. Access-link, collaborator, local sync, and online version controls appear for the active cloud copy.
 
-## Collaboration Inspector
+## Sharing & Versions Inspector
 
-`Show Collaboration` has three sections.
+`Show Sharing & Versions` opens a right inspector with `Sharing` and `Versions` modes.
 
-Access Links:
+Sharing mode:
 
 - Lists active edit/view links known to the app session.
 - Shows role, created time, and copy/revoke actions.
 - Revoked links disappear from the active list.
-
-Active Collaborators:
-
 - Shows currently connected human browser/app sessions.
 - Shows display name, role, client type, and cursor color.
 - Agents are not listed as collaborators because they edit through the local file.
-
-Local Sync:
-
 - Shows local file path.
 - Shows projection/sync state.
 - Shows last synced time when available.
 - Shows conflict controls when conflict review is required.
+- Shows `Stop Sharing`, which turns off active sync and revokes active links but keeps the cloud copy and online versions until `Delete Cloud Copy`.
+
+Versions mode:
+
+- Lists online checkpoints for the current shared or retained cloud copy.
+- Lets the native app preview and restore a selected snapshot after `RESTORE` confirmation.
+- Shows `Delete Cloud Copy` in the Danger Zone after explicit `DELETE CLOUD COPY` confirmation.
+- Does not delete the local Markdown file.
 
 ## Browser Collaborator Flow
 

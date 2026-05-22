@@ -143,6 +143,12 @@ async function cleanupProviderDocDeletions(input: {
     [dueBefore, input.limit],
   );
 
+  if (!input.providerStorePath || input.providerStorePath.startsWith('s3://')) {
+    result.checked = rows.rows.length;
+    result.skipped = rows.rows.length;
+    return result;
+  }
+
   for (const row of rows.rows) {
     result.checked += 1;
     try {

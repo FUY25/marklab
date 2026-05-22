@@ -3,7 +3,7 @@ import { sha256Hex } from '@marklab/shared/src/hash';
 import * as Y from 'yjs';
 import type { CollabSnapshotService } from '../http/app';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
-import { autosaveProviderBackedBranches } from './provider-autosave-service';
+import { autosaveProviderBackedBranches, startProviderAutosaveCheckpointJob } from './provider-autosave-service';
 
 interface CapturedQuery {
   sql: string;
@@ -145,5 +145,43 @@ describe('autosaveProviderBackedBranches', () => {
     const stateUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
     expect(stateUpdate?.params?.[1]).toBe(liveMarkdown);
     expect(stateUpdate?.params?.[2]).toBe(liveHash);
+  });
+});
+
+describe('startProviderAutosaveCheckpointJob', () => {
+  it('reports scheduled run-level failures instead of creating unhandled interval rejections', async () => {
+    const errors: unknown[] = [];
+    const pool: DbPool = {
+      async query() {
+        throw new Error('database_down');
+      },
+      connect: async () => {
+        throw new Error('database_down');
+      },
+    };
+    const collabSnapshotService: CollabSnapshotService = {
+      async readCurrentMarkdownSnapshot() {
+        throw new Error('should_not_reach_snapshot');
+      },
+    };
+
+    const job = startProviderAutosaveCheckpointJob({
+      pool,
+      collabSnapshotService,
+      intervalMs: 20,
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    } finally {
+      job.stop();
+    }
+
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0]).toBeInstanceOf(Error);
+    expect(errors.every((error) => error instanceof Error && error.message === 'database_down')).toBe(true);
   });
 });

@@ -16,7 +16,7 @@ Implemented now:
 - Shared documents are persisted in Neon Postgres and the Y-Sweet provider store on the Fly volume.
 - Native app local bindings, projection baselines, conflicts, and CLI handoff files are written under the user's MarkLab Application Support directory with `0600` file permissions.
 - Access grants and share links are revoked by setting `revoked_at`, and provider-token refresh denies revoked/expired grants.
-- `Stop Sharing` flushes pending shared projection, revokes currently listed active links when possible, clears the native binding/baseline for that local file, and returns the native window to local-only mode.
+- `Stop Sharing` flushes pending shared projection, revokes currently listed active links when possible, disables native sync for that local file, clears the projection baseline, keeps the retained cloud-copy reference, and returns the native window to local-only editing.
 - The native `Sharing & Versions` inspector exposes inline Sharing and Versions modes. Shared documents can list, preview, manually checkpoint, and restore online versions from the app.
 - Browser and native edits write the active Y-Sweet provider state. Manual checkpoints and autosave checkpoints read that live provider state, and restore writes the selected version back into the provider before the app/browser continue.
 - A server-side provider autosave job periodically creates online version checkpoints for provider-backed branches. Browser-only shared edits are captured even though the browser has no version UI.
@@ -49,7 +49,7 @@ UI placement recommendation:
 
 - Preserve the current native toolbar-menu pattern. The right-side toolbar menu should be renamed from `Collaboration` to `Sharing & Versions`; it should not directly open the inspector.
 - In local-only state, the `Sharing & Versions` toolbar menu should primarily show `Start Sharing`.
-- In active sharing state, the menu should keep quick actions such as `Stop Sharing`, `Create Edit Link`, and `Create View Link`, and rename `Show Collaboration` to `Show Sharing & Versions`.
+- In active sharing state, the menu should keep quick actions such as `Stop Sharing`, `Create Edit Link`, and `Create View Link`, plus `Show Sharing & Versions`.
 - Keep `Stop Sharing` in the Sharing & Versions inspector because it is the normal per-document sharing state action.
 - Add a small hover-only explanation on `Stop Sharing`: "Stops sync and revokes active links. Cloud copy and version history are kept." This keeps the primary UI quiet while making the retention behavior discoverable.
 - Put `Version History` inline in the Sharing & Versions inspector so users can compare the current document and prior versions without leaving the editor.
@@ -59,7 +59,7 @@ UI placement recommendation:
 Execution plan:
 
 1. Product wording and docs: lock the three-action model in lifecycle, privacy, and user-guide docs.
-2. Toolbar/menu IA: rename the current `Collaboration` toolbar menu to `Sharing & Versions` and rename its active-state `Show Collaboration` item to `Show Sharing & Versions`.
+2. Toolbar/menu IA: the toolbar menu is `Sharing & Versions`, and its active-state inspector item is `Show Sharing & Versions`.
 3. `Stop Sharing` UI: add hover/help microcopy and a lightweight confirmation only if the implementation needs one; current behavior should continue retaining the cloud copy.
 4. `Version History` UI: completed inline in the Sharing & Versions inspector with list, selected-version preview, manual checkpoint, restore confirmation, and clear copy that restore writes a new rollback version rather than mutating old snapshots.
 5. `Delete Cloud Copy` backend: implemented as a manage-access-only document deletion/tombstone API that revokes grants, closes sessions, denies old provider/session access, and preserves the local Markdown file.
@@ -117,8 +117,8 @@ Recommended MarkLab policy for Gate 3:
 | Surface | Location | Stored data | Contains raw Markdown/content? | Current retention/deletion behavior | Gap |
 | --- | --- | --- | --- | --- | --- |
 | User Markdown file | User-selected local disk path | The opened or joined `.md` file | Yes | MarkLab edits the file while open. Cloud revocation and Stop Sharing must not delete it. User/OS controls deletion. | Need public wording to keep saying local file deletion is user-controlled. |
-| Native shared binding | `~/Library/Application Support/MarkLab/shared-document-bindings.json` or `MARKLAB_APP_SUPPORT_DIR` override | File path, doc id, branch id, mode, app editor URL, local doc id, baseline hash, optional raw access token | No Markdown, but may include a raw token and local path | Written with `0600`. Cleared for the local file on Stop Sharing. Otherwise retained until app clears it or user removes app support data. | Add "remove all local MarkLab app data" support command later. Avoid storing raw token long-term if not required. |
-| Native projection baseline | `~/Library/Application Support/MarkLab/projection-baselines.json` | Last projected Markdown, hash, provider fingerprint, timestamp keyed by local path | Yes | Written with `0600`. Cleared for the local file on Stop Sharing. Updated during normal sync. | No age cleanup. Contains a local content copy. |
+| Native shared binding | `~/Library/Application Support/MarkLab/shared-document-bindings.json` or `MARKLAB_APP_SUPPORT_DIR` override | File path, doc id, branch id, mode, app editor URL, local doc id, baseline hash, sync-enabled flag, optional raw access token | No Markdown, but may include a raw token and local path | Written with `0600`. Stop Sharing keeps the binding with sync disabled so Versions/Delete Cloud Copy still work. Cleared by Delete Cloud Copy or local app data cleanup. | Add "remove all local MarkLab app data" support command later. Avoid storing raw token long-term if not required. |
+| Native projection baseline | `~/Library/Application Support/MarkLab/projection-baselines.json` | Last projected Markdown, hash, provider fingerprint, timestamp keyed by local path | Yes | Written with `0600`. Stop Sharing clears only the projection baseline, while keeping the retained cloud-copy binding. Updated during normal sync. | No age cleanup. Contains a local content copy. |
 | Native conflict files | `~/Library/Application Support/MarkLab/conflicts/*.json` | Local/shared/base Markdown, hashes, shared fingerprint, editor URL, status | Yes | Written with `0600`. Cleared when conflict is resolved or file-specific conflict is cleared. | No age cleanup for unresolved or abandoned conflicts. |
 | Native CLI request/response files | `~/Library/Application Support/MarkLab/cli-requests/*.json`, `cli-responses/*.json` | File path, action, role, join/share link, hosted API/web URLs, bearer token in hosted config, response URL/grant ids/errors | Usually no Markdown, but can include raw bearer token or share link | Written with `0600`. Pending request scan removes stale pending/malformed requests after 600 seconds. Completed responses are pruned after 1 day when the app scans pending requests. | Avoid durable bearer token handoff if possible in a later security/privacy pass. |
 | Native session manager | Process memory | Active native shared document list/status | No | In-memory only. Lost when app exits. | No issue for retention, but app support binding is the durable source. |
@@ -186,11 +186,11 @@ Recommended MarkLab policy for Gate 3:
 - Native app refuses Stop Sharing while a conflict is open.
 - It flushes pending shared projection first.
 - It asks the server for currently listed access links and revokes active ones it can manage.
-- It cancels projection, clears local binding and projection baseline for that file, removes the native shared-session entry, and returns the file to local-only editing.
+- It cancels projection, disables the local sync binding, clears the projection baseline for that file, removes the native shared-session entry, and returns the file to local-only editing while keeping a retained cloud-copy reference for Versions/Delete Cloud Copy.
 - It does not delete the hosted document, provider state, version history, or local Markdown file.
 - Current implementation asks the server for active grants before Stop Sharing. After relaunch, older links may not have copyable URLs because raw tokens are not stored, but revoke works by grant id. If the server list fails, the app falls back to in-memory links from the current app session.
 
-Product decision: `Stop Sharing` should keep this non-destructive behavior. The UI should explain this with hover/help copy instead of making the primary Collaboration inspector heavier.
+Product decision: `Stop Sharing` should keep this non-destructive behavior. The UI should explain this with hover/help copy instead of making the primary Sharing & Versions inspector heavier.
 
 ### Delete Cloud Copy
 
@@ -211,9 +211,10 @@ Product decision: `Stop Sharing` should keep this non-destructive behavior. The 
 
 ### Document deletion
 
-- No active API/UI route was found for deleting a cloud document.
-- If an operator directly deletes a `documents` row in Neon, many child rows cascade by schema. This is not a product deletion path and does not clean the Y-Sweet provider volume by itself.
-- For pilot, treat hosted documents as retained until an operator performs a documented manual cleanup.
+- `Delete Cloud Copy` is the active product path for deleting a hosted document/cloud copy, online version history, access grants, collaboration sessions, and provider access while preserving the user's local Markdown file.
+- Native Stop Sharing now keeps a retained cloud-copy reference with sync disabled, so the user can reopen the local file, review online versions, restore a retained snapshot, or run `Delete Cloud Copy` later.
+- If an operator directly deletes a `documents` row in Neon, many child rows cascade by schema. This is not the product deletion path and should not be used as pilot guidance.
+- Physical provider cleanup is handled by the tombstone-driven lifecycle job for known provider docs. Direct DB deletion does not by itself create the same denial/cleanup trail.
 
 ### Workspace deletion
 
@@ -240,7 +241,7 @@ This is the policy that matches the current implementation closely enough for ma
 | Data class | Pilot retention | Deletion action today | Launch gap |
 | --- | --- | --- | --- |
 | Local Markdown file | Until user deletes it | User/OS deletion only | None, but wording must stay clear. |
-| Native shared bindings | Until Stop Sharing or local app data cleanup | Stop Sharing clears current file binding | Add all-local-data cleanup/support command. |
+| Native shared bindings | Until Delete Cloud Copy or local app data cleanup | Stop Sharing disables sync but keeps the retained cloud-copy reference; Delete Cloud Copy clears the binding | Add all-local-data cleanup/support command. |
 | Native baselines/conflicts | Until resolved/Stop Sharing/local cleanup | Conflict resolution clears conflict; Stop Sharing clears baseline | Add stale conflict/baseline cleanup. |
 | Native CLI request/response files | Pending requests 600 seconds; completed responses 1 day | Pending scan removes stale pending/malformed requests and completed responses | Reduce durable raw-token handoff exposure later. |
 | Browser localStorage edit sessions | 30 days idle, or terminal unavailable state/user clears site data | Terminal refresh/revocation clears current session entry; browser startup prunes stale persisted edit sessions | Add one-click/support UI for complete local reset. |
@@ -346,8 +347,8 @@ The key lifecycle cleanup jobs are implemented for the manual pilot. Workspace/a
 - [x] Existing privacy/storage docs checked for overpromise risk and corrected for current Stop Sharing server-grant refresh behavior.
 - [x] Product action model decided: Stop Sharing, Delete Cloud Copy, and Clear Local MarkLab Data are separate actions.
 - [x] Decide manual-pilot deletion wording: Stop Sharing retains hosted content; Delete Cloud Copy is the self-serve hosted deletion action.
-- [x] Rename the native toolbar menu from `Collaboration` to `Sharing & Versions` and `Show Collaboration` to `Show Sharing & Versions`.
-- [x] Add Stop Sharing hover/help microcopy in the native Collaboration inspector.
+- [x] Native toolbar/menu now uses `Sharing & Versions` and `Show Sharing & Versions`.
+- [x] Add Stop Sharing hover/help microcopy in the native Sharing & Versions inspector.
 - [x] Replace the planned `Cloud Copy & Versions` sheet with inline Sharing/Versions inspector modes after visual review.
 - [x] Wire Version History UI to existing list/show/manual-save/restore APIs.
 - [x] Implement server-side provider autosave so browser-only shared edits create online checkpoints.

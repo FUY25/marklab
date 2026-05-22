@@ -27,20 +27,20 @@ Native UI:
 
 - The right toolbar has a `Collaboration` menu.
 - In local-only state, that menu shows `Start Sharing`.
-- In active sharing state, that menu shows `Sharing On`, `Stop Sharing`, `Create Edit Link`, `Create View Link`, and `Show Collaboration`.
-- `Show Collaboration` toggles the right inspector.
-- The inspector currently contains access links, active collaborators, local sync, Stop Sharing, and a conflict summary.
+- In active sharing state, that menu shows `Sharing On`, `Stop Sharing`, `Create Edit Link`, `Create View Link`, and `Show Sharing & Versions`.
+- `Show Sharing & Versions` toggles the right inspector.
+- The inspector contains `Sharing` and `Versions` modes for access links, active collaborators, local sync, retained cloud copy, version history, restore, and Delete Cloud Copy.
 
 Version backend:
 
 - `document_versions` stores Markdown snapshots, hashes, actor metadata, operation, parent version, version number, and creation time.
 - API routes already exist for version list, show, manual save, autosave, and restore.
 - Restore writes a new rollback version rather than mutating historical snapshots.
-- Native hosted UI does not expose a complete Versions panel.
+- Native shared documents expose a complete `Versions` mode for list/show/manual checkpoint/restore/Delete Cloud Copy. Browser collaborators participate through provider writes and server autosave, but browser version controls are not exposed yet.
 
 Deletion/local cleanup:
 
-- Delete Cloud Copy API/UI now exists locally for deleting a cloud document/provider access/version history while keeping the local Markdown file.
+- Delete Cloud Copy API/UI now exists locally for deleting a cloud document/provider access/version history while keeping the local Markdown file. Stop Sharing disables active sync and keeps a retained cloud-copy reference so Versions/Delete Cloud Copy remain available after sharing is stopped.
 - No complete product UI exists for clearing local MarkLab app/browser data.
 - Cleanup jobs now exist for old grants, sessions, provider token audit rows, provider docs tombstoned by Delete Cloud Copy, stale browser edit-session storage, and completed native CLI handoff responses. Full user-facing `Clear Local MarkLab Data` remains a later app-settings/support action.
 
@@ -102,7 +102,7 @@ Version creation should stay single-path:
 Scope:
 
 - Rename the toolbar menu label from `Collaboration` to `Sharing & Versions`.
-- Rename `Show Collaboration` to `Show Sharing & Versions`.
+- Ensure the active-state inspector item is `Show Sharing & Versions`.
 - Rename the inspector title from `Collaboration` to `Sharing & Versions`.
 - Add hover/help copy to every native `Stop Sharing` button:
   - "Stops sync and revokes active links. Cloud copy and version history are kept."
@@ -118,7 +118,7 @@ Acceptance:
 - Local-only toolbar menu still offers `Start Sharing`.
 - Active sharing toolbar menu shows `Show Sharing & Versions`.
 - Inspector title reads `Sharing & Versions`.
-- Stop Sharing still flushes projection, revokes active grants, clears local binding/baseline, and keeps hosted content.
+- Stop Sharing still flushes projection, revokes active grants, disables the local sync binding/baseline, and keeps hosted content plus a retained cloud-copy reference for later Versions/Delete Cloud Copy.
 - No layout regression in the narrow inspector.
 
 Testing:
@@ -139,7 +139,7 @@ Scope:
 - Show concise copy:
   - "Cloud copy and online version history are kept after Stop Sharing."
 - Add a `Versions` mode skeleton in the same inspector, not a separate sheet.
-- Record that true local-only cloud restore requires a retained cloud-copy reference/lookup path before restore can be functional after Stop Sharing.
+- Keep a retained cloud-copy reference after Stop Sharing so local-only windows can still list versions, restore a retained snapshot, or delete the cloud copy later.
 
 Expected files:
 
@@ -290,7 +290,7 @@ Scope:
 Acceptance:
 
 - Destructive action is not visible as a casual inspector button.
-- User must intentionally enter the wider sheet and confirm.
+- User must intentionally switch to the `Versions` mode, use the Danger Zone, and confirm.
 - Success and failure states are clear.
 - Stop Sharing remains a separate non-destructive action.
 

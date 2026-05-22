@@ -7,7 +7,7 @@ export function isYSweetProviderWebSocketPath(value: string | undefined): boolea
   if (!value) return false;
   try {
     const pathname = new URL(value, 'http://marklab.local').pathname;
-    if (pathname === '/doc/ws' || pathname.startsWith('/doc/ws/')) return true;
+    if (/^\/doc\/ws\/[^/]+\/?$/u.test(pathname)) return true;
     return /^\/d\/[^/]+\/ws(?:\/[^/]+)?\/?$/u.test(pathname);
   } catch {
     return false;
@@ -20,6 +20,8 @@ export function extractYSweetProviderDocId(value: string | undefined): string | 
     const pathname = new URL(value, 'http://marklab.local').pathname;
     const dMatch = /^\/d\/([^/]+)\/(?:ws|as-update|update)(?:\/[^/]+)?\/?$/u.exec(pathname);
     if (dMatch?.[1]) return decodeURIComponent(dMatch[1]);
+    const docWsMatch = /^\/doc\/ws\/([^/]+)\/?$/u.exec(pathname);
+    if (docWsMatch?.[1]) return decodeURIComponent(docWsMatch[1]);
     const docMatch = /^\/doc\/([^/]+)\/(?:ws|as-update|update)(?:\/[^/]+)?\/?$/u.exec(pathname);
     if (docMatch?.[1]) return decodeURIComponent(docMatch[1]);
     return null;

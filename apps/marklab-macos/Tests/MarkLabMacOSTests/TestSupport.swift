@@ -122,3 +122,61 @@ actor BlockingFirstHTTPTransport: NativeHTTPTransport {
     firstReleaseContinuation = nil
   }
 }
+
+actor PathBlockingHTTPTransport: NativeHTTPTransport {
+  struct QueuedResponse {
+    let pathContains: String?
+    let response: NativeHTTPResponse
+    let blocks: Bool
+  }
+
+  private var responses: [QueuedResponse] = []
+  private(set) var requests: [RecordedHTTPRequest] = []
+  private var blockedContinuation: CheckedContinuation<Void, Never>?
+  private var blockedStartedContinuation: CheckedContinuation<Void, Never>?
+
+  func enqueue(json: String, statusCode: Int = 200, pathContains: String? = nil, blocks: Bool = false) {
+    responses.append(QueuedResponse(
+      pathContains: pathContains,
+      response: NativeHTTPResponse(statusCode: statusCode, data: Data(json.utf8), headers: ["content-type": "application/json"]),
+      blocks: blocks
+    ))
+  }
+
+  func send(_ request: NativeHTTPRequest) async throws -> NativeHTTPResponse {
+    requests.append(RecordedHTTPRequest(
+      method: request.method,
+      path: request.url.path,
+      percentEncodedPath: URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? request.url.path,
+      authorization: request.headers["Authorization"],
+      nativeAppProof: request.headers["X-MarkLab-Native-App"],
+      bodyString: request.body.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    ))
+    guard let index = responses.firstIndex(where: { queued in
+      queued.pathContains.map { request.url.path.contains($0) } ?? true
+    }) else {
+      throw NativeHTTPError.transport("missing test response")
+    }
+    let queued = responses.remove(at: index)
+    if queued.blocks {
+      await withCheckedContinuation { continuation in
+        blockedContinuation = continuation
+        blockedStartedContinuation?.resume()
+        blockedStartedContinuation = nil
+      }
+    }
+    return queued.response
+  }
+
+  func waitUntilBlocked() async {
+    if blockedContinuation != nil { return }
+    await withCheckedContinuation { continuation in
+      blockedStartedContinuation = continuation
+    }
+  }
+
+  func releaseBlockedRequest() {
+    blockedContinuation?.resume()
+    blockedContinuation = nil
+  }
+}

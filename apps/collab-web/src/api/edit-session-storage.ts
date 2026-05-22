@@ -1,4 +1,4 @@
-import type { ActiveEditSession, RefreshableEditSession } from '@marklab/collab-editor';
+import { createIndexedDbPersistenceKey, type ActiveEditSession, type RefreshableEditSession } from '@marklab/collab-editor';
 
 const persistedSessionVersion = 1;
 const persistedSessionKeyPrefix = 'marklab:collab-web:edit-session:v1';
@@ -23,6 +23,11 @@ interface EditSessionStorageKeyInput {
 export interface CleanupStalePersistedEditSessionsOptions {
   now?: Date;
   maximumAgeMs?: number;
+  deleteIndexedDb?: (name: string) => void;
+}
+
+export interface ClearPersistedEditSessionAndCacheOptions {
+  session?: Pick<PersistedEditSession, 'providerDocId' | 'sessionId'> | undefined;
   deleteIndexedDb?: (name: string) => void;
 }
 
@@ -92,10 +97,6 @@ export function persistedEditSessionStorageKey(input: EditSessionStorageKeyInput
     encodeKeyPart(input.branchId),
     encodeKeyPart(routeTokenHashForStorage(input.token) ?? 'direct'),
   ].join(':');
-}
-
-function indexedDbPersistenceKey(providerDocId: string, sessionId: string): string {
-  return `marklab:collab-web:${providerDocId}:${sessionId}`;
 }
 
 function isString(value: unknown): value is string {
@@ -188,6 +189,17 @@ function defaultDeleteIndexedDb(name: string): void {
   }
 }
 
+export function clearPersistedEditSessionAndCache(
+  input: EditSessionStorageKeyInput,
+  options: ClearPersistedEditSessionAndCacheOptions = {},
+): void {
+  const session = options.session ?? loadPersistedEditSession(input);
+  clearPersistedEditSession(input);
+  if (!session) return;
+  const deleteIndexedDb = options.deleteIndexedDb ?? defaultDeleteIndexedDb;
+  deleteIndexedDb(createIndexedDbPersistenceKey(session.providerDocId, session.sessionId));
+}
+
 export function cleanupStalePersistedEditSessions(
   options: CleanupStalePersistedEditSessionsOptions = {},
 ): CleanupStalePersistedEditSessionsResult {
@@ -223,7 +235,7 @@ export function cleanupStalePersistedEditSessions(
     const updatedAtMs = session ? Date.parse(session.updatedAt) : Number.NaN;
     if (!session || !Number.isFinite(updatedAtMs) || now.getTime() - updatedAtMs > maximumAgeMs) {
       safeRemoveItem(storage, key);
-      if (session) deleteIndexedDb(indexedDbPersistenceKey(session.providerDocId, session.sessionId));
+      if (session) deleteIndexedDb(createIndexedDbPersistenceKey(session.providerDocId, session.sessionId));
       removed += 1;
     }
   }

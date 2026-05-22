@@ -29,12 +29,13 @@ describe('ysweet provider websocket proxy helpers', () => {
     expect(extractYSweetProviderDocId('/d/ml_doc_1/ws/ml_doc_1?token=secret')).toBe('ml_doc_1');
     expect(extractYSweetProviderDocId('/d/ml_doc_2/as-update?token=secret')).toBe('ml_doc_2');
     expect(extractYSweetProviderDocId('/doc/ml_doc_3/update')).toBe('ml_doc_3');
+    expect(extractYSweetProviderDocId('/doc/ws/ml_doc_4?token=secret')).toBe('ml_doc_4');
     expect(extractYSweetProviderDocId('/collab?docId=doc_1')).toBeNull();
   });
 
   it('recognizes only upstream Y-Sweet websocket document paths', () => {
     expect(isYSweetProviderWebSocketPath('/doc/ws/abc?token=secret')).toBe(true);
-    expect(isYSweetProviderWebSocketPath('/doc/ws/')).toBe(true);
+    expect(isYSweetProviderWebSocketPath('/doc/ws/')).toBe(false);
     expect(isYSweetProviderWebSocketPath('/d/doc_1/ws/doc_1?token=secret')).toBe(true);
     expect(isYSweetProviderWebSocketPath('/d/doc_1/ws/doc_2?token=secret')).toBe(true);
     expect(isYSweetProviderWebSocketPath('/d/doc_1/update')).toBe(false);

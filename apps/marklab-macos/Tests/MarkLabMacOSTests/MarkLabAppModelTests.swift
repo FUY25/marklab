@@ -355,6 +355,7 @@ struct MarkLabAppModelTests {
     let fileURL = directory.url.appending(path: "versions.md")
     try Data("# Versions\n".utf8).write(to: fileURL)
     let transport = RecordingHTTPTransport()
+    let restoredHash = NativeProjectionBaselineRecord.markdownHash("# Version 3\n")
     transport.enqueue(json: #"{"docId":"doc_versions","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
     transport.enqueue(json: #"{"created":false,"versionId":"ver_001","versionNumber":1,"hash":"sha256:one"}"#)
     transport.enqueue(json: #"{"versions":[{"versionId":"ver_002","parentVersionId":"ver_001","versionNumber":2,"hash":"sha256:two","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:00:00.000Z"}]}"#)
@@ -362,9 +363,9 @@ struct MarkLabAppModelTests {
     transport.enqueue(json: #"{"created":true,"versionId":"ver_003","versionNumber":3,"hash":"sha256:three"}"#)
     transport.enqueue(json: #"{"versions":[{"versionId":"ver_003","parentVersionId":"ver_002","versionNumber":3,"hash":"sha256:three","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:05:00.000Z"}]}"#)
     transport.enqueue(json: ##"{"versionId":"ver_003","branchId":"branch_main","parentVersionId":"ver_002","versionNumber":3,"markdown":"# Version 3\n","hash":"sha256:three","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:05:00.000Z"}"##)
-    transport.enqueue(json: #"{"versionId":"ver_004","versionNumber":4,"hash":"sha256:four"}"#)
-    transport.enqueue(json: #"{"versions":[{"versionId":"ver_004","parentVersionId":"ver_002","versionNumber":4,"hash":"sha256:four","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}]}"#)
-    transport.enqueue(json: ##"{"versionId":"ver_004","branchId":"branch_main","parentVersionId":"ver_002","versionNumber":4,"markdown":"# Version 3\n","hash":"sha256:four","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}"##)
+    transport.enqueue(json: #"{"versionId":"ver_004","versionNumber":4,"hash":"\#(restoredHash)"}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_004","branchId":"branch_main","parentVersionId":"ver_002","versionNumber":4,"markdown":"# Version 3\n","hash":"\##(restoredHash)","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}"##)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_004","parentVersionId":"ver_002","versionNumber":4,"hash":"\#(restoredHash)","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}]}"#)
     let model = MarkLabAppModel(
       hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
         apiBaseURL: URL(string: "https://api.example.test")!,
@@ -418,8 +419,276 @@ struct MarkLabAppModelTests {
       "GET /api/docs/doc_versions/branches/branch_main/versions",
       "GET /api/docs/doc_versions/versions/ver_003",
       "POST /api/docs/doc_versions/branches/branch_main/restore",
-      "GET /api/docs/doc_versions/branches/branch_main/versions",
       "GET /api/docs/doc_versions/versions/ver_004",
+      "GET /api/docs/doc_versions/branches/branch_main/versions",
+    ])
+  }
+
+  @MainActor
+  @Test("restore ignores stale queued shared projections after applying the selected version")
+  func restoreCancelsStaleQueuedProjection() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "restore-race.md")
+    try Data("# Before\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    let restoredHash = NativeProjectionBaselineRecord.markdownHash("# Restored\n")
+    transport.enqueue(json: #"{"docId":"doc_restore_race","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"versionId":"ver_003","versionNumber":3,"hash":"\#(restoredHash)"}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_003","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":3,"markdown":"# Restored\n","hash":"\##(restoredHash)","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}"##)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_003","parentVersionId":"ver_001","versionNumber":3,"hash":"\#(restoredHash)","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}]}"#)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    model.selectedVersionId = "ver_001"
+    model.selectedVersion = NativeDocumentVersionSnapshot(
+      versionId: "ver_001",
+      branchId: "branch_main",
+      parentVersionId: nil,
+      versionNumber: 1,
+      markdown: "# Stale preview before restore\n",
+      hash: "sha256:one",
+      actorType: .system,
+      actorId: nil,
+      operation: .import,
+      createdAt: "2026-05-22T12:00:00.000Z"
+    )
+    model.restoreVersionConfirmation = "RESTORE"
+    model.receiveSharedMarkdownSnapshot("# Stale queued provider text\n")
+
+    await model.restoreSelectedVersion()
+    try await Task.sleep(nanoseconds: 2_200_000_000)
+
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "# Restored\n")
+    #expect(model.text == "# Restored\n")
+  }
+
+  @MainActor
+  @Test("restore refuses to project a rollback snapshot whose markdown does not match the restored hash")
+  func restoreRefusesMismatchedRollbackSnapshotHash() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "restore-hash.md")
+    try Data("# Before\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_restore_hash","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"versionId":"ver_002","versionNumber":2,"hash":"sha256:not-the-markdown-hash"}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_002","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":2,"markdown":"# Canonical rollback\n","hash":"sha256:not-the-markdown-hash","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}"##)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    model.selectedVersionId = "ver_001"
+    model.selectedVersion = NativeDocumentVersionSnapshot(
+      versionId: "ver_001",
+      branchId: "branch_main",
+      parentVersionId: nil,
+      versionNumber: 1,
+      markdown: "# Source\n",
+      hash: "sha256:one",
+      actorType: .system,
+      actorId: nil,
+      operation: .import,
+      createdAt: "2026-05-22T12:00:00.000Z"
+    )
+    model.restoreVersionConfirmation = "RESTORE"
+
+    await model.restoreSelectedVersion()
+
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "# Before\n")
+    #expect(model.text == "# Before\n")
+    #expect(model.statusText == "Unable to restore selected version.")
+  }
+
+  @MainActor
+  @Test("preview ignores out-of-order version responses")
+  func previewIgnoresOutOfOrderVersionResponses() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "preview-race.md")
+    try Data("# Preview\n".utf8).write(to: fileURL)
+    let transport = PathBlockingHTTPTransport()
+    await transport.enqueue(json: #"{"docId":"doc_preview","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201, pathContains: "/api/docs/import")
+    await transport.enqueue(json: ##"{"versionId":"ver_slow","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":2,"markdown":"# Slow\n","hash":"sha256:slow","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:00:00.000Z"}"##, pathContains: "/versions/ver_slow", blocks: true)
+    await transport.enqueue(json: ##"{"versionId":"ver_fast","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":3,"markdown":"# Fast\n","hash":"sha256:fast","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:01:00.000Z"}"##, pathContains: "/versions/ver_fast")
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    let slowPreview = Task { await model.previewVersion("ver_slow") }
+    await transport.waitUntilBlocked()
+    await model.previewVersion("ver_fast")
+    await transport.releaseBlockedRequest()
+    await slowPreview.value
+
+    #expect(model.selectedVersionId == "ver_fast")
+    #expect(model.selectedVersion?.versionId == "ver_fast")
+    #expect(model.selectedVersion?.markdown == "# Fast\n")
+  }
+
+  @MainActor
+  @Test("version history ignores stale list responses after opening another file")
+  func versionHistoryIgnoresStaleListResponsesAfterFileSwitch() async throws {
+    let directory = try TemporaryDirectory()
+    let firstFileURL = directory.url.appending(path: "retained-a.md")
+    let secondFileURL = directory.url.appending(path: "local-b.md")
+    try Data("A\n".utf8).write(to: firstFileURL)
+    try Data("B\n".utf8).write(to: secondFileURL)
+    let link = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_retained_a&branchId=branch_main&token=ml_access_edit&mode=edit")
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: firstFileURL,
+        link: link,
+        appEditorURL: link.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: firstFileURL)),
+        baselineMarkdown: "A\n"
+      ).withSyncEnabled(false),
+      fileURL: firstFileURL
+    )
+    let transport = PathBlockingHTTPTransport()
+    await transport.enqueue(
+      json: #"{"versions":[{"versionId":"ver_stale","parentVersionId":null,"versionNumber":1,"hash":"sha256:stale","actorType":"system","actorId":null,"operation":"import","createdAt":"2026-05-22T12:00:00.000Z"}]}"#,
+      pathContains: "/branches/branch_main/versions",
+      blocks: true
+    )
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(firstFileURL)
+    let listTask = Task { await model.loadVersionHistory(createAutosaveCheckpoint: false) }
+    await transport.waitUntilBlocked()
+    model.loadFile(secondFileURL)
+    await transport.releaseBlockedRequest()
+    await listTask.value
+
+    #expect(model.filePath == secondFileURL.path)
+    #expect(!model.hasCloudCopyReference)
+    #expect(model.versionHistory.isEmpty)
+    #expect(model.selectedVersionId == nil)
+  }
+
+  @MainActor
+  @Test("manual checkpoint aborts when pending shared projection opens a conflict")
+  func manualCheckpointAbortsWhenProjectionOpensConflict() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "save-conflict.md")
+    try Data("Base\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_save_conflict","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    model.receiveSharedMarkdownSnapshot("Shared pending\n")
+    try Data("External local edit\n".utf8).write(to: fileURL)
+
+    await model.saveVersionSnapshot()
+
+    #expect(model.conflict != nil)
+    #expect(model.statusText == "Resolve the conflict before saving a version.")
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "POST /api/docs/import",
+    ])
+  }
+
+  @MainActor
+  @Test("delete cloud copy aborts when pending shared projection opens a conflict")
+  func deleteCloudCopyAbortsWhenProjectionOpensConflict() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "delete-conflict.md")
+    try Data("Base\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_delete_conflict","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    model.receiveSharedMarkdownSnapshot("Shared pending\n")
+    try Data("External local edit\n".utf8).write(to: fileURL)
+    model.deleteCloudCopyConfirmation = "DELETE CLOUD COPY"
+
+    await model.deleteCloudCopy()
+
+    #expect(model.conflict != nil)
+    #expect(model.hasSharedDocument)
+    #expect(model.statusText == "Resolve the conflict before deleting the cloud copy.")
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "POST /api/docs/import",
     ])
   }
 
@@ -597,8 +866,9 @@ struct MarkLabAppModelTests {
     #expect(requestPaths.contains("/api/access-grants/grant_old"))
     #expect(requestPaths.contains("/api/access-grants/grant_new"))
     #expect(!model.hasSharedDocument)
+    #expect(model.retainedCloudCopyAvailable)
     #expect(model.managedAccessLinks.isEmpty)
-    #expect(try bindingStore.loadBinding(fileURL: fileURL) == nil)
+    #expect(try bindingStore.loadBinding(fileURL: fileURL)?.syncEnabled == false)
   }
 
   @Test("server-hydrated access links parse fractional ISO expiry")
@@ -654,9 +924,52 @@ struct MarkLabAppModelTests {
     #expect(model.latestGrantId == nil)
     #expect(model.text == "Shared before stop\n")
     #expect(try String(contentsOf: fileURL, encoding: .utf8) == "Shared before stop\n")
-    #expect(try bindingStore.loadBinding(fileURL: fileURL) == nil)
+    #expect(model.retainedCloudCopyAvailable)
+    #expect(try bindingStore.loadBinding(fileURL: fileURL)?.syncEnabled == false)
     #expect(try baselineStore.loadBaseline(fileURL: fileURL) == nil)
-    #expect(model.statusText == "Stopped sharing joined.md.")
+    #expect(model.statusText == "Stopped sharing joined.md. Cloud copy and online versions are retained.")
+  }
+
+  @MainActor
+  @Test("reopens stopped-sharing files with retained cloud version access but no active sync")
+  func reopensStoppedSharingFilesWithRetainedCloudCopy() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "retained.md")
+    try Data("Local only after stop\n".utf8).write(to: fileURL)
+    let link = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_retained&branchId=branch_main&token=ml_access_edit&mode=edit")
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let activeBinding = NativeSharedDocumentBinding(
+      fileURL: fileURL,
+      link: link,
+      appEditorURL: link.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)),
+      baselineMarkdown: "Local only after stop\n"
+    )
+    try bindingStore.saveBinding(activeBinding.withSyncEnabled(false), fileURL: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_retained","parentVersionId":null,"versionNumber":1,"hash":"sha256:retained","actorType":"system","actorId":null,"operation":"import","createdAt":"2026-05-22T12:00:00.000Z"}]}"#)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    await model.loadVersionHistory(createAutosaveCheckpoint: false)
+
+    #expect(!model.hasSharedDocument)
+    #expect(model.retainedCloudCopyAvailable)
+    #expect(model.versionHistory.map(\.versionId) == ["ver_retained"])
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "GET /api/docs/doc_retained/branches/branch_main/versions",
+    ])
   }
 
   @MainActor

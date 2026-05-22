@@ -32,6 +32,7 @@ import {
 } from '@marklab/collab-editor/markdown-commands';
 import {
   clearPersistedEditSession,
+  clearPersistedEditSessionAndCache,
   cleanupStalePersistedEditSessions,
   loadPersistedEditSession,
   persistEditSession,
@@ -222,7 +223,13 @@ export function CollaborativeMarkdownEditor({
     function markUnavailable(reason: string) {
       if (disposed) return;
       unavailable = true;
-      clearPersistedEditSession(storageKeyInput);
+      const activeSession = activeSessionRef.current;
+      clearPersistedEditSessionAndCache(
+        storageKeyInput,
+        activeSession
+          ? { session: { providerDocId: activeSession.providerDocId, sessionId: activeSession.sessionId } }
+          : {},
+      );
       clearLocalAwareness();
       provider?.terminate();
       reconfigureEditability();

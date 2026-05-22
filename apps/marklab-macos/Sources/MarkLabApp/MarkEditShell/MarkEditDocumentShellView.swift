@@ -492,7 +492,11 @@ struct MarkEditDocumentShellView: View {
         Text(Self.cloudCopyRetentionSummary)
           .font(.callout)
           .foregroundStyle(.secondary)
-        if !model.hasSharedDocument {
+        if model.retainedCloudCopyAvailable {
+          Text("Open Versions to review, restore, or delete the retained cloud copy.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        } else if !model.hasSharedDocument {
           Text("Cloud restore will appear here when a retained cloud copy is linked to this local file.")
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -504,12 +508,14 @@ struct MarkEditDocumentShellView: View {
   private var versionsInspectorContent: some View {
     VStack(alignment: .leading, spacing: 14) {
       inspectorSection(Self.versionHistorySectionTitle) {
-        if model.hasSharedDocument {
+        if model.hasCloudCopyReference {
           HStack {
-            Button(Self.saveVersionButtonTitle) {
-              Task { await model.saveVersionSnapshot() }
+            if model.hasSharedDocument {
+              Button(Self.saveVersionButtonTitle) {
+                Task { await model.saveVersionSnapshot() }
+              }
+              .disabled(model.conflict != nil)
             }
-            .disabled(model.conflict != nil)
 
             Button("Refresh") {
               Task { await model.loadVersionHistory() }
@@ -538,7 +544,7 @@ struct MarkEditDocumentShellView: View {
         }
       }
 
-      if model.hasSharedDocument {
+      if model.hasCloudCopyReference {
         inspectorSection("Selected Version") {
           selectedVersionContent
         }
@@ -548,7 +554,7 @@ struct MarkEditDocumentShellView: View {
         Text(Self.deleteCloudCopySummary)
           .font(.callout)
           .foregroundStyle(.secondary)
-        if model.hasSharedDocument {
+        if model.hasCloudCopyReference {
           TextField(Self.deleteCloudCopyConfirmationPrompt, text: $model.deleteCloudCopyConfirmation)
             .textFieldStyle(.roundedBorder)
           Button(Self.deleteCloudCopyButtonTitle) {
@@ -559,7 +565,7 @@ struct MarkEditDocumentShellView: View {
       }
     }
     .onAppear {
-      guard model.hasSharedDocument, model.versionHistory.isEmpty else { return }
+      guard model.hasCloudCopyReference, model.versionHistory.isEmpty else { return }
       Task { await model.loadVersionHistory() }
     }
   }
@@ -640,7 +646,8 @@ struct MarkEditDocumentShellView: View {
 
   private var sharingVersionsSubtitle: String {
     if model.hasSharedDocument { return "Sharing is on. Links, collaborators, cloud copy, and versions are managed here." }
-    if model.filePath != nil { return "Local file. Start sharing or review retained cloud versions from this panel." }
+    if model.retainedCloudCopyAvailable { return "Sharing is off. Cloud copy and online versions are retained here." }
+    if model.filePath != nil { return "Local file. Start sharing to create a cloud copy and online version history." }
     return "Open a Markdown file to manage sharing and versions."
   }
 

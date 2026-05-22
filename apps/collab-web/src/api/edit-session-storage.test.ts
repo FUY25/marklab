@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearPersistedEditSession,
+  clearPersistedEditSessionAndCache,
   cleanupStalePersistedEditSessions,
   loadPersistedEditSession,
   persistedEditSessionStorageKey,
@@ -98,6 +99,20 @@ describe('edit session storage', () => {
     expect(loadPersistedEditSession(storageInput)).toBeNull();
     expect(() => persistEditSession(storageInput, activeSession())).not.toThrow();
     expect(() => clearPersistedEditSession(storageInput)).not.toThrow();
+  });
+
+  it('clears terminal edit sessions together with their IndexedDB provider cache', () => {
+    persistEditSession(storageInput, activeSession());
+    const deletedIndexedDbNames: string[] = [];
+
+    clearPersistedEditSessionAndCache(storageInput, {
+      deleteIndexedDb(name) {
+        deletedIndexedDbNames.push(name);
+      },
+    });
+
+    expect(localStorage.getItem(persistedEditSessionStorageKey(storageInput))).toBeNull();
+    expect(deletedIndexedDbNames).toEqual(['marklab:collab-web:provider_doc_1:session_1']);
   });
 
   it('prunes stale persisted edit sessions and their matching IndexedDB cache names', () => {

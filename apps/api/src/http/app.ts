@@ -34,6 +34,7 @@ export interface HttpAppOptions {
   ) => Promise<Uint8Array | void>;
   verifyCollabDocumentState?: (roomName: string, options?: { expectedCurrentHash?: string }) => Promise<void>;
   closeCollabDocumentConnections?: (roomName: string) => void;
+  closeProviderDocConnections?: (providerDocIds: readonly string[]) => void;
   collabSnapshotService?: CollabSnapshotService;
   auth?: HttpRequestAuth;
   providerTokenService?: ProviderTokenService;

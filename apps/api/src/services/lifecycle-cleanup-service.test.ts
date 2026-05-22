@@ -126,6 +126,24 @@ describe('cleanupDataLifecycle', () => {
     expect(statuses).toContainEqual({ id: 'del_escape', status: 'failed', error: 'provider_doc_id_not_direct_child' });
   });
 
+  it('skips tombstoned provider docs when no local provider store can be cleaned', async () => {
+    const { pool, statuses } = createLifecyclePool({
+      providerDeletionRows: [{ id: 'del_1', provider_doc_id: 'ml_doc_deleted' }],
+    });
+
+    const result = await cleanupDataLifecycle({
+      pool,
+      providerStorePath: 's3://marklab-provider-store',
+      now: new Date('2026-05-22T12:00:00.000Z'),
+      providerDocDeletionGraceMs: 0,
+    });
+
+    expect(result.providerDocs.checked).toBe(1);
+    expect(result.providerDocs.skipped).toBe(1);
+    expect(result.providerDocs.failed).toBe(0);
+    expect(statuses).toEqual([]);
+  });
+
   it('prunes stale auth/session/grant/token audit rows without hard-deleting users or workspaces', async () => {
     const { pool, queries } = createLifecyclePool();
 

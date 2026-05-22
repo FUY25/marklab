@@ -10,6 +10,7 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
   public let appEditorURL: URL
   public let localDocId: String
   public let baselineHash: String
+  public let syncEnabled: Bool
   public let createdAt: String
   public let updatedAt: String
 
@@ -30,6 +31,7 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
     self.appEditorURL = appEditorURL
     self.localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
     self.baselineHash = NativeProjectionBaselineRecord.markdownHash(baselineMarkdown)
+    self.syncEnabled = true
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -51,12 +53,92 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
     self.appEditorURL = appEditorURL
     self.localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
     self.baselineHash = NativeProjectionBaselineRecord.markdownHash(baselineMarkdown)
+    self.syncEnabled = true
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
 
   public func matches(_ link: NativeSharedDocumentLink) -> Bool {
     docId == link.docId && branchId == link.branchId && mode == link.mode
+  }
+
+  public func withSyncEnabled(
+    _ enabled: Bool,
+    updatedAt: String = ISO8601DateFormatter().string(from: Date())
+  ) -> NativeSharedDocumentBinding {
+    NativeSharedDocumentBinding(
+      schemaVersion: schemaVersion,
+      filePath: filePath,
+      docId: docId,
+      branchId: branchId,
+      mode: mode,
+      token: token,
+      appEditorURL: appEditorURL,
+      localDocId: localDocId,
+      baselineHash: baselineHash,
+      syncEnabled: enabled,
+      createdAt: createdAt,
+      updatedAt: updatedAt
+    )
+  }
+
+  private init(
+    schemaVersion: Int,
+    filePath: String,
+    docId: String,
+    branchId: String,
+    mode: NativeSharedDocumentLinkMode,
+    token: String?,
+    appEditorURL: URL,
+    localDocId: String,
+    baselineHash: String,
+    syncEnabled: Bool,
+    createdAt: String,
+    updatedAt: String
+  ) {
+    self.schemaVersion = schemaVersion
+    self.filePath = filePath
+    self.docId = docId
+    self.branchId = branchId
+    self.mode = mode
+    self.token = token
+    self.appEditorURL = appEditorURL
+    self.localDocId = localDocId
+    self.baselineHash = baselineHash
+    self.syncEnabled = syncEnabled
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case filePath
+    case docId
+    case branchId
+    case mode
+    case token
+    case appEditorURL
+    case localDocId
+    case baselineHash
+    case syncEnabled
+    case createdAt
+    case updatedAt
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    filePath = try container.decode(String.self, forKey: .filePath)
+    docId = try container.decode(String.self, forKey: .docId)
+    branchId = try container.decode(String.self, forKey: .branchId)
+    mode = try container.decode(NativeSharedDocumentLinkMode.self, forKey: .mode)
+    token = try container.decodeIfPresent(String.self, forKey: .token)
+    appEditorURL = try container.decode(URL.self, forKey: .appEditorURL)
+    localDocId = try container.decode(String.self, forKey: .localDocId)
+    baselineHash = try container.decode(String.self, forKey: .baselineHash)
+    syncEnabled = try container.decodeIfPresent(Bool.self, forKey: .syncEnabled) ?? true
+    createdAt = try container.decode(String.self, forKey: .createdAt)
+    updatedAt = try container.decode(String.self, forKey: .updatedAt)
   }
 }
 

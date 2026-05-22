@@ -180,6 +180,16 @@ struct DiskIngestionBridgeResult: Equatable {
   let reason: String?
 }
 
+enum SharedProjectionResult: Equatable {
+  case noPending
+  case applied
+  case conflictOpened
+
+  var openedConflict: Bool {
+    self == .conflictOpened
+  }
+}
+
 enum NativeManagedAccessLinkStatus: String, Equatable {
   case active
   case revoked
@@ -321,6 +331,7 @@ final class MarkLabAppModel: ObservableObject {
   @Published var isLoadingVersions = false
   @Published var restoreVersionConfirmation = ""
   @Published var deleteCloudCopyConfirmation = ""
+  @Published var retainedCloudCopyAvailable = false
 
   private var document: LocalMarkdownDocument?
   private let hostedShareController: NativeHostedShareController?
@@ -337,6 +348,7 @@ final class MarkLabAppModel: ObservableObject {
   private var localAutosaveTask: Task<Void, Never>?
   private var localAutosaveDefaultsObserver: NotificationObserverToken?
   private var diskIngestionRevision = 0
+  private var versionHistoryRequestRevision = 0
   private var fileWatcher: DispatchSourceFileSystemObject?
   let opensSelectedFilesInNewDocumentWindow: Bool
   private static let localAutosaveDelayNanoseconds: UInt64 = 2_000_000_000
@@ -396,7 +408,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   var canStartSharing: Bool {
-    actionsEnabled && embeddedCollabURL == nil
+    actionsEnabled && embeddedCollabURL == nil && !retainedCloudCopyAvailable
   }
 
   var canCreateSharingLink: Bool {
@@ -409,6 +421,10 @@ final class MarkLabAppModel: ObservableObject {
 
   var hasSharedDocument: Bool {
     embeddedCollabURL != nil
+  }
+
+  var hasCloudCopyReference: Bool {
+    hasSharedDocument || retainedCloudCopyAvailable
   }
 
   var fileURLForBackgroundRetention: URL? {
@@ -437,11 +453,14 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   var canApplySelectedVersionRestore: Bool {
-    selectedVersion != nil && restoreVersionConfirmation == "RESTORE" && embeddedCollabURL != nil && conflict == nil
+    selectedVersion?.versionId == selectedVersionId
+      && restoreVersionConfirmation == "RESTORE"
+      && hasCloudCopyReference
+      && conflict == nil
   }
 
   var canDeleteCloudCopy: Bool {
-    embeddedCollabURL != nil && conflict == nil && deleteCloudCopyConfirmation == "DELETE CLOUD COPY"
+    hasCloudCopyReference && conflict == nil && deleteCloudCopyConfirmation == "DELETE CLOUD COPY"
   }
 
   static func markEditNativeShellURL(_ url: URL?) -> URL? {
@@ -484,7 +503,8 @@ final class MarkLabAppModel: ObservableObject {
     do {
       try flushLocalAutosave()
       let sharedBinding = try? sharedDocumentBindingStore.loadBinding(fileURL: url)
-      let opened = try LocalMarkdownDocument.open(fileURL: url, shared: sharedBinding != nil)
+      let activeSharedBinding = sharedBinding?.syncEnabled == true ? sharedBinding : nil
+      let opened = try LocalMarkdownDocument.open(fileURL: url, shared: activeSharedBinding != nil)
       document = opened
       text = opened.text
       filePath = url.path
@@ -496,21 +516,23 @@ final class MarkLabAppModel: ObservableObject {
       managedAccessLinks = []
       activeCollaborators = []
       clearVersionHistoryState()
+      retainedCloudCopyAvailable = sharedBinding?.syncEnabled == false
       embeddedCollabURL = nil
       pendingDiskIngestion = nil
       pendingSharedMarkdown = nil
       let storedBaseline = try? baselineStore.loadBaseline(fileURL: url)
       lastProjectedMarkdown = storedBaseline?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
-        let bindingURL = sharedBinding.flatMap { Self.markEditNativeShellURL($0.appEditorURL) }
+        let bindingURL = activeSharedBinding.flatMap { Self.markEditNativeShellURL($0.appEditorURL) }
         let normalizedConflict = persistedConflict.withSharedEditorURL(
           Self.markEditNativeShellURL(persistedConflict.sharedEditorURL) ?? bindingURL
         )
         embeddedCollabURL = normalizedConflict.sharedEditorURL
         setConflict(normalizedConflict, status: "Conflict: review required before syncing resumes.")
-      } else if let sharedBinding {
+      } else if let sharedBinding = activeSharedBinding {
         clearConflictState()
         embeddedCollabURL = Self.markEditNativeShellURL(sharedBinding.appEditorURL)
+        retainedCloudCopyAvailable = false
         registerSharedSession(
           fileURL: url,
           docId: sharedBinding.docId,
@@ -524,8 +546,15 @@ final class MarkLabAppModel: ObservableObject {
         Task {
           await refreshManagedAccessLinksFromServer()
         }
+      } else if sharedBinding != nil {
+        clearConflictState()
+        retainedCloudCopyAvailable = true
+        try? baselineStore.clearBaseline(fileURL: url)
+        lastProjectedMarkdown = opened.markdownForSave()
+        statusText = "Editing \(url.lastPathComponent). Cloud copy and online versions are retained."
       } else {
         clearConflictState()
+        retainedCloudCopyAvailable = false
         statusText = "Editing \(url.lastPathComponent)."
       }
       if embeddedCollabURL != nil {
@@ -663,7 +692,11 @@ final class MarkLabAppModel: ObservableObject {
     localAutosaveTask?.cancel()
     localAutosaveTask = nil
     if embeddedCollabURL != nil {
-      try flushPendingSharedProjection()
+      let projection = try flushPendingSharedProjection()
+      if projection.openedConflict {
+        statusText = "Resolve the conflict before saving."
+        return false
+      }
       return true
     }
     guard var currentDocument = document else { return false }
@@ -817,6 +850,7 @@ final class MarkLabAppModel: ObservableObject {
         fileURL: fileURL
       )
       try updateProjectionBaseline(sharedMarkdown, fileURL: fileURL)
+      retainedCloudCopyAvailable = false
       embeddedCollabURL = appEditorURL
       registerSharedSession(
         fileURL: fileURL,
@@ -895,8 +929,8 @@ final class MarkLabAppModel: ObservableObject {
 
     let fileURL = document?.fileURL
     do {
-      try flushPendingSharedProjection()
-      guard conflict == nil else {
+      let projection = try flushPendingSharedProjection()
+      guard !projection.openedConflict, conflict == nil else {
         statusText = "Resolve the conflict before stopping sharing."
         return
       }
@@ -922,6 +956,7 @@ final class MarkLabAppModel: ObservableObject {
     pendingSharedMarkdown = nil
     pendingDiskIngestion = nil
     embeddedCollabURL = nil
+    retainedCloudCopyAvailable = true
     latestLink = nil
     latestGrantId = nil
     managedAccessLinks = []
@@ -930,7 +965,9 @@ final class MarkLabAppModel: ObservableObject {
     lastProjectedMarkdown = nil
 
     if let fileURL {
-      try? sharedDocumentBindingStore.clearBinding(fileURL: fileURL)
+      if let binding = try? sharedDocumentBindingStore.loadBinding(fileURL: fileURL) {
+        try? sharedDocumentBindingStore.saveBinding(binding.withSyncEnabled(false), fileURL: fileURL)
+      }
       try? baselineStore.clearBaseline(fileURL: fileURL)
       sessionManager.removeSession(fileURL: fileURL)
       MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
@@ -941,17 +978,17 @@ final class MarkLabAppModel: ObservableObject {
       }
       let filename = fileURL.lastPathComponent
       statusText = revokeFailures == 0
-        ? "Stopped sharing \(filename)."
-        : "Stopped sharing \(filename), but some links could not be revoked."
+        ? "Stopped sharing \(filename). Cloud copy and online versions are retained."
+        : "Stopped sharing \(filename), but some links could not be revoked. Cloud copy is retained."
     } else {
       statusText = revokeFailures == 0
-        ? "Stopped sharing."
-        : "Stopped sharing, but some links could not be revoked."
+        ? "Stopped sharing. Cloud copy and online versions are retained."
+        : "Stopped sharing, but some links could not be revoked. Cloud copy is retained."
     }
   }
 
   func deleteCloudCopy() async {
-    guard hasSharedDocument else { return }
+    guard hasCloudCopyReference else { return }
     guard canDeleteCloudCopy else {
       statusText = "Type DELETE CLOUD COPY before deleting the hosted copy."
       return
@@ -961,13 +998,17 @@ final class MarkLabAppModel: ObservableObject {
       return
     }
     guard let hostedShareController else {
-      statusText = "Start sharing before deleting the cloud copy."
+      statusText = "Open a file with a cloud copy before deleting it."
       return
     }
 
     let fileURL = document?.fileURL
     do {
-      try flushPendingSharedProjection()
+      let projection = try flushPendingSharedProjection()
+      guard !projection.openedConflict else {
+        statusText = "Resolve the conflict before deleting the cloud copy."
+        return
+      }
       _ = try await hostedShareController.deleteCloudCopy()
     } catch {
       statusText = Self.versionHistoryStatus(for: error)
@@ -979,6 +1020,7 @@ final class MarkLabAppModel: ObservableObject {
     pendingSharedMarkdown = nil
     pendingDiskIngestion = nil
     embeddedCollabURL = nil
+    retainedCloudCopyAvailable = false
     latestLink = nil
     latestGrantId = nil
     managedAccessLinks = []
@@ -1088,17 +1130,28 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func loadVersionHistory(createAutosaveCheckpoint: Bool = true) async {
-    guard let hostedShareController, embeddedCollabURL != nil else {
-      statusText = "Start sharing before viewing online version history."
+    guard let hostedShareController, hasCloudCopyReference else {
+      statusText = "Open a file with a cloud copy before viewing online version history."
       return
     }
+    versionHistoryRequestRevision += 1
+    let requestRevision = versionHistoryRequestRevision
+    let expectedFileURL = document?.fileURL
     isLoadingVersions = true
-    defer { isLoadingVersions = false }
+    defer {
+      if requestRevision == versionHistoryRequestRevision {
+        isLoadingVersions = false
+      }
+    }
     do {
       if createAutosaveCheckpoint, conflict == nil {
         _ = try? await hostedShareController.autosaveVersion()
       }
       let versions = try await hostedShareController.listVersions()
+      guard requestRevision == versionHistoryRequestRevision,
+            document?.fileURL == expectedFileURL,
+            hasCloudCopyReference
+      else { return }
       versionHistory = versions
       if let selectedVersionId,
          versions.contains(where: { $0.versionId == selectedVersionId }) {
@@ -1109,21 +1162,29 @@ final class MarkLabAppModel: ObservableObject {
       }
       statusText = versions.isEmpty ? "No online versions yet." : "Loaded \(versions.count) online version\(versions.count == 1 ? "" : "s")."
     } catch {
+      guard requestRevision == versionHistoryRequestRevision else { return }
       statusText = Self.versionHistoryStatus(for: error)
     }
   }
 
   func previewVersion(_ versionId: String) async {
-    guard let hostedShareController, embeddedCollabURL != nil else {
-      statusText = "Start sharing before previewing online versions."
+    guard let hostedShareController, hasCloudCopyReference else {
+      statusText = "Open a file with a cloud copy before previewing online versions."
       return
     }
+    let expectedFileURL = document?.fileURL
     selectedVersionId = versionId
     restoreVersionConfirmation = ""
     do {
-      selectedVersion = try await hostedShareController.showVersion(versionId: versionId)
+      let snapshot = try await hostedShareController.showVersion(versionId: versionId)
+      guard selectedVersionId == versionId,
+            document?.fileURL == expectedFileURL,
+            hasCloudCopyReference
+      else { return }
+      selectedVersion = snapshot
       statusText = "Previewing version \(selectedVersion?.versionNumber ?? 0)."
     } catch {
+      guard selectedVersionId == versionId else { return }
       selectedVersion = nil
       statusText = Self.versionHistoryStatus(for: error)
     }
@@ -1139,7 +1200,11 @@ final class MarkLabAppModel: ObservableObject {
       return
     }
     do {
-      try flushPendingSharedProjection()
+      let projection = try flushPendingSharedProjection()
+      guard !projection.openedConflict else {
+        statusText = "Resolve the conflict before saving a version."
+        return
+      }
       let result = try await hostedShareController.saveVersion()
       await loadVersionHistory(createAutosaveCheckpoint: false)
       selectedVersionId = result.versionId
@@ -1161,18 +1226,39 @@ final class MarkLabAppModel: ObservableObject {
       statusText = "Start sharing before restoring an online version."
       return
     }
-    let sourceSnapshot = selectedVersion
+    guard let sourceSnapshot = selectedVersion,
+          sourceSnapshot.versionId == selectedVersionId
+    else {
+      statusText = "Preview a version before restoring."
+      return
+    }
     do {
+      let projection = try flushPendingSharedProjection()
+      guard !projection.openedConflict else {
+        statusText = "Resolve the conflict before restoring a version."
+        return
+      }
       let result = try await hostedShareController.restoreVersion(versionId: selectedVersionId)
+      let restoredSnapshot = try await hostedShareController.showVersion(versionId: result.versionId)
+      guard restoredSnapshot.versionId == result.versionId,
+            NativeProjectionBaselineRecord.markdownHash(restoredSnapshot.markdown) == result.hash
+      else {
+        throw NativeVersionHistoryError.restoreFailed
+      }
+      projectionTask?.cancel()
+      projectionTask = nil
+      pendingSharedMarkdown = nil
       restoreVersionConfirmation = ""
       selectedVersion = nil
-      if let sourceSnapshot {
-        try projectSharedMarkdownImmediately(sourceSnapshot.markdown)
+      let localProjection = try projectSharedMarkdownImmediately(restoredSnapshot.markdown)
+      guard !localProjection.openedConflict else {
+        statusText = "Resolve the conflict before restoring a version."
+        return
       }
       reloadEmbeddedCollabEditor()
       await loadVersionHistory(createAutosaveCheckpoint: false)
       self.selectedVersionId = result.versionId
-      await previewVersion(result.versionId)
+      selectedVersion = restoredSnapshot
       statusText = "Restored version \(result.versionNumber). The local file will update through shared projection."
     } catch {
       statusText = Self.versionHistoryStatus(for: error)
@@ -1194,6 +1280,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   private func clearVersionHistoryState() {
+    versionHistoryRequestRevision += 1
     versionHistory = []
     selectedVersionId = nil
     selectedVersion = nil
@@ -1276,20 +1363,22 @@ final class MarkLabAppModel: ObservableObject {
 
   func flushPendingSharedProjectionFromTimer() {
     do {
-      try flushPendingSharedProjection()
+      _ = try flushPendingSharedProjection()
     } catch {
       statusText = "Unable to project shared Markdown to disk."
     }
   }
 
-  func flushPendingSharedProjection() throws {
-    guard let markdown = pendingSharedMarkdown else { return }
-    try projectSharedMarkdownImmediately(markdown)
+  func flushPendingSharedProjection() throws -> SharedProjectionResult {
+    guard let markdown = pendingSharedMarkdown else { return .noPending }
+    projectionTask?.cancel()
+    projectionTask = nil
     pendingSharedMarkdown = nil
+    return try projectSharedMarkdownImmediately(markdown)
   }
 
-  func projectSharedMarkdownImmediately(_ markdown: String) throws {
-    guard var currentDocument = document else { return }
+  func projectSharedMarkdownImmediately(_ markdown: String) throws -> SharedProjectionResult {
+    guard var currentDocument = document else { return .noPending }
     let diskDocument = try LocalMarkdownDocument.open(fileURL: currentDocument.fileURL, shared: true)
     let diskMarkdown = diskDocument.markdownForSave()
     if let lastProjectedMarkdown,
@@ -1303,7 +1392,7 @@ final class MarkLabAppModel: ObservableObject {
         ),
         status: "Conflict: local file changed outside MarkLab while collaboration changed."
       )
-      return
+      return .conflictOpened
     }
     currentDocument.replaceText(markdown)
     try currentDocument.save()
@@ -1311,6 +1400,7 @@ final class MarkLabAppModel: ObservableObject {
     text = markdown
     try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
     statusText = "Projected shared Markdown to \(currentDocument.fileURL.lastPathComponent)."
+    return .applied
   }
 
   func ingestExternalFileChanges() {

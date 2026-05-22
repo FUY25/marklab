@@ -203,6 +203,11 @@ function createValidYjsState(): Uint8Array {
 function createRestorePool(options: RestorePoolOptions = {}) {
   const queries: CapturedQuery[] = [];
   let nextVersionNumber = 3;
+  let currentMarkdown = options.currentMarkdown ?? '# Current\n';
+  let currentHash = options.currentHash ?? 'sha256:head';
+  let headVersionId = options.headVersionId ?? 'ver_head';
+  let headHash = options.headHash ?? currentHash;
+  const insertedVersions = new Map<string, { markdown: string; hash: string }>();
 
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
@@ -217,10 +222,10 @@ function createRestorePool(options: RestorePoolOptions = {}) {
           {
             doc_id: 'doc_001',
             branch_id: params?.[1] ?? 'br_main',
-            version_id: options.headVersionId ?? 'ver_head',
+            version_id: headVersionId,
             version_number: 2,
-            current_hash: options.currentHash ?? 'sha256:head',
-            current_markdown: options.currentMarkdown ?? '# Current\n',
+            current_hash: currentHash,
+            current_markdown: currentMarkdown,
           } as Row,
         ],
         rowCount: 1,
@@ -242,18 +247,38 @@ function createRestorePool(options: RestorePoolOptions = {}) {
       };
     }
 
+    if (sql.includes('select id, branch_id') && sql.includes('markdown_snapshot') && sql.includes('where doc_id = $1')) {
+      return {
+        rows: [
+          {
+            id: 'ver_source',
+            branch_id: options.sourceBranchId ?? 'br_main',
+            parent_version_id: null,
+            version_number: 1,
+            markdown_snapshot: '# Source snapshot\n',
+            hash: 'sha256:source',
+            actor_type: 'system',
+            actor_id: null,
+            operation: 'import',
+            created_at: new Date('2026-04-29T12:00:00Z'),
+          } as Row,
+        ],
+        rowCount: 1,
+      };
+    }
+
     if (sql.includes('from document_branches b') && sql.includes('document_branch_states')) {
       options.events?.push('read_branch_version_state');
       return {
         rows: [
           {
-            current_markdown: options.currentMarkdown ?? '# Current\n',
-            current_hash: options.currentHash ?? 'sha256:head',
+            current_markdown: currentMarkdown,
+            current_hash: currentHash,
             yjs_state: Buffer.from(createValidYjsState()),
             yjs_state_fingerprint: '101',
-            head_version_id: options.headVersionId ?? 'ver_head',
+            head_version_id: headVersionId,
             head_version_number: 2,
-            head_hash: options.headHash ?? options.currentHash ?? 'sha256:head',
+            head_hash: headHash,
           } as Row,
         ],
         rowCount: 1,
@@ -266,10 +291,27 @@ function createRestorePool(options: RestorePoolOptions = {}) {
 
     if (sql.includes('insert into document_versions')) {
       const operation = params?.[8];
+      const id = operation === 'manual_save' || operation === 'autosave' ? 'ver_checkpoint' : 'ver_rollback';
+      insertedVersions.set(id, {
+        markdown: String(params?.[4] ?? ''),
+        hash: String(params?.[5] ?? ''),
+      });
       return {
-        rows: [{ id: operation === 'manual_save' || operation === 'autosave' ? 'ver_checkpoint' : 'ver_rollback' } as Row],
+        rows: [{ id } as Row],
         rowCount: 1,
       };
+    }
+
+    if (sql.includes('update document_branch_states')) {
+      currentMarkdown = String(params?.[1] ?? currentMarkdown);
+      currentHash = String(params?.[2] ?? currentHash);
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('update document_branches') && sql.includes('set head_version_id')) {
+      headVersionId = String(params?.[1] ?? headVersionId);
+      headHash = insertedVersions.get(headVersionId)?.hash ?? headHash;
+      return { rows: [], rowCount: 1 };
     }
 
     return { rows: [], rowCount: 1 };
@@ -857,6 +899,163 @@ describe('version routes', () => {
       branchId: 'br_main',
       markdown: '# Source snapshot\n',
     }]);
+  });
+
+  it('checkpoints the live provider snapshot before applying a rollback to the provider', async () => {
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const liveMarkdown = '# Unsaved provider edits\n';
+    const liveHash = sha256Hex(liveMarkdown);
+    const liveYjsState = createValidYjsState();
+    const { pool, queries } = createRestorePool({
+      currentMarkdown: '# Stale DB mirror\n',
+      currentHash: 'sha256:stale',
+      headVersionId: 'ver_head',
+      headHash: 'sha256:stale',
+    });
+    const liveWriter = createRestoreLiveWriter(liveMarkdown, liveHash);
+    const app = createHttpApp(pool, liveWriter, {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: liveMarkdown,
+            hash: liveHash,
+            yjsState: liveYjsState,
+          };
+        },
+        async applyMarkdownSnapshot(input) {
+          providerApplies.push(input);
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/restore')
+      .send({ versionId: 'ver_source' })
+      .expect(200);
+
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInserts.map((query) => query.params?.[8])).toEqual(['manual_save', 'rollback']);
+    expect(versionInserts[0]?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_head',
+      3,
+      liveMarkdown,
+      liveHash,
+      'user',
+      'dev-anonymous',
+      'manual_save',
+    ]);
+    expect(providerApplies).toEqual([{
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown: '# Source snapshot\n',
+    }]);
+  });
+
+  it('does not move branch state when provider rollback application fails', async () => {
+    const { pool, queries } = createRestorePool({
+      currentMarkdown: '# Stale DB mirror\n',
+      currentHash: 'sha256:stale',
+      headVersionId: 'ver_head',
+      headHash: 'sha256:stale',
+    });
+    const liveWriter = createRestoreLiveWriter('# Provider draft\n', sha256Hex('# Provider draft\n'));
+    const app = createHttpApp(pool, liveWriter, {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: '# Provider draft\n',
+            hash: sha256Hex('# Provider draft\n'),
+            yjsState: createValidYjsState(),
+          };
+        },
+        async applyMarkdownSnapshot() {
+          throw new Error('collab_snapshot_unavailable');
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/restore')
+      .send({ versionId: 'ver_source' })
+      .expect(503, { error: 'collab_snapshot_unavailable' });
+
+    expect(liveWriter.transactions).toEqual([]);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInserts.map((query) => query.params?.[8])).toEqual(['manual_save']);
+    expect(queries.some((query) => (
+      query.sql.includes('insert into document_versions')
+      && query.params?.[8] === 'rollback'
+    ))).toBe(false);
+    const stateUpdates = queries.filter((query) => query.sql.includes('update document_branch_states'));
+    expect(stateUpdates).toHaveLength(1);
+    expect(stateUpdates[0]?.params?.[1]).toBe('# Provider draft\n');
+  });
+
+  it('compensates the provider snapshot when database rollback restore fails after provider apply', async () => {
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const { pool, queries } = createRestorePool({
+      currentMarkdown: '# Stale DB mirror\n',
+      currentHash: 'sha256:stale',
+      headVersionId: 'ver_head',
+      headHash: 'sha256:stale',
+    });
+    const liveWriter: LiveMarkdownWriter = {
+      async applyMarkdownTransaction() {
+        throw new Error('db_restore_failed');
+      },
+    };
+    const app = createHttpApp(pool, liveWriter, {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: '# Provider draft\n',
+            hash: sha256Hex('# Provider draft\n'),
+            yjsState: createValidYjsState(),
+          };
+        },
+        async applyMarkdownSnapshot(input) {
+          providerApplies.push(input);
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/restore')
+      .send({ versionId: 'ver_source' })
+      .expect(500, { error: 'internal_error' });
+
+    expect(providerApplies).toEqual([
+      {
+        docId: 'doc_001',
+        branchId: 'br_main',
+        markdown: '# Source snapshot\n',
+      },
+      {
+        docId: 'doc_001',
+        branchId: 'br_main',
+        markdown: '# Provider draft\n',
+      },
+    ]);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInserts.map((query) => query.params?.[8])).toEqual(['manual_save']);
+    expect(queries.some((query) => (
+      query.sql.includes('insert into document_versions')
+      && query.params?.[8] === 'rollback'
+    ))).toBe(false);
   });
 
   it('restores only the requested branch state and active collaboration room', async () => {

@@ -125,6 +125,11 @@ function createAccessRoutePool() {
       };
     }
 
+    if (sql.includes('select doc_id, branch_id, token_hash, can_write') && sql.includes('from agent_tokens')) {
+      const row = agentTokens.find((candidate) => candidate.id === params?.[0] && !candidate.revoked_at);
+      return { rows: (row ? [row] : []) as Row[], rowCount: row ? 1 : 0 };
+    }
+
     if (sql.includes('from agent_tokens') && sql.includes('token_hash = $1')) {
       const rows = agentTokens.filter(
         (row) => row.token_hash === params?.[0] && row.doc_id === params?.[1] && (row.branch_id === params?.[2] || row.branch_id === null),
@@ -209,6 +214,17 @@ function createAccessRoutePool() {
 	        } as Row],
 	        rowCount: 1,
 	      };
+	    }
+
+	    if (sql.includes('from document_branches b') && sql.includes('provider_doc_id')) {
+	      const branchId = params?.[1] as string | null | undefined;
+	      const rows = branchId
+	        ? [{ branch_id: branchId, provider_doc_id: `provider_${branchId}` }]
+	        : [
+	            { branch_id: 'br_main', provider_doc_id: 'provider_br_main' },
+	            { branch_id: 'br_notes', provider_doc_id: 'provider_br_notes' },
+	          ];
+	      return { rows: rows as Row[], rowCount: rows.length };
 	    }
 
 	    if (sql.includes('from document_branches') && sql.includes('is_archived = false')) {
@@ -523,8 +539,13 @@ describe('access routes', () => {
 
   it('creates, lists without raw secret, and revokes agent tokens', async () => {
     requireAuth('admin-secret');
-    const { pool, agentTokens } = createAccessRoutePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const { pool, queries, agentTokens } = createAccessRoutePool();
+    const closedProviderDocs: string[][] = [];
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      closeProviderDocConnections(providerDocIds) {
+        closedProviderDocs.push([...providerDocIds]);
+      },
+    });
     const admin = { Authorization: 'Bearer admin-secret' };
 
     const createResponse = await request(app)
@@ -562,6 +583,11 @@ describe('access routes', () => {
 
     await request(app).delete('/api/agent-tokens/agt_1').set(admin).expect(204);
     expect(agentTokens[0]?.revoked_at).toBeTruthy();
+    expect(closedProviderDocs).toEqual([['provider_br_main']]);
+    expect(queries.some((query) => (
+      query.sql.includes('update provider_token_issuances')
+      && query.params?.[3] === 'agent_token_revoked'
+    ))).toBe(true);
 
     await request(app).delete('/api/agent-tokens/missing').set(admin).expect(404, { error: 'token_not_found' });
   });
@@ -569,7 +595,16 @@ describe('access routes', () => {
   it('creates, lists without raw secret, and revokes share links', async () => {
     requireAuth('admin-secret');
     const { pool, queries, accessGrants } = createAccessRoutePool();
-    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+    const closedRooms: string[] = [];
+    const closedProviderDocs: string[][] = [];
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      closeCollabDocumentConnections(roomName) {
+        closedRooms.push(roomName);
+      },
+      closeProviderDocConnections(providerDocIds) {
+        closedProviderDocs.push([...providerDocIds]);
+      },
+    });
     const admin = { Authorization: 'Bearer admin-secret' };
 
     const createResponse = await request(app)
@@ -608,6 +643,12 @@ describe('access routes', () => {
 
     await request(app).delete('/api/share-links/agr_1').set(admin).expect(204);
     expect(accessGrants[0]?.revoked_at).toBeTruthy();
+    expect(closedRooms).toEqual([toRoomName('doc_001', 'br_main')]);
+    expect(closedProviderDocs).toEqual([['provider_br_main']]);
+    expect(queries.some((query) => (
+      query.sql.includes('update provider_token_issuances')
+      && query.params?.[3] === 'share_link_revoked'
+    ))).toBe(true);
     expect(queries.some((query) => /(?:insert into|update) share_links/u.test(query.sql))).toBe(false);
 
     await request(app).delete('/api/share-links/missing').set(admin).expect(404, { error: 'share_link_not_found' });
@@ -615,11 +656,15 @@ describe('access routes', () => {
 
   it('creates, lists without raw secret, and revokes unified access grants', async () => {
     requireAuth('admin-secret');
-    const { pool, accessGrants } = createAccessRoutePool();
+    const { pool, queries, accessGrants } = createAccessRoutePool();
     const closedRooms: string[] = [];
+    const closedProviderDocs: string[][] = [];
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
       closeCollabDocumentConnections(roomName) {
         closedRooms.push(roomName);
+      },
+      closeProviderDocConnections(providerDocIds) {
+        closedProviderDocs.push([...providerDocIds]);
       },
     });
     const admin = { Authorization: 'Bearer admin-secret' };
@@ -667,6 +712,11 @@ describe('access routes', () => {
     await request(app).delete('/api/access-grants/agr_1').set(admin).expect(204);
     expect(accessGrants[0]?.revoked_at).toBeTruthy();
     expect(closedRooms).toEqual([toRoomName('doc_001', 'br_main')]);
+    expect(closedProviderDocs).toEqual([['provider_br_main']]);
+    expect(queries.some((query) => (
+      query.sql.includes('update provider_token_issuances')
+      && query.params?.[3] === 'access_grant_revoked'
+    ))).toBe(true);
 
     await request(app).delete('/api/access-grants/missing').set(admin).expect(404, { error: 'access_grant_not_found' });
   });
