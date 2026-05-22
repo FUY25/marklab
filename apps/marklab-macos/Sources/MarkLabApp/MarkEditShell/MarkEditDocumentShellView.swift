@@ -28,6 +28,25 @@ enum MarkEditConflictReviewMode: String, CaseIterable, Identifiable {
   }
 }
 
+enum MarkEditSharingVersionsInspectorMode: String, CaseIterable, Identifiable {
+  case sharing
+  case versions
+  case settings
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .sharing:
+      return "Sharing"
+    case .versions:
+      return "Versions"
+    case .settings:
+      return "Settings"
+    }
+  }
+}
+
 // Adapted from MarkEdit, MIT licensed.
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/EditorWindowController.swift
 // Source: Learning resources/MarkEdit/MarkEditMac/Sources/Editor/Views/EditorStatusView.swift
@@ -38,7 +57,8 @@ struct MarkEditDocumentShellView: View {
   static let sharingAndVersionsLabel = "Sharing & Versions"
   static let showSharingAndVersionsLabel = "Show Sharing & Versions"
   static let cloudCopySectionTitle = "Cloud Copy"
-  static let cloudCopyAndVersionsLabel = "Cloud Copy & Versions"
+  static let versionHistorySectionTitle = "Version History"
+  static let localFileSettingsSectionTitle = "Local File Settings"
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
 
@@ -46,7 +66,7 @@ struct MarkEditDocumentShellView: View {
   let descriptor = MarkEditShellDescriptor.current
   private let retainsSharedDocumentOnDisappear: Bool
   @State private var collaborationInspectorPresented = false
-  @State private var cloudCopyVersionsPresented = false
+  @State private var sharingVersionsMode: MarkEditSharingVersionsInspectorMode = .sharing
   @State private var editorSelectionStatus = "Ln 1, Col 1"
   @State private var editorCommandSequence = 0
   @State private var editorCommand: MarkEditLocalEditorCommand?
@@ -86,16 +106,12 @@ struct MarkEditDocumentShellView: View {
         headingToolbarMenu
         emphasisToolbarGroup
         listToolbarMenu
-        documentToolbarMenu
         collaborationToolbarMenu
       }
     }
     .inspector(isPresented: collaborationInspectorBinding) {
       inspector
-        .inspectorColumnWidth(min: 300, ideal: 320, max: 420)
-    }
-    .sheet(isPresented: $cloudCopyVersionsPresented) {
-      cloudCopyVersionsSheet
+        .inspectorColumnWidth(min: 340, ideal: 380, max: 520)
     }
     .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
       model.ingestExternalFileChanges()
@@ -157,10 +173,13 @@ struct MarkEditDocumentShellView: View {
   }
 
   private var hasCollaborationInspectorContent: Bool {
-    model.hasSharedDocument
-      || !model.managedAccessLinks.isEmpty
-      || !model.activeCollaborators.isEmpty
-      || model.conflict != nil
+    Self.sharingVersionsInspectorAvailableForTesting(
+      filePath: model.filePath,
+      hasSharedDocument: model.hasSharedDocument,
+      hasManagedAccessLinks: !model.managedAccessLinks.isEmpty,
+      hasActiveCollaborators: !model.activeCollaborators.isEmpty,
+      hasConflict: model.conflict != nil
+    )
   }
 
   private var tableOfContentsToolbarMenu: some View {
@@ -225,18 +244,6 @@ struct MarkEditDocumentShellView: View {
     .disabled(!localFormattingEnabled)
   }
 
-  private var documentToolbarMenu: some View {
-    Menu {
-      Toggle("Local Autosave", isOn: Binding(
-        get: { model.localAutosaveEnabled },
-        set: { model.setLocalAutosaveEnabled($0) }
-      ))
-    } label: {
-      Label("Document", systemImage: "doc.text")
-    }
-    .help("Document")
-  }
-
   private var collaborationToolbarMenu: some View {
     Menu {
       if !model.hasSharedDocument {
@@ -269,14 +276,16 @@ struct MarkEditDocumentShellView: View {
           Label("Create View Link", systemImage: "eye")
         }
         .disabled(!model.canCreateSharingLink)
-
-        Button {
-          collaborationInspectorPresented.toggle()
-        } label: {
-          Label(Self.showSharingAndVersionsLabel, systemImage: "sidebar.right")
-        }
-        .disabled(!hasCollaborationInspectorContent)
       }
+
+      Divider()
+
+      Button {
+        collaborationInspectorPresented.toggle()
+      } label: {
+        Label(Self.showSharingAndVersionsLabel, systemImage: "sidebar.right")
+      }
+      .disabled(!hasCollaborationInspectorContent)
     } label: {
       Label(Self.sharingAndVersionsLabel, systemImage: "link")
     }
@@ -307,106 +316,152 @@ struct MarkEditDocumentShellView: View {
 
   private var inspector: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        Text(Self.sharingAndVersionsLabel)
-          .font(.headline)
-        if model.hasSharedDocument {
-          inspectorSection("Access Links") {
-            HStack {
-              Button("Create Edit Link") { model.createLink(role: .edit) }
-                .disabled(!model.canCreateSharingLink)
-              Button("Create View Link") { model.createLink(role: .view) }
-                .disabled(!model.canCreateSharingLink)
-            }
-            if model.managedAccessLinks.isEmpty {
-              Text("No access links created.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            } else {
-              ForEach(model.managedAccessLinks) { link in
-                accessLinkRow(link)
-              }
-            }
-          }
-
-          inspectorSection("Active Collaborators") {
-            if model.activeCollaborators.isEmpty {
-              Text("No other connected sessions.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            } else {
-              ForEach(model.activeCollaborators) { collaborator in
-                collaboratorRow(collaborator)
-              }
-            }
-          }
-
-          inspectorSection("Local Sync") {
-            Text(localSyncSummary)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            if let filePath = model.filePath {
-              Text(filePath)
-                .font(.caption)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-            }
-            Button("Stop Sharing") { model.stopSharing() }
-              .help(Self.stopSharingHelpText)
-              .disabled(!model.canStopSharing)
-          }
-
-          inspectorSection(Self.cloudCopySectionTitle) {
-            Text(Self.cloudCopyRetentionSummary)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Button(Self.cloudCopyAndVersionsLabel) {
-              cloudCopyVersionsPresented = true
-            }
+      VStack(alignment: .leading, spacing: 16) {
+        inspectorHeader
+        Picker("", selection: $sharingVersionsMode) {
+          ForEach(MarkEditSharingVersionsInspectorMode.allCases) { mode in
+            Text(mode.label).tag(mode)
           }
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+
+        switch sharingVersionsMode {
+        case .sharing:
+          sharingInspectorContent
+        case .versions:
+          versionsInspectorContent
+        case .settings:
+          settingsInspectorContent
+        }
+
         if let conflict = model.conflict {
           conflictInspectorSummary(conflict)
         }
       }
-      .padding(14)
+      .padding(16)
     }
     .background(.regularMaterial)
   }
 
-  private var cloudCopyVersionsSheet: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      HStack {
-        Text(Self.cloudCopyAndVersionsLabel)
-          .font(.title3.weight(.semibold))
-        Spacer()
-        Button("Done") {
-          cloudCopyVersionsPresented = false
+  private var inspectorHeader: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(Self.sharingAndVersionsLabel)
+        .font(.headline)
+      Text(sharingVersionsSubtitle)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var sharingInspectorContent: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      if model.hasSharedDocument {
+        inspectorSection("Access Links") {
+          HStack {
+            Button("Create Edit Link") { model.createLink(role: .edit) }
+              .disabled(!model.canCreateSharingLink)
+            Button("Create View Link") { model.createLink(role: .view) }
+              .disabled(!model.canCreateSharingLink)
+          }
+          if model.managedAccessLinks.isEmpty {
+            Text("No access links created.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          } else {
+            ForEach(model.managedAccessLinks) { link in
+              accessLinkRow(link)
+            }
+          }
         }
-        .keyboardShortcut(.cancelAction)
+
+        inspectorSection("Active Collaborators") {
+          if model.activeCollaborators.isEmpty {
+            Text("No other connected sessions.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          } else {
+            ForEach(model.activeCollaborators) { collaborator in
+              collaboratorRow(collaborator)
+            }
+          }
+        }
+
+        inspectorSection("Local Sync") {
+          Text(localSyncSummary)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          if let filePath = model.filePath {
+            Text(filePath)
+              .font(.caption)
+              .lineLimit(2)
+              .truncationMode(.middle)
+              .textSelection(.enabled)
+          }
+          Button("Stop Sharing") { model.stopSharing() }
+            .help(Self.stopSharingHelpText)
+            .disabled(!model.canStopSharing)
+        }
+      } else {
+        inspectorSection("Start Sharing") {
+          Text("Create a hosted copy to share this Markdown file and start online version history.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          Button("Start Sharing") { model.startSharing() }
+            .disabled(!model.canStartSharing)
+        }
       }
 
-      Divider()
+      inspectorSection(Self.cloudCopySectionTitle) {
+        Text(Self.cloudCopyRetentionSummary)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+        if !model.hasSharedDocument {
+          Text("Cloud restore will appear here when a retained cloud copy is linked to this local file.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
 
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Versions")
-          .font(.headline)
-        Text("Version history will list hosted snapshots, previews, manual saves, and restore actions here.")
+  private var versionsInspectorContent: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      inspectorSection(Self.versionHistorySectionTitle) {
+        Text("Version history will appear in this sidebar so the current document stays visible while you review past snapshots.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+        Text("List, preview, manual save, and restore actions are not wired yet.")
           .font(.callout)
           .foregroundStyle(.secondary)
       }
 
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Danger Zone")
-          .font(.headline)
+      inspectorSection("Danger Zone") {
         Text("Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history.")
           .font(.callout)
           .foregroundStyle(.secondary)
       }
     }
-    .padding(20)
-    .frame(minWidth: 520, minHeight: 280)
+  }
+
+  private var settingsInspectorContent: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      inspectorSection(Self.localFileSettingsSectionTitle) {
+        Toggle("Local Autosave", isOn: Binding(
+          get: { model.localAutosaveEnabled },
+          set: { model.setLocalAutosaveEnabled($0) }
+        ))
+        Text("Applies before sharing. Shared documents use realtime projection to the local Markdown file.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var sharingVersionsSubtitle: String {
+    if model.hasSharedDocument { return "Sharing is on. Links, collaborators, cloud copy, and versions are managed here." }
+    if model.filePath != nil { return "Local file. Start sharing or review retained cloud versions from this panel." }
+    return "Open a Markdown file to manage sharing and versions."
   }
 
   private func conflictInspectorSummary(_ conflict: MarkLabConflict) -> some View {
@@ -428,9 +483,9 @@ struct MarkEditDocumentShellView: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
         Text(link.role.rawValue.capitalized)
-          .font(.caption.weight(.semibold))
+          .font(.callout.weight(.semibold))
         Text(link.status.label)
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(link.status == .active ? .green : .secondary)
         Spacer()
         Button("Copy") { model.copyAccessLink(link) }
@@ -440,23 +495,23 @@ struct MarkEditDocumentShellView: View {
       }
       if let createdAt = link.createdAt {
         Text("Created \(createdAt)")
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(.secondary)
       }
       if let expiresAt = link.expiresAt {
         Text("Expires \(expiresAt)")
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(.secondary)
       }
       if let url = link.url {
         Text(url)
-          .font(.caption2)
+          .font(.caption)
           .lineLimit(2)
           .truncationMode(.middle)
           .textSelection(.enabled)
       } else {
         Text("URL unavailable after relaunch; revoke still works.")
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(.secondary)
       }
     }
@@ -471,10 +526,10 @@ struct MarkEditDocumentShellView: View {
         .frame(width: 10, height: 10)
       VStack(alignment: .leading, spacing: 2) {
         Text(collaborator.name)
-          .font(.caption.weight(.semibold))
+          .font(.callout.weight(.semibold))
           .lineLimit(1)
         Text("\(collaborator.roleLabel) · \(collaborator.clientTypeLabel)")
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(.secondary)
       }
       Spacer()
@@ -581,6 +636,20 @@ struct MarkEditDocumentShellView: View {
 
   static func showsEditorStatusOverlayForTesting(hasConflict: Bool) -> Bool {
     !hasConflict
+  }
+
+  static func sharingVersionsInspectorAvailableForTesting(
+    filePath: String?,
+    hasSharedDocument: Bool,
+    hasManagedAccessLinks: Bool,
+    hasActiveCollaborators: Bool,
+    hasConflict: Bool
+  ) -> Bool {
+    filePath != nil
+      || hasSharedDocument
+      || hasManagedAccessLinks
+      || hasActiveCollaborators
+      || hasConflict
   }
 
   static func statusSummaryTextForTesting(

@@ -62,19 +62,23 @@ Active sharing menu:
   Show Sharing & Versions
 
 Right inspector: Sharing & Versions
-  Access Links
-  Active Collaborators
-  Local Sync
-  Cloud Copy
-    Cloud copy and online version history are kept after Stop Sharing.
-    Cloud Copy & Versions
-
-Wide sheet: Cloud Copy & Versions
+  Sharing
+    Access Links
+    Active Collaborators
+    Local Sync
+    Cloud Copy
   Versions
-  Danger Zone
+    Version list
+    Selected version preview
+    Restore confirmation
+    Danger Zone
+  Settings
+    Local Autosave
 ```
 
-The narrow inspector remains for status and common sharing actions. The wider sheet owns version preview/restore and destructive cloud-copy actions.
+The inspector must open even for a local-only file. A user may need to restore from a retained cloud copy after sharing was stopped.
+
+The inspector owns version preview/restore so the current article remains visible in the main editor while the user reviews past versions. Do not open a separate window or sheet for ordinary version history.
 
 `Clear Local MarkLab Data` does not belong in this document inspector. It belongs in app-level Settings under Privacy/Support/Reset.
 
@@ -114,11 +118,15 @@ Testing:
 
 Scope:
 
-- Add a `Cloud Copy` section to the Sharing & Versions inspector when sharing is active.
+- Allow `Show Sharing & Versions` when a local file is open even if sharing is not active.
+- Remove the standalone toolbar `Document` menu that only contained `Local Autosave`.
+- Redesign the Sharing & Versions inspector around `Sharing`, `Versions`, and `Settings` modes.
+- Add `Local Autosave` under the inspector's `Settings` mode.
+- Add a `Cloud Copy` section to the Sharing & Versions inspector.
 - Show concise copy:
   - "Cloud copy and online version history are kept after Stop Sharing."
-- Add a `Cloud Copy & Versions` button that opens a wider sheet.
-- The sheet can initially be a skeleton with `Versions` and `Danger Zone` sections.
+- Add a `Versions` mode skeleton in the same inspector, not a separate sheet.
+- Record that true local-only cloud restore requires a retained cloud-copy reference/lookup path before restore can be functional after Stop Sharing.
 
 Expected files:
 
@@ -127,15 +135,16 @@ Expected files:
 
 Acceptance:
 
-- Narrow inspector remains readable and does not become the version-history UI.
-- `Cloud Copy & Versions` opens a larger surface.
-- Sheet can be dismissed without changing document state.
+- Local-only files can open the Sharing & Versions inspector.
+- The current editor remains visible while the user opens the Versions mode.
+- The standalone toolbar autosave menu is gone.
+- Local Autosave is available from the inspector's Settings mode.
 - No destructive action is exposed yet unless backend support exists.
 
 Testing:
 
 - Swift tests for conditional inspector content.
-- Manual/visual checkpoint after the sheet layout exists.
+- Manual/visual checkpoint after the redesigned inspector exists.
 
 ### Phase 3 - Native Version History Client
 
@@ -172,7 +181,7 @@ Testing:
 
 Scope:
 
-- Fill the `Cloud Copy & Versions` sheet's `Versions` section.
+- Fill the Sharing & Versions inspector's `Versions` mode.
 - Include:
   - `Save Version`;
   - version list ordered newest first;
@@ -198,7 +207,7 @@ Testing:
 - Swift model/client tests for successful and failed actions.
 - Existing API tests for restore still pass.
 - Native/browser smoke for shared app + browser after restore.
-- Visual checkpoint required for sheet readability and restore confirmation.
+- Visual checkpoint required for sidebar readability and restore confirmation.
 
 ### Phase 5 - Delete Cloud Copy Backend
 
@@ -241,7 +250,7 @@ Testing:
 
 Scope:
 
-- Add `Delete Cloud Copy` under `Cloud Copy & Versions` -> `Danger Zone`.
+- Add `Delete Cloud Copy` under `Sharing & Versions` -> `Versions` -> `Danger Zone`.
 - Require explicit confirmation.
 - Confirmation copy must say:
   - hosted copy and online version history will be deleted;
@@ -313,7 +322,7 @@ Acceptance:
 Stop and ask for manual visual review after:
 
 - Phase 1 if `Sharing & Versions` label length looks awkward in the toolbar menu.
-- Phase 2 when the `Cloud Copy` inspector section and empty sheet exist.
+- Phase 2 when the redesigned `Sharing / Versions / Settings` inspector exists.
 - Phase 4 when version list/preview/restore confirmation are visible.
 - Phase 6 when `Delete Cloud Copy` danger-zone UI is visible.
 

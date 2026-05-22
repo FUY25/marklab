@@ -311,7 +311,7 @@ Checklist:
 - [x] Write implementation plan: [Sharing & Versions, Cloud Copy, And Version History Plan](../plans/2026-05-22-sharing-versions-cloud-copy-plan.md).
 - [x] Rename toolbar menu/item to `Sharing & Versions` / `Show Sharing & Versions`.
 - [x] Add Stop Sharing hover/help microcopy.
-- [x] Add `Cloud Copy & Versions` sheet opened from the Sharing & Versions inspector.
+- [x] Redesign the Sharing & Versions inspector with inline Sharing, Versions, and Settings modes.
 - [ ] Wire Version History UI to existing list/show/manual-save/restore APIs.
 - [ ] Implement or document fallback for Delete Cloud Copy.
 - [ ] Implement or document fallback for Clear Local MarkLab Data.
@@ -329,6 +329,8 @@ Progress log:
 | 2026-05-22 | Focused Gate 3 implementation plan written for Sharing & Versions, Cloud Copy, Version History, Delete Cloud Copy, Clear Local MarkLab Data, cleanup jobs, and restore drill. | `docs/plans/2026-05-22-sharing-versions-cloud-copy-plan.md` | Start Phase 1: labels and Stop Sharing help copy only. |
 | 2026-05-22 | Phase 1 of Sharing & Versions plan completed. Native toolbar menu, inspector toggle, and inspector title now use `Sharing & Versions`; Stop Sharing buttons expose hover/help copy explaining that cloud copy and version history are kept. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `apps/marklab-macos/Tests/MarkLabMacOSTests/MarkLabNativeUIStrategyTests.swift`; verification: `swift test --package-path apps/marklab-macos` | Start Phase 2: add a Cloud Copy section and `Cloud Copy & Versions` sheet skeleton. |
 | 2026-05-22 | Phase 2 skeleton completed. The Sharing & Versions inspector now has a Cloud Copy section explaining retained cloud/version data after Stop Sharing, and a `Cloud Copy & Versions` sheet skeleton with Versions and Danger Zone placeholders. No version API or destructive delete action is wired yet. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `apps/marklab-macos/Tests/MarkLabMacOSTests/MarkLabNativeUIStrategyTests.swift` | Run Swift verification, then visual-check the new inspector section and sheet before Phase 3. |
+| 2026-05-22 | Phase 2 visual review changed direction. The inspector must open even for local-only files, version history should live inline in the side panel so the current article remains visible, and Local Autosave should move out of the toolbar into settings. | User visual review; `docs/plans/2026-05-22-sharing-versions-cloud-copy-plan.md` | Replace the sheet skeleton with an inline Sharing/Versions/Settings inspector and rerun visual check before Phase 3. |
+| 2026-05-22 | Phase 2 correction implemented. Sharing & Versions now opens for local-only files, the standalone Document/Local Autosave toolbar menu was removed, Local Autosave moved to the inspector Settings mode, and Versions/Danger Zone placeholders live inline in the side inspector instead of a separate sheet. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `apps/marklab-macos/Tests/MarkLabMacOSTests/MarkLabNativeUIStrategyTests.swift`; verification: `swift test --package-path apps/marklab-macos` | Package and visual-check the redesigned inspector before Phase 3. |
 
 Exit criteria:
 

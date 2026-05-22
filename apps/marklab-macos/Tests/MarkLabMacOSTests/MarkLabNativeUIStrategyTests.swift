@@ -261,10 +261,30 @@ struct MarkLabNativeUIStrategyTests {
         == "Stops sync and revokes active links. Cloud copy and version history are kept."
     )
     #expect(MarkEditDocumentShellView.cloudCopySectionTitle == "Cloud Copy")
-    #expect(MarkEditDocumentShellView.cloudCopyAndVersionsLabel == "Cloud Copy & Versions")
+    #expect(MarkEditDocumentShellView.versionHistorySectionTitle == "Version History")
+    #expect(MarkEditDocumentShellView.localFileSettingsSectionTitle == "Local File Settings")
     #expect(
       MarkEditDocumentShellView.cloudCopyRetentionSummary
         == "Cloud copy and online version history are kept after Stop Sharing."
+    )
+    #expect(MarkEditSharingVersionsInspectorMode.allCases.map(\.label) == ["Sharing", "Versions", "Settings"])
+    #expect(
+      MarkEditDocumentShellView.sharingVersionsInspectorAvailableForTesting(
+        filePath: "/tmp/note.md",
+        hasSharedDocument: false,
+        hasManagedAccessLinks: false,
+        hasActiveCollaborators: false,
+        hasConflict: false
+      )
+    )
+    #expect(
+      !MarkEditDocumentShellView.sharingVersionsInspectorAvailableForTesting(
+        filePath: nil,
+        hasSharedDocument: false,
+        hasManagedAccessLinks: false,
+        hasActiveCollaborators: false,
+        hasConflict: false
+      )
     )
   }
 
