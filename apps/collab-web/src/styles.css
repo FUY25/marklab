@@ -22,66 +22,83 @@ textarea {
   display: grid;
   min-height: 100vh;
   place-items: center;
-  padding: 32px 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 247, 244, 0.98)),
-    #f7f7f4;
+  padding: 32px 20px;
+  background: #ffffff;
 }
 
 .auth-panel {
-  width: min(100%, 420px);
-  border: 1px solid #d8d6cd;
+  width: min(100%, 360px);
+  border: 1px solid #e6e6e4;
   border-radius: 8px;
-  padding: 28px;
+  padding: 30px;
   background: #ffffff;
-  box-shadow: 0 16px 40px rgba(27, 31, 35, 0.08);
 }
 
 .auth-mark {
-  margin: 0 0 18px;
-  color: #546054;
-  font-size: 13px;
-  font-weight: 700;
+  margin: 0 0 22px;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .auth-panel h1 {
   margin: 0;
-  color: #1b1f23;
-  font-size: 26px;
+  color: #191919;
+  font-size: 25px;
+  font-weight: 700;
   line-height: 1.15;
 }
 
 .auth-copy {
-  margin: 12px 0 22px;
-  color: #4f5750;
+  margin: 10px 0 24px;
+  color: #5f5f5b;
   font-size: 15px;
   line-height: 1.5;
 }
 
-.auth-primary {
+.auth-google {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 42px;
-  border: 1px solid #173f2b;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d9d9d6;
   border-radius: 6px;
   padding: 0 15px;
-  background: #173f2b;
-  color: #ffffff;
-  font-weight: 650;
+  background: #ffffff;
+  color: #191919;
+  font-weight: 600;
   line-height: 1;
   text-decoration: none;
 }
 
-.auth-primary:disabled {
-  cursor: wait;
-  opacity: 0.74;
+.auth-google:hover:not(:disabled) {
+  background: #f7f7f5;
 }
 
-.auth-primary:focus-visible {
-  outline: 3px solid rgba(31, 107, 55, 0.28);
+.auth-google:disabled {
+  cursor: wait;
+  color: #777773;
+  background: #fafafa;
+}
+
+.auth-google:focus-visible {
+  outline: 3px solid rgba(25, 25, 25, 0.14);
   outline-offset: 2px;
+}
+
+.auth-google-mark {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid #d9d9d6;
+  border-radius: 50%;
+  color: #191919;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .auth-status,
@@ -98,18 +115,18 @@ textarea {
 }
 
 .auth-status {
-  color: #38433d;
-  background: #f0f3ee;
+  color: #5f5f5b;
+  background: #f7f7f5;
 }
 
 .auth-alert {
-  color: #8a2d1f;
-  background: #fff0eb;
+  color: #191919;
+  background: #f7f7f5;
 }
 
 .auth-success {
-  color: #1f6b37;
-  background: #edf7ef;
+  color: #191919;
+  background: #f7f7f5;
 }
 
 .auth-spin {

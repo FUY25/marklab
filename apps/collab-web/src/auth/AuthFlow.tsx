@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MARKLAB_API_URL } from '@marklab/collab-editor';
-import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle, LogIn } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle } from 'lucide-react';
 
 const NATIVE_AUTH_STORAGE_KEY = 'marklab_native_auth';
 
@@ -36,11 +36,11 @@ function defaultRedirect(url: string): void {
 function authErrorMessage(error: string): string {
   switch (error) {
     case 'oidc_not_configured':
-      return 'Sign-in is not configured for this environment.';
+      return 'Google sign-in is not configured for this environment.';
     case 'oidc_login_failed':
     case 'oidc_code_exchange_failed':
     case 'oidc_userinfo_failed':
-      return 'Sign-in could not be completed. Try again or ask the operator for a fresh invite.';
+      return 'Google sign-in could not be completed. Try again or ask the operator for a fresh invite.';
     case 'missing_oidc_callback':
       return 'The sign-in response is missing required details.';
     case 'invalid_oidc_start_response':
@@ -51,7 +51,7 @@ function authErrorMessage(error: string): string {
     case 'invalid_auth_display_name':
       return 'The sign-in response was not recognized.';
     default:
-      return 'Sign-in failed. Try again or ask the operator to check the deployment.';
+      return 'Google sign-in failed. Try again or ask the operator to check the deployment.';
   }
 }
 
@@ -135,14 +135,14 @@ export function SignInPage({ nativeMode = false, redirect = defaultRedirect }: S
     <main className="auth-page">
       <section className="auth-panel" aria-labelledby="auth-title">
         <p className="auth-mark">MarkLab</p>
-        <h1 id="auth-title">Sign in to MarkLab</h1>
-        <p className="auth-copy">Use your pilot account to create or open your workspace.</p>
-        <button className="auth-primary" type="button" onClick={() => void startSignIn()} disabled={status === 'starting'}>
-          {status === 'starting' ? <LoaderCircle className="auth-spin" size={17} aria-hidden="true" /> : <LogIn size={17} aria-hidden="true" />}
-          <span>{status === 'starting' ? 'Opening sign-in' : 'Sign in'}</span>
+        <h1 id="auth-title">Welcome to MarkLab</h1>
+        <p className="auth-copy">Sign in or sign up with Google to continue.</p>
+        <button className="auth-google" type="button" onClick={() => void startSignIn()} disabled={status === 'starting'}>
+          {status === 'starting' ? <LoaderCircle className="auth-spin" size={17} aria-hidden="true" /> : <span className="auth-google-mark" aria-hidden="true">G</span>}
+          <span>{status === 'starting' ? 'Opening Google' : 'Continue with Google'}</span>
         </button>
         {status === 'starting' ? (
-          <p className="auth-status" role="status">Opening your identity provider...</p>
+          <p className="auth-status" role="status">Opening Google...</p>
         ) : null}
         {error ? (
           <p className="auth-alert" role="alert">
@@ -215,7 +215,7 @@ export function AuthCallbackPage({ search = window.location.search, redirect = d
           </p>
         ) : null}
         {status === 'done' && nativeURL ? (
-          <a className="auth-primary auth-link" href={nativeURL}>
+          <a className="auth-google auth-link" href={nativeURL}>
             <span>Open MarkLab</span>
             <ExternalLink size={16} aria-hidden="true" />
           </a>

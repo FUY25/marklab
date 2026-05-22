@@ -308,7 +308,7 @@ describe('OIDC auth flow', () => {
     })));
 
     render(<SignInPage nativeMode redirect={redirect} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/auth/oidc/start', expect.objectContaining({
@@ -329,9 +329,9 @@ describe('OIDC auth flow', () => {
     })));
 
     render(<SignInPage nativeMode />);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Sign-in is not configured for this environment.');
+    expect((await screen.findByRole('alert')).textContent).toContain('Google sign-in is not configured for this environment.');
   });
 
   it('turns the OIDC callback session into a native app callback URL', async () => {
