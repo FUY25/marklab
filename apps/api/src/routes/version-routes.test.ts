@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import type { DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
@@ -251,6 +252,7 @@ function createRestorePool(options: RestorePoolOptions = {}) {
             yjs_state: Buffer.from(createValidYjsState()),
             yjs_state_fingerprint: '101',
             head_version_id: options.headVersionId ?? 'ver_head',
+            head_version_number: 2,
             head_hash: options.headHash ?? options.currentHash ?? 'sha256:head',
           } as Row,
         ],
@@ -594,6 +596,67 @@ describe('version routes', () => {
     });
   });
 
+  it('manual save checkpoints the live provider snapshot when it is newer than the DB mirror', async () => {
+    const liveMarkdown = '# Live provider checkpoint\n';
+    const liveHash = sha256Hex(liveMarkdown);
+    const liveYjsState = createValidYjsState();
+    const { pool, queries } = createRestorePool({
+      currentMarkdown: '# Stale mirror\n',
+      currentHash: 'sha256:stale',
+      headVersionId: 'ver_head',
+      headHash: 'sha256:stale',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: liveMarkdown,
+            hash: liveHash,
+            yjsState: liveYjsState,
+          };
+        },
+      },
+      async flushCollabDocument() {
+        throw new Error('legacy_flush_should_not_run_for_live_provider_snapshot');
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/versions/manual-save')
+      .expect(200, {
+        created: true,
+        versionId: 'ver_checkpoint',
+        versionNumber: 3,
+        hash: liveHash,
+      });
+
+    expect(flushBranchMarkdownMirror).not.toHaveBeenCalled();
+    const stateUpdate = queries.find((query) => query.sql.includes('update document_branch_states'));
+    expect(stateUpdate?.params).toEqual([
+      'br_main',
+      liveMarkdown,
+      liveHash,
+      Buffer.from(liveYjsState),
+      expect.any(String),
+    ]);
+    const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInsert?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_head',
+      3,
+      liveMarkdown,
+      liveHash,
+      'user',
+      'dev-anonymous',
+      'manual_save',
+    ]);
+  });
+
   it('manual save returns the current head when the freshly flushed branch is unchanged', async () => {
     vi.mocked(flushBranchMarkdownMirror).mockResolvedValueOnce({
       branchId: 'br_main',
@@ -766,6 +829,33 @@ describe('version routes', () => {
 
     const branchHeadUpdates = queries.filter((query) => query.sql.includes('update document_branches'));
     expect(branchHeadUpdates.at(-1)?.params).toEqual(['br_main', 'ver_rollback']);
+  });
+
+  it('restores a rollback version back into the live provider snapshot', async () => {
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const { pool } = createRestorePool();
+    const liveWriter = createRestoreLiveWriter();
+    const app = createHttpApp(pool, liveWriter, {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return null;
+        },
+        async applyMarkdownSnapshot(input) {
+          providerApplies.push(input);
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/restore')
+      .send({ versionId: 'ver_source' })
+      .expect(200);
+
+    expect(providerApplies).toEqual([{
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown: '# Source snapshot\n',
+    }]);
   });
 
   it('restores only the requested branch state and active collaboration room', async () => {

@@ -55,6 +55,19 @@ final class RecordingHTTPTransport: NativeHTTPTransport {
   }
 }
 
+func waitForRecordedRequests(
+  _ transport: RecordingHTTPTransport,
+  count: Int,
+  timeoutNanoseconds: UInt64 = 1_000_000_000
+) async throws {
+  let step: UInt64 = 20_000_000
+  var elapsed: UInt64 = 0
+  while transport.requests.count < count && elapsed < timeoutNanoseconds {
+    try await Task.sleep(nanoseconds: step)
+    elapsed += step
+  }
+}
+
 actor BlockingFirstHTTPTransport: NativeHTTPTransport {
   private var responses: [NativeHTTPResponse] = []
   private(set) var requests: [RecordedHTTPRequest] = []

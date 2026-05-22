@@ -1,6 +1,8 @@
+import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbExecutor, DbPool } from '../db/client';
 import { withTransaction } from '../db/client';
 import { initializeBranchEditorState } from './milkdown-transformer';
+import { shouldCreateAutosaveVersion } from './save-policy';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
 
 export type VersionActorType = 'agent' | 'user' | 'system';
@@ -25,6 +27,27 @@ export interface CreateVersionWithClientInput extends Omit<CreateVersionInput, '
 export interface CreateVersionResult {
   versionId: string;
   versionNumber: number;
+}
+
+export interface PersistBranchMarkdownSnapshotInput {
+  pool: DbPool;
+  docId: string;
+  branchId: string;
+  markdown: string;
+  hash: string;
+  yjsState?: Uint8Array | undefined;
+  actorType: VersionActorType;
+  actorId?: string | undefined;
+  operation: Extract<VersionOperation, 'autosave' | 'manual_save'>;
+}
+
+export interface PersistBranchMarkdownSnapshotResult {
+  branchId: string;
+  markdown: string;
+  hash: string;
+  versionId: string;
+  versionNumber: number;
+  createdVersion: boolean;
 }
 
 export async function nextVersionNumber(client: DbExecutor, branchId: string): Promise<number> {
@@ -88,6 +111,115 @@ export async function createVersion(input: CreateVersionInput): Promise<CreateVe
       operation: input.operation,
     }),
   );
+}
+
+export async function persistBranchMarkdownSnapshot(
+  input: PersistBranchMarkdownSnapshotInput,
+): Promise<PersistBranchMarkdownSnapshotResult> {
+  if (sha256Hex(input.markdown) !== input.hash) throw new Error('invalid_live_yjs_state');
+
+  return withTransaction(input.pool, async (client) => {
+    const state = await client.query<{
+      head_version_id: string | null;
+      head_version_number: number | null;
+      head_hash: string | null;
+    }>(
+      `select b.head_version_id,
+              v.version_number as head_version_number,
+              v.hash as head_hash
+         from document_branches b
+         join document_branch_states s on s.branch_id = b.id
+         join document_versions v on v.id = b.head_version_id
+        where b.doc_id = $1 and b.id = $2 and b.is_archived = false
+        for update of b, s`,
+      [input.docId, input.branchId],
+    );
+    const row = state.rows[0];
+    if (!row) throw new Error('branch_not_found');
+    if (!row.head_version_id || !row.head_version_number || !row.head_hash) throw new Error('branch_head_not_found');
+
+    const yjsState = input.yjsState;
+    const update = yjsState
+      ? await client.query(
+          `update document_branch_states
+              set current_markdown = $2,
+                  current_hash = $3,
+                  yjs_state = $4,
+                  yjs_state_fingerprint = $5,
+                  updated_at = now()
+            where branch_id = $1`,
+          [input.branchId, input.markdown, input.hash, Buffer.from(yjsState), encodeYjsStateFingerprint(yjsState)],
+        )
+      : await client.query(
+          `update document_branch_states
+              set current_markdown = $2,
+                  current_hash = $3,
+                  updated_at = now()
+            where branch_id = $1`,
+          [input.branchId, input.markdown, input.hash],
+        );
+    if ((update.rowCount ?? 1) === 0) throw new Error('branch_not_found');
+
+    if (input.hash === row.head_hash) {
+      return {
+        branchId: input.branchId,
+        markdown: input.markdown,
+        hash: input.hash,
+        versionId: row.head_version_id,
+        versionNumber: row.head_version_number,
+        createdVersion: false,
+      };
+    }
+
+    if (input.operation === 'autosave') {
+      const autosave = await client.query<{ last_autosave_at: Date | string | null }>(
+        `select max(created_at) as last_autosave_at
+           from document_versions
+          where branch_id = $1
+            and operation = 'autosave'`,
+        [input.branchId],
+      );
+      const lastAutosaveAt = autosave.rows[0]?.last_autosave_at;
+      if (
+        !shouldCreateAutosaveVersion({
+          currentHash: input.hash,
+          headHash: row.head_hash,
+          lastAutosaveAt: lastAutosaveAt ? new Date(lastAutosaveAt) : null,
+          now: new Date(),
+        })
+      ) {
+        return {
+          branchId: input.branchId,
+          markdown: input.markdown,
+          hash: input.hash,
+          versionId: row.head_version_id,
+          versionNumber: row.head_version_number,
+          createdVersion: false,
+        };
+      }
+    }
+
+    const version = await createVersionWithClient({
+      client,
+      docId: input.docId,
+      branchId: input.branchId,
+      parentVersionId: row.head_version_id,
+      markdown: input.markdown,
+      hash: input.hash,
+      actorType: input.actorType,
+      actorId: input.actorId,
+      operation: input.operation,
+    });
+
+    return {
+      branchId: input.branchId,
+      markdown: input.markdown,
+      hash: input.hash,
+      versionId: version.versionId,
+      versionNumber: version.versionNumber,
+      createdVersion: true,
+    };
+  });
 }
 
 function toIsoString(value: Date | string): string {

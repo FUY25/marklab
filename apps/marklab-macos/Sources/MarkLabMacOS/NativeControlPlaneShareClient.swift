@@ -38,6 +38,69 @@ public struct NativeHostedAccessGrantSummary: Decodable, Equatable, Sendable {
   public let createdAt: String?
 }
 
+public enum NativeVersionActorType: String, Decodable, Equatable, Sendable {
+  case agent
+  case user
+  case system
+}
+
+public enum NativeVersionOperation: String, Decodable, Equatable, Sendable {
+  case create
+  case `import`
+  case autosave
+  case manualSave = "manual_save"
+  case write
+  case edit
+  case rollback
+  case branch
+}
+
+public struct NativeDocumentVersionSummary: Decodable, Equatable, Sendable, Identifiable {
+  public var id: String { versionId }
+
+  public let versionId: String
+  public let parentVersionId: String?
+  public let versionNumber: Int
+  public let hash: String
+  public let actorType: NativeVersionActorType
+  public let actorId: String?
+  public let operation: NativeVersionOperation
+  public let createdAt: String
+}
+
+public struct NativeDocumentVersionSnapshot: Decodable, Equatable, Sendable {
+  public let versionId: String
+  public let branchId: String
+  public let parentVersionId: String?
+  public let versionNumber: Int
+  public let markdown: String
+  public let hash: String
+  public let actorType: NativeVersionActorType
+  public let actorId: String?
+  public let operation: NativeVersionOperation
+  public let createdAt: String
+}
+
+public struct NativeVersionSaveResult: Decodable, Equatable, Sendable {
+  public let created: Bool
+  public let versionId: String
+  public let versionNumber: Int
+  public let hash: String
+}
+
+public struct NativeVersionRestoreResult: Decodable, Equatable, Sendable {
+  public let versionId: String
+  public let versionNumber: Int
+  public let hash: String
+}
+
+public enum NativeVersionHistoryError: Error, Equatable {
+  case forbidden
+  case unavailable
+  case restoreFailed
+  case staleOrMissingVersion
+}
+
 public final class NativeControlPlaneShareClient: @unchecked Sendable {
   private let apiBaseURL: URL
   private let webBaseURL: URL
@@ -136,6 +199,59 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
     return try decodeNativeJSON(Response.self, from: try await transport.send(request)).grants
   }
 
+  public func listVersions(document: NativeHostedDocument) async throws -> [NativeDocumentVersionSummary] {
+    struct Response: Decodable {
+      let versions: [NativeDocumentVersionSummary]
+    }
+    return try await sendVersionJSON(
+      "GET",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/versions",
+      response: Response.self
+    ).versions
+  }
+
+  public func showVersion(
+    document: NativeHostedDocument,
+    versionId: String
+  ) async throws -> NativeDocumentVersionSnapshot {
+    try await sendVersionJSON(
+      "GET",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/versions/\(encodeNativePathSegment(versionId))",
+      response: NativeDocumentVersionSnapshot.self
+    )
+  }
+
+  public func saveVersion(document: NativeHostedDocument) async throws -> NativeVersionSaveResult {
+    try await sendVersionJSON(
+      "POST",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/versions/manual-save",
+      response: NativeVersionSaveResult.self
+    )
+  }
+
+  public func autosaveVersion(document: NativeHostedDocument) async throws -> NativeVersionSaveResult {
+    try await sendVersionJSON(
+      "POST",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/versions/autosave",
+      response: NativeVersionSaveResult.self
+    )
+  }
+
+  public func restoreVersion(
+    document: NativeHostedDocument,
+    versionId: String
+  ) async throws -> NativeVersionRestoreResult {
+    struct Body: Encodable {
+      let versionId: String
+    }
+    return try await sendVersionJSON(
+      "POST",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/restore",
+      body: try nativeJSONData(Body(versionId: versionId)),
+      response: NativeVersionRestoreResult.self
+    )
+  }
+
   private func browserURL(
     document: NativeHostedDocument,
     grant: NativeHostedAccessGrant,
@@ -171,5 +287,44 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
       body: try nativeJSONData(body)
     )
     return try decodeNativeJSON(responseType, from: try await transport.send(request))
+  }
+
+  private func sendVersionJSON<Response: Decodable>(
+    _ method: String,
+    _ path: String,
+    body: Data? = nil,
+    response responseType: Response.Type
+  ) async throws -> Response {
+    var headers = ["Authorization": "Bearer \(bearerToken)"]
+    if body != nil {
+      headers["Content-Type"] = "application/json"
+    }
+    let request = NativeHTTPRequest(
+      method: method,
+      url: appendPath(path, to: apiBaseURL),
+      headers: headers,
+      body: body
+    )
+    let nativeResponse = try await transport.send(request)
+    guard (200..<300).contains(nativeResponse.statusCode) else {
+      throw versionHistoryError(statusCode: nativeResponse.statusCode)
+    }
+    return try decodeNativeJSON(responseType, from: nativeResponse)
+  }
+
+  private func versionHistoryError(statusCode: Int) -> NativeVersionHistoryError {
+    switch statusCode {
+    case 401, 403:
+      return .forbidden
+    case 400, 404, 409, 410:
+      return .staleOrMissingVersion
+    case 503, 504:
+      return .unavailable
+    default:
+      if statusCode >= 500 {
+        return .restoreFailed
+      }
+      return .unavailable
+    }
   }
 }

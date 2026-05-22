@@ -101,21 +101,27 @@ export function createYSweetSnapshotService(input: {
   const manager = input.manager ?? new DocumentManager(input.connectionString ?? requiredConnectionString());
   const runtime = createHeadlessMilkdownRuntime();
 
+  async function readProviderDocId(docId: string, branchId: string): Promise<string | null> {
+    const providerDoc = await input.pool.query<{ provider_doc_id: string | null; provider_doc_seeded_at: Date | string | null }>(
+      `select s.provider_doc_id, s.provider_doc_seeded_at
+         from document_branch_states s
+         join document_branches b
+           on b.id = s.branch_id
+        where s.branch_id = $1
+          and b.doc_id = $2
+          and b.is_archived = false`,
+      [branchId, docId],
+    );
+    const providerDocId = providerDoc.rows[0]?.provider_doc_id;
+    if (!providerDocId) return null;
+    if (!providerDoc.rows[0]?.provider_doc_seeded_at) throw new Error('collab_snapshot_unavailable');
+    return providerDocId;
+  }
+
   return {
     async readCurrentMarkdownSnapshot({ docId, branchId }) {
-      const providerDoc = await input.pool.query<{ provider_doc_id: string | null; provider_doc_seeded_at: Date | string | null }>(
-        `select s.provider_doc_id, s.provider_doc_seeded_at
-           from document_branch_states s
-           join document_branches b
-             on b.id = s.branch_id
-          where s.branch_id = $1
-            and b.doc_id = $2
-            and b.is_archived = false`,
-        [branchId, docId],
-      );
-      const providerDocId = providerDoc.rows[0]?.provider_doc_id;
+      const providerDocId = await readProviderDocId(docId, branchId);
       if (!providerDocId) return null;
-      if (!providerDoc.rows[0]?.provider_doc_seeded_at) throw new Error('collab_snapshot_unavailable');
       if (!manager.getDocAsUpdate) throw new Error('collab_snapshot_unavailable');
 
       let yjsState: Uint8Array;
@@ -133,7 +139,22 @@ export function createYSweetSnapshotService(input: {
         versionNumber: null,
         hash: serialized.hash,
         markdown: serialized.markdown,
+        yjsState: serialized.yjsState,
       };
+    },
+    async applyMarkdownSnapshot({ docId, branchId, markdown }) {
+      const providerDocId = await readProviderDocId(docId, branchId);
+      if (!providerDocId) throw new Error('collab_snapshot_unavailable');
+      if (!manager.getDocAsUpdate) throw new Error('collab_snapshot_unavailable');
+
+      let yjsState: Uint8Array;
+      try {
+        yjsState = await manager.getDocAsUpdate(providerDocId);
+      } catch {
+        throw new Error('collab_snapshot_unavailable');
+      }
+      const update = encodeProviderContentsReplacementYjsUpdate(yjsState, markdown);
+      if (update) await manager.updateDoc(providerDocId, update);
     },
   };
 }

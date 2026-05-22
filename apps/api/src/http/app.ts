@@ -83,10 +83,12 @@ export interface CollabMarkdownSnapshot {
   versionNumber: number | null;
   hash: string;
   markdown: string;
+  yjsState?: Uint8Array;
 }
 
 export interface CollabSnapshotService {
   readCurrentMarkdownSnapshot(input: { docId: string; branchId: string }): Promise<CollabMarkdownSnapshot | null>;
+  applyMarkdownSnapshot?(input: { docId: string; branchId: string; markdown: string }): Promise<void>;
 }
 
 export interface HttpRequestAuth {

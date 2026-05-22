@@ -75,7 +75,7 @@ Right inspector: Sharing & Versions
 
 App Settings:
   Editing
-    Local Autosave
+    Autosave Local Files
   Privacy/Support/Reset
     Clear Local MarkLab Data
 ```
@@ -84,9 +84,16 @@ The inspector must open even for a local-only file. A user may need to restore f
 
 The inspector owns version preview/restore so the current article remains visible in the main editor while the user reviews past versions. Do not open a separate window or sheet for ordinary version history.
 
-Document settings do not belong in the Sharing & Versions inspector. `Local Autosave` belongs in app-level Settings because it is an editor/app behavior, not a cloud-copy or sharing lifecycle action.
+Document settings do not belong in the Sharing & Versions inspector. `Autosave Local Files` belongs in app-level Settings because it is an editor/app behavior for unshared files, not a cloud-copy or sharing lifecycle action.
 
 `Clear Local MarkLab Data` does not belong in this document inspector. It belongs in app-level Settings under Privacy/Support/Reset.
+
+Version creation should stay single-path:
+
+- Browser and app clients both write the shared live Markdown through the active provider.
+- Server-side provider autosave creates automatic online snapshots from that provider state, so browser-only sessions are included without a separate browser version UI.
+- The native app adds manual controls: `Save Checkpoint`, `Cmd+S` manual checkpoint, and restore.
+- Browser collaborators can edit and sync, but cannot yet browse or restore version history.
 
 ## Implementation Phases
 
@@ -125,9 +132,9 @@ Testing:
 Scope:
 
 - Allow `Show Sharing & Versions` when a local file is open even if sharing is not active.
-- Remove the standalone toolbar `Document` menu that only contained `Local Autosave`.
+- Remove the standalone toolbar `Document` menu that only contained autosave.
 - Redesign the Sharing & Versions inspector around `Sharing` and `Versions` modes.
-- Add `Local Autosave` to app-level Settings.
+- Add `Autosave Local Files` to app-level Settings with copy that says it only applies when a file is not sharing; shared documents sync automatically and create online version checkpoints.
 - Add a `Cloud Copy` section to the Sharing & Versions inspector.
 - Show concise copy:
   - "Cloud copy and online version history are kept after Stop Sharing."
@@ -144,7 +151,7 @@ Acceptance:
 - Local-only files can open the Sharing & Versions inspector.
 - The current editor remains visible while the user opens the Versions mode.
 - The standalone toolbar autosave menu is gone.
-- Local Autosave is available from app-level Settings.
+- `Autosave Local Files` is available from app-level Settings with sharing-specific explanatory copy.
 - No destructive action is exposed yet unless backend support exists.
 
 Testing:
@@ -160,7 +167,9 @@ Scope:
   - list branch versions;
   - show selected version snapshot;
   - manual save;
+  - autosave checkpoint;
   - restore selected version.
+- Add a server-side provider autosave job that periodically reads active provider-backed branches and calls the same autosave persistence path.
 - Keep API access tied to the existing hosted share controller/session context.
 - Model errors explicitly for forbidden, unavailable, restore failure, and stale/missing version.
 
@@ -169,13 +178,20 @@ Expected files:
 - `apps/marklab-macos/Sources/MarkLabMacOS/NativeControlPlaneShareClient.swift`
 - `apps/marklab-macos/Sources/MarkLabMacOS/NativeHostedShareController.swift`
 - `apps/marklab-macos/Tests/MarkLabMacOSTests/NativeControlPlaneShareTests.swift`
+- `apps/api/src/services/provider-autosave-service.ts`
+- `apps/api/src/services/provider-autosave-service.test.ts`
 
 Acceptance:
 
 - Native can list versions for the current shared doc/branch.
 - Native can fetch a selected snapshot without applying it.
 - Manual save flushes active collaboration state through the existing API route.
+- Opening or refreshing version history can create an automatic checkpoint when the shared state changed.
+- Manual/autosave checkpoints use the active provider snapshot when the provider is newer than the stored DB mirror.
+- Browser-only and app-only writes are both captured by server-side provider autosave; clients do not implement duplicate versioning rules.
+- `Cmd+S` in shared native mode creates a manual checkpoint.
 - Restore calls the existing restore route and reports the new rollback version.
+- Restore writes the rollback Markdown back into the active provider before native editor reload.
 - View-only/public view sessions cannot manage versions.
 
 Testing:
@@ -189,9 +205,11 @@ Scope:
 
 - Fill the Sharing & Versions inspector's `Versions` mode.
 - Include:
-  - `Save Version`;
+  - `Save Checkpoint` for an explicit manual checkpoint;
+  - `Cmd+S` parity with `Save Checkpoint`;
   - version list ordered newest first;
-  - selected version metadata;
+  - version rows named with local file name plus timestamp;
+  - selected version metadata with operation/checkpoint type;
   - Markdown preview or plain source preview;
   - `Restore This Version` with confirmation.
 - Explain restore semantics in confirmation:
@@ -202,11 +220,12 @@ Scope:
 Acceptance:
 
 - User can inspect online version history without leaving the native app.
-- User can save a version manually.
+- Version history is automatic by default, with a manual checkpoint button for intentional milestones.
 - User can preview before restore.
 - User cannot accidentally restore with one stray click.
 - After restore, active app/browser collaborators receive the restored state.
 - The local file projection behavior remains conflict-safe.
+- Save/restore behavior is verified against the active provider state, not only mocked native API calls.
 
 Testing:
 
@@ -328,7 +347,7 @@ Acceptance:
 Stop and ask for manual visual review after:
 
 - Phase 1 if `Sharing & Versions` label length looks awkward in the toolbar menu.
-- Phase 2 when the redesigned `Sharing / Versions` inspector and app-level `Local Autosave` setting exist.
+- Phase 2 when the redesigned `Sharing / Versions` inspector and app-level `Autosave Local Files` setting exist.
 - Phase 4 when version list/preview/restore confirmation are visible.
 - Phase 6 when `Delete Cloud Copy` danger-zone UI is visible.
 

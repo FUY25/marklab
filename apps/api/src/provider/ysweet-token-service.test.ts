@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClientToken } from '@y-sweet/sdk';
 import * as Y from 'yjs';
 import { PROVIDER_TOKEN_TTL_SECONDS } from '../config/provider-token-policy';
-import { createHeadlessMilkdownRuntime } from '../services/milkdown-headless-runtime';
+import {
+  createHeadlessMilkdownRuntime,
+  readProviderContentsMarkdownFromYjsState,
+} from '../services/milkdown-headless-runtime';
 import {
   bindProviderSessionIdentity,
   createYSweetSnapshotService,
@@ -500,6 +503,59 @@ describe('createYSweetTokenService', () => {
     expect(queries[0]?.params).toEqual(['branch_1', 'doc_1']);
     expect(queries[0]?.sql).toContain('join document_branches');
     expect(queries[0]?.sql).toContain('b.doc_id = $2');
+  });
+
+  it('applies Markdown snapshots back to Y-Sweet provider contents', async () => {
+    const providerDoc = new Y.Doc();
+    providerDoc.getText('contents').insert(0, '# Before restore\n');
+    const providerState = Y.encodeStateAsUpdate(providerDoc);
+    providerDoc.destroy();
+    const updates: Array<{ docId: string; update: Uint8Array }> = [];
+    const manager: YSweetDocumentManagerLike = {
+      async createDoc(docId) {
+        return { docId: docId ?? 'ml_doc_generated' };
+      },
+      async getClientToken() {
+        throw new Error('not_used');
+      },
+      async getOrCreateDocAndToken() {
+        throw new Error('not_used');
+      },
+      async getDocAsUpdate() {
+        return providerState;
+      },
+      async updateDoc(docId, update) {
+        updates.push({ docId, update });
+      },
+    };
+    const service = createYSweetSnapshotService({
+      pool: {
+        async query<Row = unknown>() {
+          return {
+            rows: [{
+              provider_doc_id: 'ml_doc_current',
+              provider_doc_seeded_at: '2026-05-11T00:00:00.000Z',
+            } as Row],
+            rowCount: 1,
+          };
+        },
+      } as never,
+      manager,
+    });
+
+    await service.applyMarkdownSnapshot?.({
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      markdown: '# Restored provider\n',
+    });
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.docId).toBe('ml_doc_current');
+    const updatedDoc = new Y.Doc();
+    Y.applyUpdate(updatedDoc, providerState);
+    Y.applyUpdate(updatedDoc, updates[0]!.update);
+    expect(readProviderContentsMarkdownFromYjsState(Y.encodeStateAsUpdate(updatedDoc))).toBe('# Restored provider\n');
+    updatedDoc.destroy();
   });
 
   it('reads browser contents text provider state as current Markdown snapshots', async () => {

@@ -59,4 +59,29 @@ public final class NativeHostedShareController: @unchecked Sendable {
     guard let document else { throw NativeHostedShareError.documentNotShared }
     return try await client.listAccessGrants(document: document)
   }
+
+  public func listVersions() async throws -> [NativeDocumentVersionSummary] {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.listVersions(document: document)
+  }
+
+  public func showVersion(versionId: String) async throws -> NativeDocumentVersionSnapshot {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.showVersion(document: document, versionId: versionId)
+  }
+
+  public func saveVersion() async throws -> NativeVersionSaveResult {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.saveVersion(document: document)
+  }
+
+  public func autosaveVersion() async throws -> NativeVersionSaveResult {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.autosaveVersion(document: document)
+  }
+
+  public func restoreVersion(versionId: String) async throws -> NativeVersionRestoreResult {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    return try await client.restoreVersion(document: document, versionId: versionId)
+  }
 }

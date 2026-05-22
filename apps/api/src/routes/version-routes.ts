@@ -8,7 +8,14 @@ import { restoreVersionToBranchState } from '../services/editor-state';
 import type { LiveMarkdownWriter } from '../services/live-writer';
 import { flushBranchMarkdownMirror } from '../services/milkdown-transformer';
 import type { VerifiedDocumentAccess } from '../services/access-control';
-import { getDocumentSummary, listBranches, listVersions, showVersion } from '../services/version-service';
+import {
+  getDocumentSummary,
+  listBranches,
+  listVersions,
+  persistBranchMarkdownSnapshot,
+  showVersion,
+  type VersionOperation,
+} from '../services/version-service';
 import { versionActorFromAccess } from '../services/version-actor';
 
 const restoreSchema = z.object({
@@ -31,6 +38,38 @@ function isBranchScopedAccess(access: VerifiedDocumentAccess | void): boolean {
 
 function isPublicViewGrant(access: VerifiedDocumentAccess | void): boolean {
   return access?.grantSource === 'document_access_grants' && access.role === 'view';
+}
+
+async function saveBranchVersion(
+  pool: DbPool,
+  options: HttpAppOptions,
+  input: {
+    docId: string;
+    branchId: string;
+    operation: Extract<VersionOperation, 'autosave' | 'manual_save'>;
+    actor: ReturnType<typeof versionActorFromAccess>;
+  },
+) {
+  const liveSnapshot = await options.collabSnapshotService?.readCurrentMarkdownSnapshot({
+    docId: input.docId,
+    branchId: input.branchId,
+  });
+  if (liveSnapshot) {
+    return persistBranchMarkdownSnapshot({
+      pool,
+      docId: input.docId,
+      branchId: input.branchId,
+      markdown: liveSnapshot.markdown,
+      hash: liveSnapshot.hash,
+      yjsState: liveSnapshot.yjsState,
+      operation: input.operation,
+      actorType: input.actor.actorType,
+      actorId: input.actor.actorId,
+    });
+  }
+
+  await options.flushCollabDocument?.(toRoomName(input.docId, input.branchId));
+  return flushBranchMarkdownMirror(pool, input.docId, input.branchId, input.operation, input.actor);
 }
 
 export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter, options: HttpAppOptions = {}) {
@@ -144,8 +183,12 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
-      await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'manual_save', versionActorFromAccess(access));
+      const saved = await saveBranchVersion(pool, options, {
+        docId,
+        branchId,
+        operation: 'manual_save',
+        actor: versionActorFromAccess(access),
+      });
       res.json({
         created: saved.createdVersion,
         versionId: saved.versionId,
@@ -162,8 +205,12 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
       const docId = requiredParam(req, 'docId');
       const branchId = requiredParam(req, 'branchId');
       const access = await options.auth?.requireDocumentAccess(req, docId, branchId, 'write');
-      await options.flushCollabDocument?.(toRoomName(docId, branchId));
-      const saved = await flushBranchMarkdownMirror(pool, docId, branchId, 'autosave', versionActorFromAccess(access));
+      const saved = await saveBranchVersion(pool, options, {
+        docId,
+        branchId,
+        operation: 'autosave',
+        actor: versionActorFromAccess(access),
+      });
       res.json({
         created: saved.createdVersion,
         versionId: saved.versionId,
@@ -209,6 +256,11 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
         versionId: body.versionId,
         actorType: actor.actorType,
         actorId: actor.actorId,
+      });
+      await options.collabSnapshotService?.applyMarkdownSnapshot?.({
+        docId,
+        branchId,
+        markdown: applied.canonicalMarkdown,
       });
       await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });

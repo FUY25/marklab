@@ -262,6 +262,17 @@ struct MarkLabNativeUIStrategyTests {
     )
     #expect(MarkEditDocumentShellView.cloudCopySectionTitle == "Cloud Copy")
     #expect(MarkEditDocumentShellView.versionHistorySectionTitle == "Version History")
+    #expect(MarkEditDocumentShellView.saveVersionButtonTitle == "Save Checkpoint")
+    #expect(MarkEditDocumentShellView.restoreVersionButtonTitle == "Restore This Version")
+    #expect(MarkEditDocumentShellView.restoreVersionConfirmationPrompt == "Type RESTORE to confirm")
+    #expect(
+      MarkEditDocumentShellView.restoreVersionExplanation
+        == "Restoring creates a new current rollback version. Old snapshots stay in version history, and the local Markdown file updates through normal shared projection."
+    )
+    #expect(
+      MarkEditDocumentShellView.deleteCloudCopyUnavailableSummary
+        == "Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history."
+    )
     #expect(
       MarkEditDocumentShellView.cloudCopyRetentionSummary
         == "Cloud copy and online version history are kept after Stop Sharing."
@@ -287,11 +298,36 @@ struct MarkLabNativeUIStrategyTests {
     )
   }
 
+  @Test("version rows use filename timestamp and checkpoint labels")
+  @MainActor
+  func versionRowsUseFilenameTimestampAndCheckpointLabels() {
+    let utc = TimeZone(identifier: "UTC")!
+
+    #expect(
+      MarkEditDocumentShellView.versionDisplayTitleForTesting(
+        filePath: "/tmp/version-ui.md",
+        createdAt: "2026-05-22T05:29:55.625Z",
+        timeZone: utc
+      ) == "version-ui.md - 2026-05-22 05:29 UTC"
+    )
+    #expect(
+      MarkEditDocumentShellView.versionDisplayTitleForTesting(
+        filePath: nil,
+        createdAt: "not-a-date",
+        timeZone: utc
+      ) == "Markdown document - not-a-date"
+    )
+    #expect(MarkEditDocumentShellView.versionOperationLabelForTesting(.autosave) == "Auto checkpoint")
+    #expect(MarkEditDocumentShellView.versionOperationLabelForTesting(.manualSave) == "Manual checkpoint")
+    #expect(MarkEditDocumentShellView.versionOperationLabelForTesting(.rollback) == "Rollback checkpoint")
+    #expect(MarkEditDocumentShellView.versionMetadataLineForTesting(operation: .manualSave, versionNumber: 3) == "Manual checkpoint · #3")
+  }
+
   @Test("local autosave belongs to app settings")
   func localAutosaveBelongsToAppSettings() {
-    #expect(MarkLabAppSettings.localAutosaveLabel == "Local Autosave")
+    #expect(MarkLabAppSettings.localAutosaveLabel == "Autosave Local Files")
     #expect(MarkLabAppSettings.localAutosaveEnabledDefaultsKey == "MarkLabLocalAutosaveEnabled")
-    #expect(MarkLabAppSettings.localAutosaveDescription == "Automatically save local-only Markdown edits after a short pause. Shared documents use realtime projection to the local file.")
+    #expect(MarkLabAppSettings.localAutosaveDescription == "Only applies when a file is not sharing. Shared documents sync automatically and create online version checkpoints.")
   }
 
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")

@@ -2,8 +2,8 @@ import SwiftUI
 
 enum MarkLabAppSettings {
   static let localAutosaveEnabledDefaultsKey = "MarkLabLocalAutosaveEnabled"
-  static let localAutosaveLabel = "Local Autosave"
-  static let localAutosaveDescription = "Automatically save local-only Markdown edits after a short pause. Shared documents use realtime projection to the local file."
+  static let localAutosaveLabel = "Autosave Local Files"
+  static let localAutosaveDescription = "Only applies when a file is not sharing. Shared documents sync automatically and create online version checkpoints."
 }
 
 struct MarkLabSettingsView: View {

@@ -349,6 +349,123 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("loads previews saves and restores shared version history")
+  func loadsPreviewsSavesAndRestoresSharedVersionHistory() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "versions.md")
+    try Data("# Versions\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_versions","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"created":false,"versionId":"ver_001","versionNumber":1,"hash":"sha256:one"}"#)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_002","parentVersionId":"ver_001","versionNumber":2,"hash":"sha256:two","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:00:00.000Z"}]}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_002","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":2,"markdown":"# Version 2\n","hash":"sha256:two","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:00:00.000Z"}"##)
+    transport.enqueue(json: #"{"created":true,"versionId":"ver_003","versionNumber":3,"hash":"sha256:three"}"#)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_003","parentVersionId":"ver_002","versionNumber":3,"hash":"sha256:three","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:05:00.000Z"}]}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_003","branchId":"branch_main","parentVersionId":"ver_002","versionNumber":3,"markdown":"# Version 3\n","hash":"sha256:three","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:05:00.000Z"}"##)
+    transport.enqueue(json: #"{"versionId":"ver_004","versionNumber":4,"hash":"sha256:four"}"#)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_004","parentVersionId":"ver_002","versionNumber":4,"hash":"sha256:four","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}]}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_004","branchId":"branch_main","parentVersionId":"ver_002","versionNumber":4,"markdown":"# Version 3\n","hash":"sha256:four","actorType":"user","actorId":"user_1","operation":"rollback","createdAt":"2026-05-22T12:06:00.000Z"}"##)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    await model.loadVersionHistory()
+
+    #expect(model.versionHistory.map(\.versionId) == ["ver_002"])
+    #expect(model.selectedVersionId == "ver_002")
+
+    await model.previewVersion("ver_002")
+
+    #expect(model.selectedVersion?.markdown == "# Version 2\n")
+    #expect(!model.canApplySelectedVersionRestore)
+
+    await model.saveVersionSnapshot()
+
+    #expect(model.versionHistory.map(\.versionId) == ["ver_003"])
+    #expect(model.selectedVersion?.markdown == "# Version 3\n")
+    #expect(model.statusText == "Saved version 3.")
+
+    model.restoreVersionConfirmation = "RESTORE"
+    #expect(model.canApplySelectedVersionRestore)
+    let restoreURLBefore = try #require(model.embeddedCollabURL)
+    await model.restoreSelectedVersion()
+
+    #expect(model.versionHistory.map(\.versionId) == ["ver_004"])
+    #expect(model.selectedVersion?.markdown == "# Version 3\n")
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "# Version 3\n")
+    #expect(model.embeddedCollabURL != restoreURLBefore)
+    #expect(model.embeddedCollabURL?.query?.contains("nativeReload=") == true)
+    #expect(model.restoreVersionConfirmation.isEmpty)
+    #expect(model.statusText == "Restored version 4. The local file will update through shared projection.")
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" }.suffix(9) == [
+      "POST /api/docs/doc_versions/branches/branch_main/versions/autosave",
+      "GET /api/docs/doc_versions/branches/branch_main/versions",
+      "GET /api/docs/doc_versions/versions/ver_002",
+      "POST /api/docs/doc_versions/branches/branch_main/versions/manual-save",
+      "GET /api/docs/doc_versions/branches/branch_main/versions",
+      "GET /api/docs/doc_versions/versions/ver_003",
+      "POST /api/docs/doc_versions/branches/branch_main/restore",
+      "GET /api/docs/doc_versions/branches/branch_main/versions",
+      "GET /api/docs/doc_versions/versions/ver_004",
+    ])
+  }
+
+  @MainActor
+  @Test("command save creates a manual checkpoint for shared documents")
+  func commandSaveCreatesManualCheckpointForSharedDocuments() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "command-save.md")
+    try Data("# Command save\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_command_save","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"created":true,"versionId":"ver_002","versionNumber":2,"hash":"sha256:two"}"#)
+    transport.enqueue(json: #"{"versions":[{"versionId":"ver_002","parentVersionId":"ver_001","versionNumber":2,"hash":"sha256:two","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:10:00.000Z"}]}"#)
+    transport.enqueue(json: ##"{"versionId":"ver_002","branchId":"branch_main","parentVersionId":"ver_001","versionNumber":2,"markdown":"# Command save\n\nSaved with Cmd+S.\n","hash":"sha256:two","actorType":"user","actorId":"user_1","operation":"manual_save","createdAt":"2026-05-22T12:10:00.000Z"}"##)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    model.saveFileFromUI()
+    try await waitForRecordedRequests(transport, count: 4)
+
+    #expect(model.versionHistory.map(\.versionId) == ["ver_002"])
+    #expect(model.selectedVersion?.markdown == "# Command save\n\nSaved with Cmd+S.\n")
+    #expect(model.statusText == "Saved version 2.")
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "POST /api/docs/import",
+      "POST /api/docs/doc_command_save/branches/branch_main/versions/manual-save",
+      "GET /api/docs/doc_command_save/branches/branch_main/versions",
+      "GET /api/docs/doc_command_save/versions/ver_002",
+    ])
+  }
+
+  @MainActor
   @Test("rehydrates joined shared document bindings when reopening the local file")
   func rehydratesJoinedSharedDocumentBinding() throws {
     let directory = try TemporaryDirectory()

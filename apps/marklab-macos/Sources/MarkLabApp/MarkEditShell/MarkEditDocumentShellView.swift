@@ -55,8 +55,88 @@ struct MarkEditDocumentShellView: View {
   static let showSharingAndVersionsLabel = "Show Sharing & Versions"
   static let cloudCopySectionTitle = "Cloud Copy"
   static let versionHistorySectionTitle = "Version History"
+  static let saveVersionButtonTitle = "Save Checkpoint"
+  static let restoreVersionButtonTitle = "Restore This Version"
+  static let restoreVersionConfirmationPrompt = "Type RESTORE to confirm"
+  static let restoreVersionExplanation = "Restoring creates a new current rollback version. Old snapshots stay in version history, and the local Markdown file updates through normal shared projection."
+  static let deleteCloudCopyUnavailableSummary = "Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history."
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
+
+  static func versionDisplayTitleForTesting(filePath: String?, createdAt: String, timeZone: TimeZone = .current) -> String {
+    versionDisplayTitle(filePath: filePath, createdAt: createdAt, timeZone: timeZone)
+  }
+
+  static func versionOperationLabelForTesting(_ operation: NativeVersionOperation) -> String {
+    versionOperationLabel(operation)
+  }
+
+  static func versionMetadataLineForTesting(operation: NativeVersionOperation, versionNumber: Int) -> String {
+    versionMetadataLine(operation: operation, versionNumber: versionNumber)
+  }
+
+  private static func versionDisplayTitle(filePath: String?, createdAt: String, timeZone: TimeZone = .current) -> String {
+    let fileName = versionFileName(from: filePath)
+    let timestamp = versionTimestampLabel(createdAt, timeZone: timeZone)
+    return "\(fileName) - \(timestamp)"
+  }
+
+  private static func versionFileName(from filePath: String?) -> String {
+    guard let filePath, !filePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return "Markdown document"
+    }
+    let lastPathComponent = URL(fileURLWithPath: filePath).lastPathComponent
+    return lastPathComponent.isEmpty ? "Markdown document" : lastPathComponent
+  }
+
+  private static func versionTimestampLabel(_ createdAt: String, timeZone: TimeZone = .current) -> String {
+    guard let date = versionISO8601Date(from: createdAt) else {
+      return createdAt
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = timeZone
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    let zone = timeZone.secondsFromGMT(for: date) == 0
+      ? "UTC"
+      : (timeZone.abbreviation(for: date) ?? timeZone.identifier)
+    return "\(formatter.string(from: date)) \(zone)"
+  }
+
+  private static func versionISO8601Date(from value: String) -> Date? {
+    let standardFormatter = ISO8601DateFormatter()
+    if let date = standardFormatter.date(from: value) {
+      return date
+    }
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractionalFormatter.date(from: value)
+  }
+
+  private static func versionOperationLabel(_ operation: NativeVersionOperation) -> String {
+    switch operation {
+    case .autosave:
+      return "Auto checkpoint"
+    case .manualSave:
+      return "Manual checkpoint"
+    case .rollback:
+      return "Rollback checkpoint"
+    case .import:
+      return "Initial import"
+    case .create:
+      return "Created"
+    case .write:
+      return "Write checkpoint"
+    case .edit:
+      return "Edit checkpoint"
+    case .branch:
+      return "Branch checkpoint"
+    }
+  }
+
+  private static func versionMetadataLine(operation: NativeVersionOperation, versionNumber: Int) -> String {
+    "\(versionOperationLabel(operation)) · #\(versionNumber)"
+  }
 
   @ObservedObject var model: MarkLabAppModel
   let descriptor = MarkEditShellDescriptor.current
@@ -422,19 +502,129 @@ struct MarkEditDocumentShellView: View {
   private var versionsInspectorContent: some View {
     VStack(alignment: .leading, spacing: 14) {
       inspectorSection(Self.versionHistorySectionTitle) {
-        Text("Version history will appear in this sidebar so the current document stays visible while you review past snapshots.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-        Text("List, preview, manual save, and restore actions are not wired yet.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+        if model.hasSharedDocument {
+          HStack {
+            Button(Self.saveVersionButtonTitle) {
+              Task { await model.saveVersionSnapshot() }
+            }
+            .disabled(model.conflict != nil)
+
+            Button("Refresh") {
+              Task { await model.loadVersionHistory() }
+            }
+            .disabled(model.isLoadingVersions)
+          }
+
+          if model.isLoadingVersions {
+            ProgressView()
+              .controlSize(.small)
+          } else if model.versionHistory.isEmpty {
+            Text("No online versions are available yet.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          } else {
+            VStack(alignment: .leading, spacing: 8) {
+              ForEach(model.versionHistory) { version in
+                versionRow(version)
+              }
+            }
+          }
+        } else {
+          Text("Start sharing before online version history is available.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      if model.hasSharedDocument {
+        inspectorSection("Selected Version") {
+          selectedVersionContent
+        }
       }
 
       inspectorSection("Danger Zone") {
-        Text("Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history.")
+        Text(Self.deleteCloudCopyUnavailableSummary)
           .font(.callout)
           .foregroundStyle(.secondary)
       }
+    }
+    .onAppear {
+      guard model.hasSharedDocument, model.versionHistory.isEmpty else { return }
+      Task { await model.loadVersionHistory() }
+    }
+  }
+
+  private func versionRow(_ version: NativeDocumentVersionSummary) -> some View {
+    Button {
+      Task { await model.previewVersion(version.versionId) }
+    } label: {
+      HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(Self.versionDisplayTitle(filePath: model.filePath, createdAt: version.createdAt))
+            .font(.callout.weight(.semibold))
+          Text(Self.versionMetadataLine(operation: version.operation, versionNumber: version.versionNumber))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+        Spacer()
+      }
+      .padding(8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(
+        model.selectedVersionId == version.versionId
+          ? Color(nsColor: .selectedControlColor).opacity(0.22)
+          : Color(nsColor: .controlBackgroundColor),
+        in: RoundedRectangle(cornerRadius: 6)
+      )
+    }
+    .buttonStyle(.plain)
+  }
+
+  @ViewBuilder
+  private var selectedVersionContent: some View {
+    if let snapshot = model.selectedVersion {
+      VStack(alignment: .leading, spacing: 8) {
+        Text(Self.versionDisplayTitle(filePath: model.filePath, createdAt: snapshot.createdAt))
+          .font(.callout.weight(.semibold))
+        Text(Self.versionMetadataLine(operation: snapshot.operation, versionNumber: snapshot.versionNumber))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+        Text(snapshot.hash)
+          .font(.caption2.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .textSelection(.enabled)
+        ScrollView {
+          Text(snapshot.markdown.isEmpty ? " " : snapshot.markdown)
+            .font(.system(.caption, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .padding(8)
+        }
+          .frame(minHeight: 180)
+          .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        Text(Self.restoreVersionExplanation)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        TextField(Self.restoreVersionConfirmationPrompt, text: $model.restoreVersionConfirmation)
+          .textFieldStyle(.roundedBorder)
+        Button(Self.restoreVersionButtonTitle) {
+          Task { await model.restoreSelectedVersion() }
+        }
+        .disabled(!model.canApplySelectedVersionRestore)
+      }
+    } else if model.selectedVersionId != nil {
+      Text("Select a version to preview its Markdown before restoring.")
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    } else {
+      Text("No version selected.")
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
   }
 

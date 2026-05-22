@@ -20,6 +20,7 @@ import {
 } from './provider/ysweet-provider-websocket-proxy';
 import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
 import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
+import { startProviderAutosaveCheckpointJob } from './services/provider-autosave-service';
 
 const env = loadApiEnv();
 const port = env.port;
@@ -45,6 +46,15 @@ async function main() {
       : undefined;
   const collab = createCollabServer(pool);
   const liveWriter = createPostgresLiveMarkdownWriter(pool);
+  const providerAutosaveJob = collabSnapshotService
+    ? startProviderAutosaveCheckpointJob({
+        pool,
+        collabSnapshotService,
+        onError(error, branch) {
+          console.warn('provider autosave checkpoint failed', branch, error);
+        },
+      })
+    : undefined;
   const app = createHttpApp(pool, liveWriter, {
     flushCollabDocument: collab.flushDocument,
     applyCollabDocumentState: collab.applyDocumentState,
@@ -163,6 +173,7 @@ async function main() {
     if (isShuttingDown) return;
     isShuttingDown = true;
     try {
+      providerAutosaveJob?.stop();
       await new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
       });

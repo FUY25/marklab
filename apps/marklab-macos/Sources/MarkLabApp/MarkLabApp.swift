@@ -315,6 +315,11 @@ final class MarkLabAppModel: ObservableObject {
   @Published var resolvedConflictMarkdown = ""
   @Published var resolvedConflictConfirmation = ""
   @Published var localAutosaveEnabled: Bool
+  @Published var versionHistory: [NativeDocumentVersionSummary] = []
+  @Published var selectedVersionId: String?
+  @Published var selectedVersion: NativeDocumentVersionSnapshot?
+  @Published var isLoadingVersions = false
+  @Published var restoreVersionConfirmation = ""
 
   private var document: LocalMarkdownDocument?
   private let hostedShareController: NativeHostedShareController?
@@ -430,6 +435,10 @@ final class MarkLabAppModel: ObservableObject {
       && resolvedConflictConfirmation == "APPLY RESOLVED"
   }
 
+  var canApplySelectedVersionRestore: Bool {
+    selectedVersion != nil && restoreVersionConfirmation == "RESTORE" && embeddedCollabURL != nil && conflict == nil
+  }
+
   static func markEditNativeShellURL(_ url: URL?) -> URL? {
     guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
     guard components.path == "/collab" else { return url }
@@ -481,6 +490,7 @@ final class MarkLabAppModel: ObservableObject {
       latestGrantId = nil
       managedAccessLinks = []
       activeCollaborators = []
+      clearVersionHistoryState()
       embeddedCollabURL = nil
       pendingDiskIngestion = nil
       pendingSharedMarkdown = nil
@@ -608,6 +618,7 @@ final class MarkLabAppModel: ObservableObject {
     latestGrantId = nil
     managedAccessLinks = []
     activeCollaborators = []
+    clearVersionHistoryState()
     statusText = "Joined shared document \(link.docId). Waiting for shared content."
   }
 
@@ -638,28 +649,35 @@ final class MarkLabAppModel: ObservableObject {
     return !data.isEmpty
   }
 
-  func saveFile() throws {
+  @discardableResult
+  func saveFile() throws -> Bool {
     if conflict != nil {
       statusText = "Resolve the conflict before saving."
-      return
+      return false
     }
     localAutosaveTask?.cancel()
     localAutosaveTask = nil
     if embeddedCollabURL != nil {
       try flushPendingSharedProjection()
-      return
+      return true
     }
-    guard var currentDocument = document else { return }
+    guard var currentDocument = document else { return false }
     currentDocument.replaceText(text)
     try currentDocument.save()
     document = currentDocument
     try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
     statusText = "Saved \(currentDocument.fileURL.lastPathComponent)."
+    return false
   }
 
   func saveFileFromUI() {
     do {
-      try saveFile()
+      let shouldCreateManualCheckpoint = try saveFile()
+      if shouldCreateManualCheckpoint {
+        Task { [weak self] in
+          await self?.saveVersionSnapshot()
+        }
+      }
     } catch {
       statusText = "Unable to save Markdown file."
     }
@@ -781,6 +799,7 @@ final class MarkLabAppModel: ObservableObject {
       latestGrantId = nil
       managedAccessLinks = []
       activeCollaborators = []
+      clearVersionHistoryState()
       let appEditorURL = try hostedShareController.appEditorURL()
       let sharedMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
       try sharedDocumentBindingStore.saveBinding(
@@ -902,6 +921,7 @@ final class MarkLabAppModel: ObservableObject {
     latestGrantId = nil
     managedAccessLinks = []
     activeCollaborators = []
+    clearVersionHistoryState()
     lastProjectedMarkdown = nil
 
     if let fileURL {
@@ -1006,6 +1026,135 @@ final class MarkLabAppModel: ObservableObject {
       }
     } catch {
       // Existing in-memory links remain usable even if the historical grant list is temporarily unavailable.
+    }
+  }
+
+  func loadVersionHistory(createAutosaveCheckpoint: Bool = true) async {
+    guard let hostedShareController, embeddedCollabURL != nil else {
+      statusText = "Start sharing before viewing online version history."
+      return
+    }
+    isLoadingVersions = true
+    defer { isLoadingVersions = false }
+    do {
+      if createAutosaveCheckpoint, conflict == nil {
+        _ = try? await hostedShareController.autosaveVersion()
+      }
+      let versions = try await hostedShareController.listVersions()
+      versionHistory = versions
+      if let selectedVersionId,
+         versions.contains(where: { $0.versionId == selectedVersionId }) {
+        // Keep the current selection.
+      } else {
+        selectedVersionId = versions.first?.versionId
+        selectedVersion = nil
+      }
+      statusText = versions.isEmpty ? "No online versions yet." : "Loaded \(versions.count) online version\(versions.count == 1 ? "" : "s")."
+    } catch {
+      statusText = Self.versionHistoryStatus(for: error)
+    }
+  }
+
+  func previewVersion(_ versionId: String) async {
+    guard let hostedShareController, embeddedCollabURL != nil else {
+      statusText = "Start sharing before previewing online versions."
+      return
+    }
+    selectedVersionId = versionId
+    restoreVersionConfirmation = ""
+    do {
+      selectedVersion = try await hostedShareController.showVersion(versionId: versionId)
+      statusText = "Previewing version \(selectedVersion?.versionNumber ?? 0)."
+    } catch {
+      selectedVersion = nil
+      statusText = Self.versionHistoryStatus(for: error)
+    }
+  }
+
+  func saveVersionSnapshot() async {
+    guard let hostedShareController, embeddedCollabURL != nil else {
+      statusText = "Start sharing before saving an online version."
+      return
+    }
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before saving a version."
+      return
+    }
+    do {
+      try flushPendingSharedProjection()
+      let result = try await hostedShareController.saveVersion()
+      await loadVersionHistory(createAutosaveCheckpoint: false)
+      selectedVersionId = result.versionId
+      await previewVersion(result.versionId)
+      statusText = result.created
+        ? "Saved version \(result.versionNumber)."
+        : "Version \(result.versionNumber) is already current."
+    } catch {
+      statusText = Self.versionHistoryStatus(for: error)
+    }
+  }
+
+  func restoreSelectedVersion() async {
+    guard canApplySelectedVersionRestore, let selectedVersionId else {
+      statusText = "Preview a version and type RESTORE before restoring."
+      return
+    }
+    guard let hostedShareController else {
+      statusText = "Start sharing before restoring an online version."
+      return
+    }
+    let sourceSnapshot = selectedVersion
+    do {
+      let result = try await hostedShareController.restoreVersion(versionId: selectedVersionId)
+      restoreVersionConfirmation = ""
+      selectedVersion = nil
+      if let sourceSnapshot {
+        try projectSharedMarkdownImmediately(sourceSnapshot.markdown)
+      }
+      reloadEmbeddedCollabEditor()
+      await loadVersionHistory(createAutosaveCheckpoint: false)
+      self.selectedVersionId = result.versionId
+      await previewVersion(result.versionId)
+      statusText = "Restored version \(result.versionNumber). The local file will update through shared projection."
+    } catch {
+      statusText = Self.versionHistoryStatus(for: error)
+    }
+  }
+
+  private func reloadEmbeddedCollabEditor() {
+    guard let url = embeddedCollabURL,
+          var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else {
+      return
+    }
+    var items = components.queryItems ?? []
+    items.removeAll { $0.name == "nativeReload" }
+    items.append(URLQueryItem(name: "nativeReload", value: UUID().uuidString))
+    components.queryItems = items
+    components.percentEncodedFragment = nil
+    embeddedCollabURL = components.url ?? url
+  }
+
+  private func clearVersionHistoryState() {
+    versionHistory = []
+    selectedVersionId = nil
+    selectedVersion = nil
+    restoreVersionConfirmation = ""
+    isLoadingVersions = false
+  }
+
+  private static func versionHistoryStatus(for error: Error) -> String {
+    switch error {
+    case NativeVersionHistoryError.forbidden:
+      return "Unable to access version history for this document."
+    case NativeVersionHistoryError.staleOrMissingVersion:
+      return "Selected version is no longer available."
+    case NativeVersionHistoryError.unavailable:
+      return "Version history is temporarily unavailable."
+    case NativeVersionHistoryError.restoreFailed:
+      return "Unable to restore selected version."
+    default:
+      return "Unable to load version history."
     }
   }
 

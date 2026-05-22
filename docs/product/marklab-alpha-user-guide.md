@@ -99,12 +99,12 @@ Expected behavior:
 
 Local-only windows save like a normal document editor by default. Use `Cmd+S` or the standard save command.
 
-The document toolbar has a `Local Autosave` setting. When it is on, local-only edits are written to the `.md` file after a short debounce, and `Cmd+S` still flushes immediately. This setting only applies before sharing; shared windows use the realtime projection behavior below.
+The app Settings window has an `Autosave Local Files` setting. It only applies when a file is not sharing. When sharing is on, MarkLab syncs automatically and creates online version checkpoints.
 
 Shared windows additionally project remote shared markdown to disk:
 
 - Remote/provider changes are queued and written to the local file after a short debounce.
-- `Cmd+S` flushes pending shared projection immediately.
+- `Cmd+S` creates a manual online checkpoint and flushes pending shared projection immediately.
 - If local disk changes and provider changes both diverge, MarkLab pauses projection and opens conflict review.
 - `Stop Sharing` flushes pending shared projection before returning the window to local-only mode.
 
