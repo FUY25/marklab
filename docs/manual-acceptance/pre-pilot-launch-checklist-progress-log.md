@@ -309,8 +309,8 @@ Checklist:
 - [x] Confirm Version History current state: backend data/API exists, but native hosted UI does not expose a complete Versions panel.
 - [x] Align with current native UI pattern: the toolbar uses a menu first, then an active-state `Show Collaboration` item toggles the inspector.
 - [x] Write implementation plan: [Sharing & Versions, Cloud Copy, And Version History Plan](../plans/2026-05-22-sharing-versions-cloud-copy-plan.md).
-- [ ] Rename toolbar menu/item to `Sharing & Versions` / `Show Sharing & Versions`.
-- [ ] Add Stop Sharing hover/help microcopy.
+- [x] Rename toolbar menu/item to `Sharing & Versions` / `Show Sharing & Versions`.
+- [x] Add Stop Sharing hover/help microcopy.
 - [ ] Add `Cloud Copy & Versions` sheet opened from the Sharing & Versions inspector.
 - [ ] Wire Version History UI to existing list/show/manual-save/restore APIs.
 - [ ] Implement or document fallback for Delete Cloud Copy.
@@ -327,6 +327,7 @@ Progress log:
 | 2026-05-22 | Version History was pulled into Gate 3 scope. Backend support exists through `document_versions` and version list/show/save/restore routes, but the native hosted UI has no complete Versions panel. | `apps/api/src/routes/version-routes.ts`; `apps/api/src/services/version-service.ts`; `apps/api/src/db/schema.sql`; `docs/product/marklab-alpha-user-guide.md` | Build the `Cloud Copy & Versions` surface with `Versions` and `Danger Zone`; make Version History visible before user-facing Delete Cloud Copy. |
 | 2026-05-22 | Gate 3 UI placement aligned to the existing native pattern. The toolbar menu remains a two-step menu-plus-inspector flow: rename `Collaboration` to `Sharing & Versions`, rename `Show Collaboration` to `Show Sharing & Versions`, and open a wider `Cloud Copy & Versions` sheet from inside the inspector for version preview/restore and Delete Cloud Copy. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `docs/manual-acceptance/server-data-lifecycle-audit.md` | Implement labels and Stop Sharing help first, then build the Cloud Copy & Versions sheet. |
 | 2026-05-22 | Focused Gate 3 implementation plan written for Sharing & Versions, Cloud Copy, Version History, Delete Cloud Copy, Clear Local MarkLab Data, cleanup jobs, and restore drill. | `docs/plans/2026-05-22-sharing-versions-cloud-copy-plan.md` | Start Phase 1: labels and Stop Sharing help copy only. |
+| 2026-05-22 | Phase 1 of Sharing & Versions plan completed. Native toolbar menu, inspector toggle, and inspector title now use `Sharing & Versions`; Stop Sharing buttons expose hover/help copy explaining that cloud copy and version history are kept. | `apps/marklab-macos/Sources/MarkLabApp/MarkEditShell/MarkEditDocumentShellView.swift`; `apps/marklab-macos/Tests/MarkLabMacOSTests/MarkLabNativeUIStrategyTests.swift`; verification: `swift test --package-path apps/marklab-macos` | Start Phase 2: add a Cloud Copy section and `Cloud Copy & Versions` sheet skeleton. |
 
 Exit criteria:
 

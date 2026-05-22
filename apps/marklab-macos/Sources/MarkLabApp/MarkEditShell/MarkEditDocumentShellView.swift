@@ -35,6 +35,10 @@ enum MarkEditConflictReviewMode: String, CaseIterable, Identifiable {
 // Copyright (c) 2023 MarkEdit.app.
 
 struct MarkEditDocumentShellView: View {
+  static let sharingAndVersionsLabel = "Sharing & Versions"
+  static let showSharingAndVersionsLabel = "Show Sharing & Versions"
+  static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
+
   @ObservedObject var model: MarkLabAppModel
   let descriptor = MarkEditShellDescriptor.current
   private let retainsSharedDocumentOnDisappear: Bool
@@ -244,6 +248,7 @@ struct MarkEditDocumentShellView: View {
         Button { model.stopSharing() } label: {
           Label("Stop Sharing", systemImage: "xmark.circle")
         }
+        .help(Self.stopSharingHelpText)
         .disabled(!model.canStopSharing)
 
         Divider()
@@ -261,14 +266,14 @@ struct MarkEditDocumentShellView: View {
         Button {
           collaborationInspectorPresented.toggle()
         } label: {
-          Label("Show Collaboration", systemImage: "sidebar.right")
+          Label(Self.showSharingAndVersionsLabel, systemImage: "sidebar.right")
         }
         .disabled(!hasCollaborationInspectorContent)
       }
     } label: {
-      Label("Collaboration", systemImage: "link")
+      Label(Self.sharingAndVersionsLabel, systemImage: "link")
     }
-    .help("Collaboration")
+    .help(Self.sharingAndVersionsLabel)
   }
 
   private var localFormattingEnabled: Bool {
@@ -296,7 +301,7 @@ struct MarkEditDocumentShellView: View {
   private var inspector: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        Text("Collaboration")
+        Text(Self.sharingAndVersionsLabel)
           .font(.headline)
         if model.hasSharedDocument {
           inspectorSection("Access Links") {
@@ -341,6 +346,7 @@ struct MarkEditDocumentShellView: View {
                 .textSelection(.enabled)
             }
             Button("Stop Sharing") { model.stopSharing() }
+              .help(Self.stopSharingHelpText)
               .disabled(!model.canStopSharing)
           }
         }

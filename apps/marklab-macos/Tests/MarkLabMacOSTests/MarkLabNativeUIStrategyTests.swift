@@ -251,6 +251,17 @@ struct MarkLabNativeUIStrategyTests {
     #expect(collaborator?.roleLabel == "Edit")
   }
 
+  @Test("sharing and versions labels explain retained cloud copy")
+  @MainActor
+  func sharingAndVersionsLabelsExplainRetainedCloudCopy() {
+    #expect(MarkEditDocumentShellView.sharingAndVersionsLabel == "Sharing & Versions")
+    #expect(MarkEditDocumentShellView.showSharingAndVersionsLabel == "Show Sharing & Versions")
+    #expect(
+      MarkEditDocumentShellView.stopSharingHelpText
+        == "Stops sync and revokes active links. Cloud copy and version history are kept."
+    )
+  }
+
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")
   @MainActor
   func tableOfContentsHeadingBehavior() {
