@@ -112,9 +112,11 @@ Realtime sync keeps connected editors current. It is not a substitute for versio
 
 ## Version History
 
-The API has version routes for manual save, autosave, list, and restore. Those routes flush active collaboration state before saving or restoring.
+The native `Sharing & Versions` inspector exposes online version history for shared documents.
 
-The new native hosted UI does not yet expose a complete Versions panel. The planned `Cloud Copy & Versions` surface should show online version history before `Delete Cloud Copy` becomes user-facing. Until it does, pilot users should keep important Markdown files in Git, Time Machine, or another external backup/version system.
+Shared documents create online checkpoints from the active provider state. `Save Checkpoint` and `Cmd+S` create manual checkpoints from the current shared state; server-side autosave creates automatic checkpoints after quiet periods. The Versions panel lists checkpoints, previews the selected snapshot, and restores a selected version only after confirmation. Restore creates a new rollback checkpoint instead of mutating old snapshots.
+
+Browser collaborators participate in the same shared provider state and their edits are captured by online checkpoints, but the browser surface does not expose version controls yet. Pilot users should still keep important Markdown files in Git, Time Machine, or another external backup/version system.
 
 ## Plan And Billing
 

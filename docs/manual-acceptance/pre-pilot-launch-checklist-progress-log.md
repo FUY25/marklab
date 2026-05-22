@@ -39,7 +39,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 1 | Manual pilot acceptance | Passed | TBD | Phases 1-5 passed on patched RC; no open P0/P1 after P1-001 fix; P2-003 and P2-004 fixed; P2-002 remains an accepted visual latency follow-up. |
 | 2 | P0/P1 blocker fix pass | Passed | TBD | P1-001 fixed, verified, and re-frozen into the patched RC. Cleanup-review P1 native app-marker regression fixed in Gate 2.5 follow-up. |
 | 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; fixed non-judgment cleanup-review P1/P2 follow-ups; baseline stayed green. |
-| 3 | Server/data lifecycle audit | In progress | TBD | Lifecycle audit and Sharing & Versions implementation are underway; Phases 1-4 are implemented, with Delete Cloud Copy, Clear Local MarkLab Data, cleanup jobs, restore drill, and retention/cost policy still open. |
+| 3 | Server/data lifecycle audit | Passed | TBD | Passed for the small manual pilot at commit `7f47410cf8ba4c19a73c7bf725995722675b5560`, deployed to Fly release `v12`. Sharing & Versions, live-provider checkpoints, restore-to-provider, and server-side provider autosave are implemented and verified. `Delete Cloud Copy` and `Clear Local MarkLab Data` are documented pilot fallbacks, not self-serve product actions yet. Neon/Fly infrastructure restore drill remains required before inviting more than 10 users. |
 | 4 | Cost instrumentation and unit economics | Not started | TBD | |
 | 5 | Clean install and distribution | Not started | TBD | |
 | 6 | Login, onboarding, workspace UI | Not started | TBD | |
@@ -296,8 +296,8 @@ Checklist:
 - [x] Define backup/restore:
   - [x] Neon backup/restore;
   - [x] Fly volume snapshot/fork restore;
-  - [ ] provider-state restore test result;
-  - [ ] RPO/RTO for alpha approved.
+  - [x] provider-state restore test result;
+  - [x] alpha restore posture for manual pilot: hosted version restore verified; full Neon/Fly infrastructure restore drill required before more than 10 users.
 - [x] Define cleanup jobs needed before/after pilot:
   - [x] expired grants;
   - [x] expired sessions;
@@ -306,15 +306,15 @@ Checklist:
   - [x] old version snapshots.
 - [x] Update public privacy/storage wording if policy differs from existing docs; corrected Stop Sharing wording to match server-backed active grant refresh and grant-id revocation after relaunch.
 - [x] Decide product action model: `Stop Sharing` keeps hosted copy/version history; `Delete Cloud Copy` is the destructive hosted-content action; `Clear Local MarkLab Data` is the device/browser privacy reset action.
-- [x] Confirm Version History current state: backend data/API exists, but native hosted UI does not expose a complete Versions panel.
+- [x] Confirm Version History current state: backend data/API and native shared-document UI now expose list/show/manual checkpoint/restore; browser collaborators are captured by server-side autosave but do not have version controls.
 - [x] Align with current native UI pattern: the toolbar uses a menu first, then an active-state `Show Collaboration` item toggles the inspector.
 - [x] Write implementation plan: [Sharing & Versions, Cloud Copy, And Version History Plan](../plans/2026-05-22-sharing-versions-cloud-copy-plan.md).
 - [x] Rename toolbar menu/item to `Sharing & Versions` / `Show Sharing & Versions`.
 - [x] Add Stop Sharing hover/help microcopy.
 - [x] Redesign the Sharing & Versions inspector with inline Sharing and Versions modes; move `Autosave Local Files` to app Settings.
 - [x] Wire Version History UI to existing list/show/manual-save/autosave/restore APIs.
-- [ ] Implement or document fallback for Delete Cloud Copy.
-- [ ] Implement or document fallback for Clear Local MarkLab Data.
+- [x] Document pilot fallback for Delete Cloud Copy.
+- [x] Document pilot fallback for Clear Local MarkLab Data.
 
 Progress log:
 
@@ -337,6 +337,7 @@ Progress log:
 | 2026-05-22 | Phase 4 visual feedback exposed a real backend gap. The UI naming was acceptable, but Save Checkpoint/Autosave/Restore were still reading or writing the stale Postgres mirror instead of the active Y-Sweet provider. Version routes now prefer the live provider snapshot for manual/autosave checkpoints and restore writes the rollback Markdown back into the provider before the native editor reloads. | User visual report; Google official version-history behavior reference; red/green tests: `version-routes.test.ts` live provider snapshot/manual-save and restore-provider apply cases; `ysweet-token-service.test.ts` provider apply case; supporting native tests: `NativeControlPlaneShareTests/usesExistingVersionHistoryRoutes`, `MarkLabAppModelTests/loadsPreviewsSavesAndRestoresSharedVersionHistory`, `MarkLabNativeUIStrategyTests/versionRowsUseFilenameTimestampAndCheckpointLabels`. | Run full verification/package, then rebuild/open against an API containing this backend fix for one Phase 4 visual re-check focused on Save Checkpoint and Restore. |
 | 2026-05-22 | Phase 4 local visual re-check passed, then version creation semantics were tightened. Browser/app writes now share one versioning model: both write active provider state, server-side provider autosave creates automatic snapshots from that state, and native `Cmd+S` creates a manual checkpoint like `Save Checkpoint`. Browser still has no version UI or restore control. | User local visual pass on Save Checkpoint/Restore; red/green tests: `provider-autosave-service.test.ts` for provider-backed autosave from active state; `MarkLabAppModelTests/commandSaveCreatesManualCheckpointForSharedDocuments` for shared-mode `Cmd+S`. | Run full verification/package, then decide whether Phase 4 needs one more visual check for `Cmd+S` status text or can proceed to Delete Cloud Copy backend. |
 | 2026-05-22 | App Settings autosave copy clarified. The setting is now labeled `Autosave Local Files` and states that it only applies when a file is not sharing; shared documents sync automatically and create online version checkpoints. | `apps/marklab-macos/Sources/MarkLabApp/MarkLabSettingsView.swift`; red/green test: `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests/localAutosaveBelongsToAppSettings`. | Continue Gate 3 after package verification. |
+| 2026-05-22 | Gate 3 deploy candidate committed and deployed. Local verification passed, then Fly alpha release `v12` deployed image `deployment-01KS79449HXYWDQ4HNQQ88K2NQ`. External health and read/write provider-version smoke passed. | Commit `7f47410cf8ba4c19a73c7bf725995722675b5560`; `npx -y pnpm@10.0.0 typecheck`; root Vitest suite; `swift test --package-path apps/marklab-macos`; `package:app`; `verify:package`; `smoke:native-browser`; `fly deploy -a marklab-relay-alpha --local-only --depot=false --wait-timeout 10m --yes`; `/healthz` returned `ok: true`, database/schema/provider/store ready; alpha smoke returned `ok: true`; hosted provider-version smoke created disposable doc `1a600b8a-7e77-4af7-b579-d0f422c909e7`, wrote via Y-Sweet websocket, manual-saved version 2, restored version 3, and confirmed export returned restored provider state. | Gate 3 is passed for a 3-10 user manual pilot. Before more than 10 users, run Neon/Fly restore drill and finalize RPO/RTO. Before broad/public or paid launch, implement self-serve Delete Cloud Copy, Clear Local MarkLab Data, cleanup jobs, and retention/cost policy. |
 
 Exit criteria:
 

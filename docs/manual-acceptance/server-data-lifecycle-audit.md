@@ -2,13 +2,13 @@
 
 Date: 2026-05-22
 Baseline branch: `macos-app`
-Baseline commit: `51e55c4 fix: streamline native conflict review UI`
+Baseline commit: `7f47410 feat: add shared version autosave`
 
 This audit is for the pre-pilot launch gate. It records what MarkLab stores locally and remotely, what deletion/revocation does today, and what is still missing before a broader launch or paid billing.
 
 ## Gate Verdict
 
-Manual pilot can continue with clear operator expectations, but the lifecycle story is not fully implemented yet.
+Gate 3 passes for the small manual pilot with clear operator expectations. The lifecycle story is good enough for 3-10 controlled users, but it is not yet sufficient for broad public launch or paid billing.
 
 Implemented now:
 
@@ -17,6 +17,9 @@ Implemented now:
 - Native app local bindings, projection baselines, conflicts, and CLI handoff files are written under the user's MarkLab Application Support directory with `0600` file permissions.
 - Access grants and share links are revoked by setting `revoked_at`, and provider-token refresh denies revoked/expired grants.
 - `Stop Sharing` flushes pending shared projection, revokes currently listed active links when possible, clears the native binding/baseline for that local file, and returns the native window to local-only mode.
+- The native `Sharing & Versions` inspector exposes inline Sharing and Versions modes. Shared documents can list, preview, manually checkpoint, and restore online versions from the app.
+- Browser and native edits write the active Y-Sweet provider state. Manual checkpoints and autosave checkpoints read that live provider state, and restore writes the selected version back into the provider before the app/browser continue.
+- A server-side provider autosave job periodically creates online version checkpoints for provider-backed branches after a quiet period, so browser-only shared edits are captured even though the browser has no version UI.
 - Browser edit sessions persist reload metadata in localStorage and Yjs state in IndexedDB under keys scoped by document/provider/session identity.
 
 Missing or not fully implemented:
@@ -24,18 +27,18 @@ Missing or not fully implemented:
 - No API/UI path was found for hard-deleting a cloud document, workspace, or account.
 - No scheduled cleanup job was found for expired/revoked grants, expired sessions, old provider-token rows, stale OIDC states, inactive provider docs, old versions, browser IndexedDB entries, or completed CLI response files.
 - No implemented provider-document delete/orphan cleanup path was found for `/data/ysweet`.
-- Backup/restore guidance exists in the production runbook, but an actual restore drill and concrete alpha RPO/RTO are still pending.
+- Backup/restore guidance exists in the production runbook. Hosted version restore into provider state has been tested on the deployed alpha, but a full Neon/Fly infrastructure restore drill and concrete alpha RPO/RTO are still pending before more than 10 users.
 - Public/privacy wording has been corrected for the current Stop Sharing behavior; it still should not promise full cloud deletion or automatic cleanup until those paths exist.
 
 Pilot recommendation:
 
-- Accept for a small manual pilot if operators explicitly treat cloud copies as retained until manual cleanup, do not promise account/document deletion SLAs, and run backup/restore checks before inviting more than 10 users.
+- Accept for a small manual pilot if operators explicitly treat cloud copies as retained until manual cleanup, do not promise account/document deletion SLAs, and run the full Neon/Fly restore drill before inviting more than 10 users.
 - Do not enter paid launch until cloud deletion semantics, cleanup jobs, and restore drill evidence are implemented or deliberately scoped into product/legal wording.
 
 Accepted product model:
 
 - `Stop Sharing` stops active sharing/sync for the local file and revokes active links. It does not delete the hosted copy, online version history, provider state, or local Markdown file.
-- `Version History` is part of the hosted cloud copy. The backend stores version snapshots and exposes version list/show/save/restore routes, but the current native hosted UI does not yet expose a complete Versions panel.
+- `Version History` is part of the hosted cloud copy. The backend stores version snapshots and the native app exposes version list/show/manual checkpoint/restore controls for shared documents. Browser collaborators participate in version history through shared provider writes and server-side autosave, but they do not have version controls.
 - `Delete Cloud Copy` is a separate destructive document action for deleting the hosted document, online version history, access grants, collaboration sessions, and provider state. It must never delete the local Markdown file.
 - `Clear Local MarkLab Data` is a separate device/browser privacy and reset action for removing local MarkLab support data, browser caches, handoff files, local tokens/session metadata, baselines, and conflict copies. It must not delete hosted documents or local Markdown files.
 - The product should describe shared documents as local-file-first documents with a hosted cloud copy, not as a purely temporary relay room.
@@ -47,9 +50,8 @@ UI placement recommendation:
 - In active sharing state, the menu should keep quick actions such as `Stop Sharing`, `Create Edit Link`, and `Create View Link`, and rename `Show Collaboration` to `Show Sharing & Versions`.
 - Keep `Stop Sharing` in the Sharing & Versions inspector because it is the normal per-document sharing state action.
 - Add a small hover-only explanation on `Stop Sharing`: "Stops sync and revokes active links. Cloud copy and version history are kept." This keeps the primary UI quiet while making the retention behavior discoverable.
-- Add a lightweight `Cloud Copy` or `Version History` entry inside the Sharing & Versions inspector that opens a wider `Cloud Copy & Versions` sheet. The narrow inspector should remain for status and common sharing actions.
-- Put `Version History` in the wider `Cloud Copy & Versions` sheet. It should list versions, show metadata, preview a selected snapshot, allow manual save, and allow restore with confirmation.
-- Put `Delete Cloud Copy` in the `Cloud Copy & Versions` sheet's Danger Zone, not as a normal button in the narrow inspector. It is destructive and should require a confirmation sheet that says the local Markdown file stays on disk.
+- Put `Version History` inline in the Sharing & Versions inspector so users can compare the current document and prior versions without leaving the editor.
+- Keep `Delete Cloud Copy` out of the normal Sharing tab. When implemented, it belongs in a destructive document Danger Zone with explicit confirmation that the local Markdown file stays on disk.
 - Put `Clear Local MarkLab Data` in app-level Settings under Privacy/Support/Reset, not in the document Collaboration inspector. It is device/account-local cleanup, not a sharing action for the current document.
 
 Execution plan:
@@ -57,14 +59,13 @@ Execution plan:
 1. Product wording and docs: lock the three-action model in lifecycle, privacy, and user-guide docs.
 2. Toolbar/menu IA: rename the current `Collaboration` toolbar menu to `Sharing & Versions` and rename its active-state `Show Collaboration` item to `Show Sharing & Versions`.
 3. `Stop Sharing` UI: add hover/help microcopy and a lightweight confirmation only if the implementation needs one; current behavior should continue retaining the cloud copy.
-4. `Cloud Copy & Versions` surface: add a wider sheet/window opened from the Sharing & Versions inspector with `Versions` and `Danger Zone` sections so Version History, Delete Cloud Copy, and future document lifecycle actions are not crowded into the narrow inspector.
-5. `Version History` UI: wire existing version APIs into the Cloud Copy & Versions surface with list, selected-version preview, manual save, restore confirmation, and clear copy that restore writes a new rollback version rather than mutating old snapshots.
-6. `Delete Cloud Copy` backend: add an owner-only document deletion/tombstone API, revoke grants, close or expire sessions, delete/queue provider-state cleanup, and preserve audit rows only according to the retention policy.
-7. `Delete Cloud Copy` UI: add Cloud Copy & Versions Danger Zone entry with explicit confirmation and success/error states.
-8. `Clear Local MarkLab Data` native/browser cleanup: add a support/settings action for app support files and browser site data guidance or self-cleanup where technically possible.
-9. Cleanup jobs: add scheduled cleanup for expired/revoked grants, sessions, token audit rows, stale local handoff files, stale browser IndexedDB/localStorage entries, and provider orphans created by deleted cloud copies.
-10. Backup/restore drill: record Neon and Fly provider restore evidence before more than 10 users.
-11. Tests: prove `Stop Sharing` retains hosted content, `Version History` can list/show/manual-save/restore from the UI surface, `Delete Cloud Copy` removes hosted content without touching local disk, and `Clear Local MarkLab Data` removes local traces without touching cloud content.
+4. `Version History` UI: completed inline in the Sharing & Versions inspector with list, selected-version preview, manual checkpoint, restore confirmation, and clear copy that restore writes a new rollback version rather than mutating old snapshots.
+5. `Delete Cloud Copy` backend: before public launch, add an owner-only document deletion/tombstone API, revoke grants, close or expire sessions, delete/queue provider-state cleanup, and preserve audit rows only according to the retention policy.
+6. `Delete Cloud Copy` UI: before public launch, add a destructive document Danger Zone entry with explicit confirmation and success/error states.
+7. `Clear Local MarkLab Data` native/browser cleanup: before public launch, add a support/settings action for app support files and browser site data guidance or self-cleanup where technically possible.
+8. Cleanup jobs: before broad launch or paid billing, add scheduled cleanup for expired/revoked grants, sessions, token audit rows, stale local handoff files, stale browser IndexedDB/localStorage entries, and provider orphans created by deleted cloud copies.
+9. Backup/restore drill: before more than 10 users, record Neon and Fly provider restore evidence.
+10. Tests: before public launch, prove `Stop Sharing` retains hosted content, `Delete Cloud Copy` removes hosted content without touching local disk, and `Clear Local MarkLab Data` removes local traces without touching cloud content. Version History list/show/manual-save/restore has deployed API/UI coverage.
 
 ## Evidence Checked
 
@@ -136,8 +137,9 @@ Execution plan:
 - Backend data exists in `document_versions`, including Markdown snapshot, hash, actor type/id, operation, parent version, version number, and creation time.
 - API routes exist for listing branch versions, showing one version snapshot, manual save, autosave, and restoring a version onto the active branch.
 - Restore creates a new rollback version and applies restored state through the live writer/provider path; existing historical snapshots are not mutated.
-- Current native hosted UI does not expose a complete Versions panel.
-- Product decision: Version History should be visible before `Delete Cloud Copy` becomes user-facing, because Delete Cloud Copy deletes the hosted copy and online history users can otherwise inspect and restore from.
+- Native shared documents expose an inline Versions panel with manual checkpoint, version list, selected snapshot preview, and guarded restore.
+- Browser collaborators do not have version controls, but their edits are part of the shared provider state and are captured by server-side autosave checkpoints.
+- Product decision: Version History is now visible before `Delete Cloud Copy` becomes user-facing, because Delete Cloud Copy deletes the hosted copy and online history users can otherwise inspect and restore from.
 
 ### Revoke link
 
@@ -169,6 +171,7 @@ Product decision: `Stop Sharing` should keep this non-destructive behavior. The 
 - It should keep the local Markdown file on disk.
 - It should live in document Settings/Danger Zone with explicit confirmation.
 - Minimum pilot fallback before implementation: operator-only cleanup runbook with exact Neon and provider-store steps, plus a warning that this is not self-serve.
+- Current pilot fallback: do not promise self-serve Delete Cloud Copy. If a pilot user requests hosted-content deletion, treat it as an operator support task: revoke links first, confirm the local Markdown file is preserved, take any required export/backup, then perform scoped manual database/provider cleanup outside the product UI. This must become a proper API/UI path before public launch.
 
 ### Clear Local MarkLab Data
 
@@ -176,6 +179,7 @@ Product decision: `Stop Sharing` should keep this non-destructive behavior. The 
 - This should remove local MarkLab traces for the device/browser: native app support files, projection baselines, conflict copies, CLI handoff files, local tokens/session metadata, browser localStorage, and browser IndexedDB caches.
 - It should not delete hosted documents, online version history, active grants, or the user's Markdown files.
 - It should live in app Settings under Privacy/Support/Reset, not in the document Collaboration inspector.
+- Current pilot fallback: there is no one-click self-serve reset. Operators can guide the user to Stop Sharing for each shared local file, quit MarkLab, remove MarkLab Application Support data for the relevant profile, and clear browser site data for the hosted origin. This does not delete hosted documents or the user's Markdown files.
 
 ### Document deletion
 
@@ -246,18 +250,24 @@ What is in place:
 - The runbook requires schema readiness before deploy and `/healthz` readiness for database/schema/provider/store.
 - The runbook documents a production persistence smoke: write a marker, restart the Fly machine, reopen the edit link, and confirm provider state persists from `/data/ysweet`.
 
+Current Gate 3 restore evidence:
+
+- On 2026-05-22, deployed Fly alpha release `v12` at commit `7f47410cf8ba4c19a73c7bf725995722675b5560`.
+- Hosted provider-version smoke created disposable doc `1a600b8a-7e77-4af7-b579-d0f422c909e7`, wrote a marker through a real Y-Sweet websocket, confirmed export read the live provider marker, manual-saved version 2, restored the initial version as version 3, and confirmed export returned restored provider state.
+- `/healthz` after deploy returned `ok: true` with database, schema, provider, and provider store ready.
+
 What is not yet sufficient:
 
 - Exact Neon backup tier, PITR window, and restore command are not captured in repo.
 - Exact Fly volume snapshot schedule and restore procedure are not captured in repo.
-- No restore drill result is recorded for this gate.
-- No alpha RPO/RTO is recorded.
+- No full Neon PITR/Fly volume restore drill result is recorded for this gate.
+- No final alpha RPO/RTO is approved beyond the manual-pilot posture: hosted version restore is verified; infrastructure restore must be treated as manual recovery until tested.
 
 Minimum before more than 10 users:
 
 - Record current Neon backup/PITR capability for `DATABASE_URL`.
 - Record current Fly volume snapshot/fork capability for `marklab_ysweet_data`.
-- Run a restore drill on a disposable doc:
+- Run a full infrastructure restore drill on a disposable doc:
   - create shared document;
   - write marker from app/browser;
   - confirm marker in Neon snapshot/export and provider state;
@@ -292,7 +302,7 @@ These are not blockers for a tiny manual pilot, but they should be implemented b
 | Where does Clear Local MarkLab Data live? | App Settings under Privacy/Support/Reset. | Implementation. |
 | Is Fly volume snapshot enough? | No. Treat as recovery support only. | More than 10 users. |
 | Version retention | Keep all during pilot. | Paid launch / storage pricing. |
-| Version History UI | Required in document settings before Delete Cloud Copy is user-facing. | Gate 3 implementation. |
+| Version History UI | Implemented in the native Sharing & Versions inspector for shared documents. | Browser version controls can wait until later. |
 | Browser/native local cache retention | User-controlled plus current limited app cleanup. | Public support docs. |
 | Logs | Do not log raw tokens/content/local paths by policy. | Before paid launch, run log audit. |
 
@@ -305,13 +315,15 @@ These are not blockers for a tiny manual pilot, but they should be implemented b
 - [x] Cleanup jobs needed before launch listed.
 - [x] Existing privacy/storage docs checked for overpromise risk and corrected for current Stop Sharing server-grant refresh behavior.
 - [x] Product action model decided: Stop Sharing, Delete Cloud Copy, and Clear Local MarkLab Data are separate actions.
-- [ ] Decide whether the manual pilot can proceed with "hosted content retained until manual cleanup" wording.
-- [ ] Rename the native toolbar menu from `Collaboration` to `Sharing & Versions` and `Show Collaboration` to `Show Sharing & Versions`.
-- [ ] Add Stop Sharing hover/help microcopy in the native Collaboration inspector.
-- [ ] Add `Cloud Copy & Versions` sheet opened from the Sharing & Versions inspector.
-- [ ] Wire Version History UI to existing list/show/manual-save/restore APIs.
-- [ ] Implement or document operator-only fallback for Delete Cloud Copy.
-- [ ] Implement or document support fallback for Clear Local MarkLab Data.
-- [ ] Add lifecycle regression tests for Stop Sharing, Delete Cloud Copy, and Clear Local MarkLab Data.
-- [ ] Run and record provider/Neon restore drill before inviting more than 10 users.
-- [ ] Implement or explicitly defer cloud document/workspace/account deletion before public launch.
+- [x] Decide whether the manual pilot can proceed with "hosted content retained until manual cleanup" wording.
+- [x] Rename the native toolbar menu from `Collaboration` to `Sharing & Versions` and `Show Collaboration` to `Show Sharing & Versions`.
+- [x] Add Stop Sharing hover/help microcopy in the native Collaboration inspector.
+- [x] Replace the planned `Cloud Copy & Versions` sheet with inline Sharing/Versions inspector modes after visual review.
+- [x] Wire Version History UI to existing list/show/manual-save/restore APIs.
+- [x] Implement server-side provider autosave so browser-only shared edits create online checkpoints.
+- [x] Document operator-only fallback for Delete Cloud Copy.
+- [x] Document support fallback for Clear Local MarkLab Data.
+- [x] Add lifecycle/version regression tests for Stop Sharing microcopy, Version History, manual checkpoints, shared-mode `Cmd+S`, and provider-backed autosave. Delete Cloud Copy and Clear Local MarkLab Data remain documented fallbacks until implementation.
+- [x] Run and record hosted provider-state version restore smoke.
+- [x] Schedule full Neon/Fly infrastructure restore drill before inviting more than 10 users.
+- [x] Explicitly defer self-serve cloud document/workspace/account deletion to before public launch.

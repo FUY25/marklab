@@ -35,7 +35,7 @@ The hosted service is not:
 
 - a reason to overwrite local disk state without conflict review;
 - an agent write API;
-- a substitute for external backup/version history until the native hosted Versions UI is complete;
+- a substitute for external backups such as Git, Time Machine, or exported Markdown;
 - a reason to recreate deleted local files silently.
 
 AI agents edit local files directly. The active MarkLab.app session ingests those file changes into the shared document when sharing is active.
@@ -48,7 +48,7 @@ Revoking a link removes that grant. It does not delete local files, unrelated li
 
 `Stop Sharing` returns the app document to local-only mode and asks the server for active access grants before revoking the grants it can manage. It keeps the hosted copy and online version history. After relaunch, older links may be listed without a copyable URL because raw access tokens are not stored after creation; revoke still works from the grant id. If the server grant list is temporarily unavailable, the app falls back to active links known to the current app session.
 
-`Version History` is the user-facing view of hosted snapshots. The backend stores version snapshots today; the complete native UI is still pending.
+`Version History` is the user-facing view of hosted snapshots. The native app exposes version history for shared documents. Browser collaborators write into the same provider state and are captured by online checkpoints, but browser version controls are not exposed yet.
 
 `Delete Cloud Copy` should be the separate destructive action for deleting hosted content and online version history. It is not the same as Stop Sharing and must not delete the user's local Markdown file.
 
