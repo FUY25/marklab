@@ -41,7 +41,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; fixed non-judgment cleanup-review P1/P2 follow-ups; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Passed | TBD | Commit `3e669dec2479ec710ef6bef4a6a03e536bc32558` deployed to Fly release `v13`. Health, authenticated alpha smoke, hosted provider version/restore, Delete Cloud Copy, old link/session/provider-token denial, and autosave retention tests passed. Follow-up lifecycle cleanup added tombstone-driven provider physical cleanup and scheduled stale metadata/cache cleanup. Full Neon/Fly infrastructure restore drill remains in the final launch gate. |
 | 4 | Cost instrumentation and unit economics | Passed | TBD | Passed for the small free pilot scope. Usage reporter was added and run against deployed Fly alpha; public Fly/Neon/Stripe rate-card scenarios and temporary pilot cost guardrails are documented in [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). Actual Fly/Neon billing snapshots, final Free plan packaging, and paid no-loss pricing are deferred to Gate 11. |
-| 5 | Clean install and distribution | Not started | TBD | |
+| 5 | Clean install and distribution | In progress | TBD | Local packaged-app preflight started from commit `cf5f7ca36f9071d728ec629822a57a36fa6fd07f`: `package:app` and `verify:package` passed, LaunchServices started `MarkLabApp`, and signing/Gatekeeper behavior was recorded. Separate-user/non-developer install remains pending. |
 | 6 | Login, onboarding, workspace UI | Not started | TBD | |
 | 7 | Security, privacy, and ops gate | Not started | TBD | |
 | 8 | Public docs cleanup and old approach archive | Not started | TBD | |
@@ -438,7 +438,7 @@ Goal: prove a non-developer user can install and use the app without the repo ch
 
 Checklist:
 
-- [ ] Package MarkLab.app from the RC.
+- [x] Package MarkLab.app from the RC.
 - [ ] Install on a separate macOS user profile or separate Mac.
 - [ ] Confirm app opens without Terminal.
 - [ ] Confirm bundled editor resources load.
@@ -449,13 +449,15 @@ Checklist:
 - [ ] Confirm `marklab share file.md --edit` works through MarkLab.app.
 - [ ] Confirm app-to-app join works from an edit link.
 - [ ] Confirm quit/reopen restores shared bindings.
-- [ ] Record Gatekeeper/quarantine/signing/notarization behavior.
+- [x] Record Gatekeeper/quarantine/signing/notarization behavior.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. Existing automated package checks are not enough for this gate. | Plan 6 notes clean-install pass remains manual. | Run separate-user clean install after RC freeze. |
+| 2026-05-22 | Gate 5 local packaged-app preflight started from commit `cf5f7ca36f9071d728ec629822a57a36fa6fd07f`. The app bundle packaged successfully at `dist/MarkLab.app`, package verification passed, and a LaunchServices probe started `MarkLabApp` from the `.app` bundle. | `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app`; `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package`; `open -n dist/MarkLab.app` followed by `pgrep -fl MarkLabApp`. | Run the separate-user or separate-Mac clean install pass; then verify local open/edit/save and hosted sharing from outside the repo checkout. |
+| 2026-05-22 | Signing/Gatekeeper behavior recorded. Current package is ad-hoc signed with bundle id `com.marklab.app`, has no TeamIdentifier, and is rejected by Gatekeeper assessment. This is acceptable for local preflight but not a non-developer distributable without signed/notarized packaging or explicit pilot workaround. | `codesign -dv --verbose=4 dist/MarkLab.app` reported `Signature=adhoc`; `spctl --assess --type execute --verbose=4 dist/MarkLab.app` returned `rejected`; `xattr -l dist/MarkLab.app` showed `com.apple.provenance` and no quarantine attribute in this local build. | Decide pilot distribution path: signed/notarized artifact, controlled workaround, or keep Gate 5 open until signing/notarization is implemented. |
 
 Exit criteria:
 
