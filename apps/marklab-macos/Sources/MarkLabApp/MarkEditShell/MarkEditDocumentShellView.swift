@@ -37,12 +37,16 @@ enum MarkEditConflictReviewMode: String, CaseIterable, Identifiable {
 struct MarkEditDocumentShellView: View {
   static let sharingAndVersionsLabel = "Sharing & Versions"
   static let showSharingAndVersionsLabel = "Show Sharing & Versions"
+  static let cloudCopySectionTitle = "Cloud Copy"
+  static let cloudCopyAndVersionsLabel = "Cloud Copy & Versions"
+  static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
 
   @ObservedObject var model: MarkLabAppModel
   let descriptor = MarkEditShellDescriptor.current
   private let retainsSharedDocumentOnDisappear: Bool
   @State private var collaborationInspectorPresented = false
+  @State private var cloudCopyVersionsPresented = false
   @State private var editorSelectionStatus = "Ln 1, Col 1"
   @State private var editorCommandSequence = 0
   @State private var editorCommand: MarkEditLocalEditorCommand?
@@ -89,6 +93,9 @@ struct MarkEditDocumentShellView: View {
     .inspector(isPresented: collaborationInspectorBinding) {
       inspector
         .inspectorColumnWidth(min: 300, ideal: 320, max: 420)
+    }
+    .sheet(isPresented: $cloudCopyVersionsPresented) {
+      cloudCopyVersionsSheet
     }
     .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
       model.ingestExternalFileChanges()
@@ -349,6 +356,15 @@ struct MarkEditDocumentShellView: View {
               .help(Self.stopSharingHelpText)
               .disabled(!model.canStopSharing)
           }
+
+          inspectorSection(Self.cloudCopySectionTitle) {
+            Text(Self.cloudCopyRetentionSummary)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Button(Self.cloudCopyAndVersionsLabel) {
+              cloudCopyVersionsPresented = true
+            }
+          }
         }
         if let conflict = model.conflict {
           conflictInspectorSummary(conflict)
@@ -357,6 +373,40 @@ struct MarkEditDocumentShellView: View {
       .padding(14)
     }
     .background(.regularMaterial)
+  }
+
+  private var cloudCopyVersionsSheet: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      HStack {
+        Text(Self.cloudCopyAndVersionsLabel)
+          .font(.title3.weight(.semibold))
+        Spacer()
+        Button("Done") {
+          cloudCopyVersionsPresented = false
+        }
+        .keyboardShortcut(.cancelAction)
+      }
+
+      Divider()
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Versions")
+          .font(.headline)
+        Text("Version history will list hosted snapshots, previews, manual saves, and restore actions here.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Danger Zone")
+          .font(.headline)
+        Text("Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(20)
+    .frame(minWidth: 520, minHeight: 280)
   }
 
   private func conflictInspectorSummary(_ conflict: MarkLabConflict) -> some View {

@@ -260,6 +260,12 @@ struct MarkLabNativeUIStrategyTests {
       MarkEditDocumentShellView.stopSharingHelpText
         == "Stops sync and revokes active links. Cloud copy and version history are kept."
     )
+    #expect(MarkEditDocumentShellView.cloudCopySectionTitle == "Cloud Copy")
+    #expect(MarkEditDocumentShellView.cloudCopyAndVersionsLabel == "Cloud Copy & Versions")
+    #expect(
+      MarkEditDocumentShellView.cloudCopyRetentionSummary
+        == "Cloud copy and online version history are kept after Stop Sharing."
+    )
   }
 
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")
