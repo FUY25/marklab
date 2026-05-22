@@ -21,14 +21,31 @@ Pilot users need:
 - macOS for MarkLab.app.
 - A modern browser for browser collaborators.
 - Access to the configured MarkLab API/web origin.
-- A MarkLab user token and workspace id for hosting/sharing during the private alpha.
+- An OIDC-backed MarkLab owner account for hosting/sharing during the private alpha.
 - For development builds, this repository and the commands in the manual runbook.
 
 Normal browser collaborators do not need Node, pnpm, Postgres, Docker, or Git.
 
-## Host Flow In MarkLab.app
+Browser edit and view links are guest links. Guests do not sign in when they open a browser link. MarkLab.app users do sign in, including app collaborators who open an edit link in the native app.
+
+## Sign In And Workspace
+
+MarkLab.app no longer requires a developer to export `MARKLAB_USER_TOKEN` and `MARKLAB_WORKSPACE_ID` for the normal pilot path.
 
 1. Open MarkLab.app.
+2. Open `Settings`.
+3. In `Account`, click `Sign In`.
+4. Complete the OIDC login in the browser.
+5. When the browser offers to open MarkLab, allow it.
+6. MarkLab verifies the session, selects an existing workspace, or creates a workspace if none exists.
+
+The signed-in display name from OIDC is also used as the native app collaborator name for cursor/presence display.
+
+If MarkLab.app is signed out, opening a shared app link is blocked with a sign-in message. Browser guest links remain no-login.
+
+## Host Flow In MarkLab.app
+
+1. Open MarkLab.app and sign in if needed.
 2. Open or create a Markdown file.
 3. Edit locally as usual.
 4. Click `Start Sharing`.
@@ -80,6 +97,15 @@ View links open a rendered read-only document. A view link should not mount the 
 ## App Collaborator Flow
 
 An edit link can also open in MarkLab.app.
+
+App collaborators sign in before joining. The app uses the signed-in OIDC display name for collaborator presence. Browser guests still appear as guest/browser collaborators.
+
+Through the app:
+
+1. Sign in to MarkLab.app.
+2. Open the edit link in MarkLab.app.
+3. Choose where the local Markdown file should live.
+4. MarkLab joins the shared document and starts projecting provider changes to that local file.
 
 From the CLI:
 

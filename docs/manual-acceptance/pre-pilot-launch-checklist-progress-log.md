@@ -472,36 +472,39 @@ Goal: replace operator-token handoff with a real first-run path suitable for pil
 
 Checklist:
 
-- [ ] Pick login strategy for small pilot:
-  - [ ] OIDC;
+- [x] Pick login strategy for small pilot:
+  - [x] OIDC;
   - [ ] invite-token bootstrap;
   - [ ] email magic link;
   - [ ] other.
-- [ ] Define first-run native app flow:
-  - [ ] unauthenticated state;
-  - [ ] sign-in;
-  - [ ] workspace select/create;
-  - [ ] session persistence;
+- [x] Define first-run native app flow:
+  - [x] unauthenticated state;
+  - [x] sign-in;
+  - [x] workspace select/create;
+  - [x] session persistence;
   - [ ] token refresh/expiry;
-  - [ ] sign out.
-- [ ] Define browser flow:
-  - [ ] host/admin workspace settings;
-  - [ ] edit link without login;
-  - [ ] view link without login;
-  - [ ] expired/revoked link.
+  - [x] sign out.
+- [x] Define browser flow:
+  - [x] host/admin workspace settings;
+  - [x] edit link without login;
+  - [x] view link without login;
+  - [x] expired/revoked link.
 - [ ] Implement or verify UI states:
-  - [ ] missing workspace;
+  - [x] missing workspace;
   - [ ] auth failure;
   - [ ] quota exceeded;
   - [ ] provider unavailable;
   - [ ] session expired.
-- [ ] Update user guide with real login path.
+- [x] Update user guide with real login path.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. Current broad-pilot caveat is that dev-login is disabled in production and operator token bootstrap is not a normal user path. | `README.md`, `alpha-launch-runbook.md` | Choose login strategy. |
+| 2026-05-22 | Gate 6 direction fixed: owner login uses OIDC permanently; self-serve sign-up/login is acceptable for the small pilot because discovery is controlled operationally; browser guest edit/view links stay no-login; MarkLab.app usage requires owner login, and app collaborator presence names should use the logged-in OIDC display name. Deferred follow-ups stay in later gates: stronger token storage/session expiry handling in Gate 7, final free/paid packaging in Gate 11, and public onboarding copy cleanup in Gate 8. | Product decision captured in this log; implementation scope set to OIDC hosted `/signin` and native `marklab://auth/callback` handoff. | Implement the native/browser first-run path and workspace list/create support. |
+| 2026-05-22 | Implemented the repo-side Gate 6 login/onboarding slice. Hosted web now serves `/signin` and `/auth/callback`; `/signin` starts OIDC and `/auth/callback` creates the API session then hands the native app an owner session through `marklab://auth/callback`. The API exposes `GET /api/workspaces` for logged-in users. MarkLab.app can receive the callback, verify `/api/auth/session`, list or create a workspace, persist the owner account locally, rebuild the hosted share controller without exported env vars, sign out from Settings, block shared-link opening while signed out, and pass the OIDC display name into app `/collab` URLs as `name=` for presence/cursor display. Browser edit/view links continue to work without login. | Code paths: `apps/api/src/routes/workspace-routes.ts`, `apps/api/src/services/workspace-service.ts`, `apps/collab-web/src/auth/AuthFlow.tsx`, `apps/collab-web/src/App.tsx`, `apps/marklab-macos/Sources/MarkLabMacOS/NativeAccountClient.swift`, `apps/marklab-macos/Sources/MarkLabApp/NativeAccountStore.swift`, `apps/marklab-macos/Sources/MarkLabApp/MarkLabApp.swift`, `apps/marklab-macos/Sources/MarkLabApp/MarkLabSettingsView.swift`. Targeted verification passed: `npx -y pnpm@10.0.0 vitest run apps/api/src/routes/workspace-routes.test.ts`; `npx -y pnpm@10.0.0 vitest run apps/collab-web/src/App.test.tsx apps/api/src/http/app.test.ts`; `swift test --package-path apps/marklab-macos --filter MarkLabAppModelTests`; `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests/localAutosaveBelongsToAppSettings`. | Run full typecheck/test suite, configure hosted OIDC secrets when credentials exist, deploy schema/app, then smoke `/signin` through a real OIDC provider plus native callback/workspace creation before marking Gate 6 passed. |
+| 2026-05-22 | Full local verification for the repo-side Gate 6 slice passed. The final native guard also moved the app join requirement below the UI layer so direct native joins require a signed-in owner session too; the app/CLI service can load the locally stored owner account for app-backed actions. | `npx -y pnpm@10.0.0 typecheck`; `npx -y pnpm@10.0.0 test` returned 509 passed, 1 skipped; `swift test --package-path apps/marklab-macos` returned 94 tests passed. | Configure real hosted OIDC secrets, deploy the Gate 6 build, then run live OIDC/native callback/workspace smoke before marking Gate 6 passed. |
 
 Exit criteria:
 

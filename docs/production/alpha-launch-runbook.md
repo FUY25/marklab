@@ -108,7 +108,19 @@ Required health:
 
 ## Pilot Owner Bootstrap
 
-Production disables `/api/auth/dev-login`; do not rely on dev auth for alpha pilots. Until OIDC is configured, create a pilot owner session from the operator machine with direct Neon access:
+Production disables `/api/auth/dev-login`; do not rely on dev auth for alpha pilots.
+
+Primary Gate 6 owner path is hosted OIDC:
+
+1. Configure `MARKLAB_OIDC_ISSUER`, `MARKLAB_OIDC_CLIENT_ID`, `MARKLAB_OIDC_CLIENT_SECRET`, and `MARKLAB_OIDC_REDIRECT_URI`.
+2. Deploy the API/web app.
+3. Open MarkLab.app, then `Settings` -> `Account` -> `Sign In`.
+4. Complete OIDC in the browser and allow the `marklab://auth/callback` handoff.
+5. Confirm the app reports the signed-in owner and selected/created workspace before sharing.
+
+The app stores the owner session locally and sends the OIDC display name to hosted `/collab` app sessions for cursor/presence display. Browser edit/view links remain guest links and do not require collaborator login.
+
+Fallback operator bootstrap remains available for smoke testing or incidents. Use it from the operator machine with direct Neon access:
 
 ```sh
 BOOTSTRAP_JSON=$(mktemp "${TMPDIR:-/tmp}/marklab-alpha-bootstrap.XXXXXX.json")

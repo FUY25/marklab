@@ -151,6 +151,21 @@ export async function createWorkspace(pool: DbPool, input: { userId: string; nam
   });
 }
 
+export async function listWorkspaces(pool: DbExecutor, input: { userId: string }): Promise<WorkspaceSummary[]> {
+  const result = await pool.query<WorkspaceRow>(
+    `select w.id,
+            w.name,
+            m.role
+       from workspace_members m
+       join workspaces w
+         on w.id = m.workspace_id
+      where m.user_id = $1
+      order by lower(w.name), w.id`,
+    [input.userId],
+  );
+  return result.rows.map(toWorkspace);
+}
+
 export async function listWorkspaceMembers(pool: DbExecutor, input: { workspaceId: string; userId: string }): Promise<WorkspaceMemberSummary[]> {
   await requireWorkspaceRole(pool, { workspaceId: input.workspaceId, userId: input.userId, allowed: ['Owner', 'Member', 'Reader'] });
   const result = await pool.query<MemberRow>(

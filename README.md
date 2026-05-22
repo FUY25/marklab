@@ -17,7 +17,17 @@ As of May 18, 2026, `marklab-relay-alpha.fly.dev` is deployed with the new API/c
 
 ## Pilot Workflow
 
-Launch MarkLab.app with a hosted control-plane session:
+Normal Gate 6 pilot path:
+
+1. Launch MarkLab.app.
+2. Open Settings.
+3. In Account, click Sign In.
+4. Complete the hosted OIDC login.
+5. Let the browser open MarkLab.app from `marklab://auth/callback`.
+
+The app verifies the session, selects or creates a workspace, stores the owner account locally, and then enables hosted sharing without exported env vars. Browser edit/view links remain guest links and do not require collaborator login. MarkLab.app users must sign in, and the app passes the OIDC display name into the embedded `/collab` editor for cursor/presence names.
+
+Legacy/operator launch with an already seeded hosted control-plane session still works for smoke testing:
 
 ```sh
 MARKLAB_CONTROL_PLANE_API_URL=https://marklab-relay-alpha.fly.dev \
@@ -36,7 +46,7 @@ set +a
 swift run --package-path apps/marklab-macos MarkLabApp
 ```
 
-Broad external pilots still need a real login path, normally OIDC via `MARKLAB_OIDC_*`. Production disables `/api/auth/dev-login`, so do not rely on dev auth for arbitrary pilot users.
+Production disables `/api/auth/dev-login`. Use hosted OIDC via `MARKLAB_OIDC_*` for pilot owners, and keep the operator-token bootstrap only as a fallback smoke/incident path.
 
 Host:
 

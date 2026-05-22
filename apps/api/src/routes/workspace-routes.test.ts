@@ -118,6 +118,17 @@ function createWorkspacePool() {
       return { rows: [], rowCount: 1 };
     }
 
+    if (sql.includes('from workspace_members m') && sql.includes('join workspaces w') && sql.includes('where m.user_id = $1')) {
+      const rows = members
+        .filter((member) => member.user_id === params?.[0])
+        .map((member) => {
+          const workspace = workspaces.find((candidate) => candidate.id === member.workspace_id)!;
+          return { id: workspace.id, name: workspace.name, role: member.role };
+        })
+        .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+
     if (sql.includes('select role') && sql.includes('from workspace_members')) {
       const role = members.find((member) => member.workspace_id === params?.[0] && member.user_id === params?.[1])?.role;
       return { rows: role ? [{ role } as Row] : [], rowCount: role ? 1 : 0 };
@@ -261,6 +272,24 @@ function createWorkspacePool() {
 }
 
 describe('workspace routes', () => {
+  it('lists workspaces for a logged-in self-serve owner', async () => {
+    const { pool } = createWorkspacePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    const response = await request(app)
+      .get('/api/workspaces')
+      .set({ Authorization: 'Bearer owner-token' })
+      .expect(200);
+
+    expect(response.body.workspaces).toEqual([
+      {
+        workspaceId: 'ws_existing',
+        name: 'Existing',
+        role: 'Owner',
+      },
+    ]);
+  });
+
   it('lets a logged-in user create a workspace as Owner', async () => {
     const { pool, members } = createWorkspacePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
@@ -504,6 +533,10 @@ describe('workspace routes', () => {
   it('requires a logged-in user for workspace APIs', async () => {
     const { pool } = createWorkspacePool();
     const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .get('/api/workspaces')
+      .expect(401, { error: 'unauthorized' });
 
     await request(app)
       .post('/api/workspaces')

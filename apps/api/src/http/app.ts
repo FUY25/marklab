@@ -604,7 +604,7 @@ function mountStaticCollabWeb(app: express.Express, staticCollabWeb: StaticWebOp
   if (!existsSync(indexHtml)) return;
 
   app.use('/collab-web', express.static(staticCollabWeb.distDir, { index: false }));
-  app.get(/^\/(?:collab(?:\/.*)?|workspaces\/[^/]+\/settings\/?)$/u, (_req, res) => {
+  app.get(/^\/(?:collab(?:\/.*)?|workspaces\/[^/]+\/settings\/?|signin\/?|auth\/callback\/?)$/u, (_req, res) => {
     res.sendFile(indexHtml);
   });
 }

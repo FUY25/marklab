@@ -12,7 +12,10 @@ struct MarkLabApp: App {
   var body: some Scene {
     WindowGroup("MarkLab") {
       MarkLabRootView(
-        model: MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: true),
+        model: MarkLabAppModel(
+          accountStore: NativeAccountStore.defaultStore(),
+          opensSelectedFilesInNewDocumentWindow: true
+        ),
         launchFileURL: launchFileURL
       )
     }
@@ -76,6 +79,7 @@ final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
         MarkLabAppModel(
           hostedShareController: hostedShareController,
           nativeBearerToken: nativeBearerToken,
+          accountStore: NativeAccountStore.defaultStore(),
           opensSelectedFilesInNewDocumentWindow: false
         )
       }
@@ -332,14 +336,18 @@ final class MarkLabAppModel: ObservableObject {
   @Published var restoreVersionConfirmation = ""
   @Published var deleteCloudCopyConfirmation = ""
   @Published var retainedCloudCopyAvailable = false
+  @Published private(set) var activeAccount: NativeStoredAccount?
 
   private var document: LocalMarkdownDocument?
-  private let hostedShareController: NativeHostedShareController?
+  private var hostedShareController: NativeHostedShareController?
   private let baselineStore: NativeProjectionBaselineStore
   private let conflictStore: NativeConflictStore
   private let sharedDocumentBindingStore: NativeSharedDocumentBindingStore
   private let sessionManager: NativeSharedDocumentSessionManager
-  let nativeBearerToken: String?
+  private(set) var nativeBearerToken: String?
+  private let accountStore: NativeAccountStore?
+  private let accountTransport: NativeHTTPTransport
+  private let hostedDefaults: NativeHostedDefaults
   private let beforeDiskIngestionReplace: (() -> Void)?
   private let settingsDefaults: UserDefaults
   private var lastProjectedMarkdown: String?
@@ -360,17 +368,27 @@ final class MarkLabAppModel: ObservableObject {
     sharedDocumentBindingStore: NativeSharedDocumentBindingStore = FileNativeSharedDocumentBindingStore.defaultStore(),
     sessionManager: NativeSharedDocumentSessionManager = .shared,
     nativeBearerToken: String? = ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"],
+    accountStore: NativeAccountStore? = nil,
+    accountTransport: NativeHTTPTransport = URLSessionNativeHTTPTransport(),
+    hostedDefaults: NativeHostedDefaults = .fromEnvironment(),
     beforeDiskIngestionReplace: (() -> Void)? = nil,
     opensSelectedFilesInNewDocumentWindow: Bool = false,
     localAutosaveEnabled: Bool? = nil,
     settingsDefaults: UserDefaults = .standard
   ) {
-    self.hostedShareController = hostedShareController
+    let storedAccount = try? accountStore?.load()
+    self.hostedShareController = hostedShareController ?? storedAccount.flatMap {
+      Self.makeHostedShareController(from: $0, transport: accountTransport)
+    }
     self.baselineStore = baselineStore
     self.conflictStore = conflictStore
     self.sharedDocumentBindingStore = sharedDocumentBindingStore
     self.sessionManager = sessionManager
-    self.nativeBearerToken = nativeBearerToken
+    self.nativeBearerToken = nativeBearerToken ?? storedAccount?.token
+    self.accountStore = accountStore
+    self.accountTransport = accountTransport
+    self.hostedDefaults = hostedDefaults
+    self.activeAccount = storedAccount
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
     self.settingsDefaults = settingsDefaults
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
@@ -387,8 +405,10 @@ final class MarkLabAppModel: ObservableObject {
       }
       localAutosaveDefaultsObserver = NotificationObserverToken(observer)
     }
-    if hostedShareController == nil {
-      statusText = "Open a Markdown file. Sign in/workspace environment is required before sharing."
+    if self.hostedShareController == nil {
+      statusText = "Open a Markdown file. Sign in before sharing."
+    } else if let storedAccount {
+      statusText = "Signed in as \(storedAccount.displayName). Workspace: \(storedAccount.workspaceName)."
     }
   }
 
@@ -405,6 +425,16 @@ final class MarkLabAppModel: ObservableObject {
 
   var actionsEnabled: Bool {
     hostedShareController != nil && document != nil && conflict == nil
+  }
+
+  var isSignedIn: Bool {
+    nativeBearerToken?.isEmpty == false
+  }
+
+  var signInURL: URL {
+    var components = URLComponents(url: hostedDefaults.webBaseURL.appending(path: "signin"), resolvingAgainstBaseURL: false)!
+    components.queryItems = [URLQueryItem(name: "native", value: "1")]
+    return components.url!
   }
 
   var canStartSharing: Bool {
@@ -463,7 +493,7 @@ final class MarkLabAppModel: ObservableObject {
     hasCloudCopyReference && conflict == nil && deleteCloudCopyConfirmation == "DELETE CLOUD COPY"
   }
 
-  static func markEditNativeShellURL(_ url: URL?) -> URL? {
+  static func markEditNativeShellURL(_ url: URL?, displayName: String? = nil) -> URL? {
     guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
     guard components.path == "/collab" else { return url }
     var queryItems = components.queryItems ?? []
@@ -472,9 +502,20 @@ final class MarkLabAppModel: ObservableObject {
     } else {
       queryItems.append(URLQueryItem(name: "nativeShell", value: "markedit"))
     }
+    if let displayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !displayName.isEmpty {
+      if let nameIndex = queryItems.firstIndex(where: { $0.name == "name" }) {
+        queryItems[nameIndex] = URLQueryItem(name: "name", value: displayName)
+      } else {
+        queryItems.append(URLQueryItem(name: "name", value: displayName))
+      }
+    }
     components.queryItems = queryItems
     components.percentEncodedFragment = nil
     return components.url ?? url
+  }
+
+  private func markEditNativeShellURLForCurrentAccount(_ url: URL?) -> URL? {
+    Self.markEditNativeShellURL(url, displayName: activeAccount?.displayName)
   }
 
   func openFile() {
@@ -523,15 +564,15 @@ final class MarkLabAppModel: ObservableObject {
       let storedBaseline = try? baselineStore.loadBaseline(fileURL: url)
       lastProjectedMarkdown = storedBaseline?.lastProjectedMarkdown ?? opened.markdownForSave()
       if let persistedConflict = try? conflictStore.load(fileURL: url) {
-        let bindingURL = activeSharedBinding.flatMap { Self.markEditNativeShellURL($0.appEditorURL) }
+        let bindingURL = activeSharedBinding.flatMap { markEditNativeShellURLForCurrentAccount($0.appEditorURL) }
         let normalizedConflict = persistedConflict.withSharedEditorURL(
-          Self.markEditNativeShellURL(persistedConflict.sharedEditorURL) ?? bindingURL
+          markEditNativeShellURLForCurrentAccount(persistedConflict.sharedEditorURL) ?? bindingURL
         )
         embeddedCollabURL = normalizedConflict.sharedEditorURL
         setConflict(normalizedConflict, status: "Conflict: review required before syncing resumes.")
       } else if let sharedBinding = activeSharedBinding {
         clearConflictState()
-        embeddedCollabURL = Self.markEditNativeShellURL(sharedBinding.appEditorURL)
+        embeddedCollabURL = markEditNativeShellURLForCurrentAccount(sharedBinding.appEditorURL)
         retainedCloudCopyAvailable = false
         registerSharedSession(
           fileURL: url,
@@ -567,6 +608,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func openSharedLink() {
+    guard requireSignedInForNativeSharedDocumentOpen() else { return }
     let alert = NSAlert()
     alert.messageText = "Open Shared Link"
     alert.informativeText = "Paste a MarkLab edit link, then choose where this shared document should live as a local Markdown file."
@@ -587,11 +629,78 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func openSharedLink(from url: URL) {
+    guard requireSignedInForNativeSharedDocumentOpen() else { return }
     do {
       let link = try NativeSharedDocumentLink.parse(url)
       try promptForSharedDocumentTarget(link: link)
     } catch {
       statusText = Self.sharedDocumentJoinStatus(for: error)
+    }
+  }
+
+  func handleOpenURL(_ url: URL) {
+    if let callback = NativeAuthCallback.parse(url) {
+      completeSignIn(from: callback)
+      return
+    }
+    openSharedLink(from: url)
+  }
+
+  func openSignInPage() {
+    NSWorkspace.shared.open(signInURL)
+  }
+
+  func signOut() {
+    try? accountStore?.clear()
+    activeAccount = nil
+    hostedShareController = nil
+    nativeBearerToken = nil
+    statusText = "Signed out. Sign in before sharing."
+  }
+
+  private func requireSignedInForNativeSharedDocumentOpen() -> Bool {
+    guard isSignedIn else {
+      statusText = "Sign in before opening shared documents in MarkLab.app."
+      return false
+    }
+    return true
+  }
+
+  private func completeSignIn(from callback: NativeAuthCallback) {
+    statusText = "Finishing sign-in..."
+    Task { @MainActor in
+      do {
+        let client = NativeAccountClient(
+          apiBaseURL: callback.apiBaseURL,
+          bearerToken: callback.token,
+          transport: accountTransport
+        )
+        let user = try await client.currentUser()
+        let workspaces = try await client.listWorkspaces()
+        let workspace: NativeWorkspaceSummary
+        if let existing = workspaces.first(where: { $0.role == "Owner" }) ?? workspaces.first {
+          workspace = existing
+        } else {
+          workspace = try await client.createWorkspace(name: "\(user.displayName) Workspace")
+        }
+        let account = NativeStoredAccount(
+          apiBaseURL: callback.apiBaseURL,
+          webBaseURL: callback.webBaseURL,
+          token: callback.token,
+          userId: user.userId,
+          email: user.email,
+          displayName: user.displayName,
+          workspaceId: workspace.workspaceId,
+          workspaceName: workspace.name
+        )
+        try accountStore?.save(account)
+        activeAccount = account
+        nativeBearerToken = account.token
+        hostedShareController = Self.makeHostedShareController(from: account, transport: accountTransport)
+        statusText = "Signed in as \(account.displayName). Workspace: \(account.workspaceName)."
+      } catch {
+        statusText = "Sign-in failed. Try again from Settings."
+      }
     }
   }
 
@@ -617,6 +726,9 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func joinSharedDocument(link: NativeSharedDocumentLink, localFileURL: URL) throws {
+    guard isSignedIn else {
+      throw NativeSharedDocumentLinkError.signInRequired
+    }
     guard link.mode == .edit else {
       throw NativeSharedDocumentLinkError.localJoinRequiresEditLink
     }
@@ -632,7 +744,7 @@ final class MarkLabAppModel: ObservableObject {
       try Data().write(to: localFileURL, options: [.atomic])
     }
     let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: localFileURL)
-    let appEditorURL = Self.markEditNativeShellURL(link.appEditorURL(localDocId: localDocId)) ?? link.appEditorURL(localDocId: localDocId)
+    let appEditorURL = markEditNativeShellURLForCurrentAccount(link.appEditorURL(localDocId: localDocId)) ?? link.appEditorURL(localDocId: localDocId)
     let baselineMarkdown = (try? String(contentsOf: localFileURL, encoding: .utf8)) ?? ""
     try sharedDocumentBindingStore.saveBinding(
       NativeSharedDocumentBinding(
@@ -672,6 +784,8 @@ final class MarkLabAppModel: ObservableObject {
       return "Open a tokenized edit link in MarkLab.app."
     case NativeSharedDocumentLinkError.invalidMode:
       return "Shared link has an invalid mode."
+    case NativeSharedDocumentLinkError.signInRequired:
+      return "Sign in before opening shared documents in MarkLab.app."
     default:
       return "Unable to open shared link."
     }
@@ -838,7 +952,8 @@ final class MarkLabAppModel: ObservableObject {
       managedAccessLinks = []
       activeCollaborators = []
       clearVersionHistoryState()
-      let appEditorURL = try hostedShareController.appEditorURL()
+      let rawAppEditorURL = try hostedShareController.appEditorURL()
+      let appEditorURL = markEditNativeShellURLForCurrentAccount(rawAppEditorURL) ?? rawAppEditorURL
       let sharedMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
       try sharedDocumentBindingStore.saveBinding(
         NativeSharedDocumentBinding(
@@ -1486,7 +1601,7 @@ final class MarkLabAppModel: ObservableObject {
   private func ensureConflictSharedEditorAvailable() -> Bool {
     if embeddedCollabURL != nil { return true }
     if let url = conflict?.sharedEditorURL {
-      embeddedCollabURL = Self.markEditNativeShellURL(url)
+      embeddedCollabURL = markEditNativeShellURLForCurrentAccount(url)
       return true
     }
     return false
@@ -1617,7 +1732,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   private func storableConflictSharedEditorURL(_ url: URL?) -> URL? {
-    guard let url = Self.markEditNativeShellURL(url),
+    guard let url = markEditNativeShellURLForCurrentAccount(url),
           var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else {
       return nil
@@ -1699,7 +1814,7 @@ final class MarkLabAppModel: ObservableObject {
     sessionManager.detachWindow(fileURL: fileURL)
   }
 
-  fileprivate var hasHostedShareController: Bool {
+  var hasHostedShareController: Bool {
     hostedShareController != nil
   }
 
@@ -1723,6 +1838,21 @@ final class MarkLabAppModel: ObservableObject {
       )
     }
     return makeHostedShareControllerFromEnvironment()
+  }
+
+  fileprivate static func makeHostedShareController(
+    from account: NativeStoredAccount,
+    transport: NativeHTTPTransport = URLSessionNativeHTTPTransport()
+  ) -> NativeHostedShareController {
+    NativeHostedShareController(
+      client: NativeControlPlaneShareClient(
+        apiBaseURL: account.apiBaseURL,
+        webBaseURL: account.webBaseURL,
+        bearerToken: account.token,
+        workspaceId: account.workspaceId,
+        transport: transport
+      )
+    )
   }
 
   fileprivate static func makeHostedShareControllerFromEnvironment() -> NativeHostedShareController? {
@@ -1850,7 +1980,7 @@ struct MarkLabRootView: View {
   var body: some View {
     MarkEditDocumentShellView(model: model)
       .onOpenURL { url in
-        model.openSharedLink(from: url)
+        model.handleOpenURL(url)
       }
       .onAppear {
         guard !didLoadLaunchFile, let launchFileURL else { return }

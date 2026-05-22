@@ -330,6 +330,10 @@ struct MarkLabNativeUIStrategyTests {
     #expect(MarkLabAppSettings.localAutosaveLabel == "Autosave Local Files")
     #expect(MarkLabAppSettings.localAutosaveEnabledDefaultsKey == "MarkLabLocalAutosaveEnabled")
     #expect(MarkLabAppSettings.localAutosaveDescription == "Only applies when a file is not sharing. Shared documents sync automatically and create online version checkpoints.")
+    #expect(MarkLabAppSettings.accountSectionTitle == "Account")
+    #expect(MarkLabAppSettings.accountSignedOutDescription == "Sign in before sharing or opening shared documents in MarkLab.app.")
+    #expect(MarkLabAppSettings.signInLabel == "Sign In")
+    #expect(MarkLabAppSettings.signOutLabel == "Sign Out")
   }
 
   @Test("MarkEdit shell table of contents follows MarkEdit heading behavior")

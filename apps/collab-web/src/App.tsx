@@ -1,6 +1,7 @@
 import { CollaborativeMarkdownEditor } from './editor/CollaborativeMarkdownEditor';
 import { ReadOnlyMarkdownView } from './editor/ReadOnlyMarkdownView';
 import { WorkspaceSettings } from './workspaces/WorkspaceSettings';
+import { AuthCallbackPage, SignInPage } from './auth/AuthFlow';
 
 function searchParam(name: string): string | null {
   return new URL(window.location.href).searchParams.get(name);
@@ -23,6 +24,14 @@ export function collabNativeShellFromParam(value: string | null, nativeApp = win
 export function App() {
   const path = window.location.pathname;
 
+  if (path === '/signin' || path === '/signin/') {
+    return <SignInPage nativeMode={searchParam('native') === '1'} />;
+  }
+
+  if (path === '/auth/callback' || path === '/auth/callback/') {
+    return <AuthCallbackPage />;
+  }
+
   if (path.match(/^\/workspaces\/[^/]+\/settings\/?$/u)) {
     const workspaceId = path.split('/')[2] ?? '';
     return <WorkspaceSettings workspaceId={workspaceId} />;
@@ -34,10 +43,11 @@ export function App() {
   const token = searchParam('token') ?? undefined;
   const clientKind = collabClientKindFromParam(searchParam('clientKind'));
   const nativeShell = collabNativeShellFromParam(searchParam('nativeShell'));
+  const displayName = searchParam('name') ?? undefined;
 
   if (mode === 'view') {
-    return <ReadOnlyMarkdownView docId={docId} branchId={branchId} token={token} />;
+    return <ReadOnlyMarkdownView docId={docId} branchId={branchId} token={token} displayName={displayName} />;
   }
 
-  return <CollaborativeMarkdownEditor docId={docId} branchId={branchId} token={token} clientKind={clientKind} nativeShell={nativeShell} />;
+  return <CollaborativeMarkdownEditor docId={docId} branchId={branchId} token={token} displayName={displayName} clientKind={clientKind} nativeShell={nativeShell} />;
 }

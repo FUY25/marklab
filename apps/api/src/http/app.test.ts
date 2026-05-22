@@ -80,6 +80,12 @@ describe('http app hosted web serving', () => {
     await expect(request(app).get('/workspaces/ws_1/settings').expect(200)).resolves.toMatchObject({
       text: expect.stringContaining('Collab Web'),
     });
+    await expect(request(app).get('/signin?native=1').expect(200)).resolves.toMatchObject({
+      text: expect.stringContaining('Collab Web'),
+    });
+    await expect(request(app).get('/auth/callback?code=oidc_code&state=oidc_state').expect(200)).resolves.toMatchObject({
+      text: expect.stringContaining('Collab Web'),
+    });
     await request(app).get('/healthz').expect(200);
     await request(app).get('/api/not-a-real-route').expect(404);
     await request(app).get('/relay/room_1?token=secret').expect(404);

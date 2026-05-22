@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
 import { App, collabClientKindFromParam, collabNativeShellFromParam } from './App';
+import { AuthCallbackPage, SignInPage } from './auth/AuthFlow';
 
 const providerMock = vi.hoisted(() => ({
   capturedAwareness: null as { clientID: number; on(eventName: 'update', handler: (event: { removed: number[] }) => void): void } | null,
@@ -171,6 +172,7 @@ describe('App routing', () => {
 
   afterEach(() => {
     cleanup();
+    window.sessionStorage.clear();
     delete window.__marklabNativeApp;
     delete window.__marklabNativeApplyDiskMarkdown;
     delete window.__marklabRunEditorCommand;
@@ -241,6 +243,24 @@ describe('App routing', () => {
     });
   });
 
+  it('uses the logged-in native account name for app edit sessions', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit&name=Alice%20OIDC');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeEditSessionResponse()));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/docs/doc_1/branches/branch_1/collab/session',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ mode: 'edit', clientKind: 'app', displayName: 'Alice OIDC' }),
+        }),
+      );
+    });
+  });
+
   it('broadcasts local awareness removal before destroying the hosted provider', async () => {
     window.__marklabNativeApp = true;
     window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
@@ -267,5 +287,66 @@ describe('App routing', () => {
 
     expect(providerMock.destroy).toHaveBeenCalledTimes(1);
     expect(teardownOrder.slice(0, 2)).toEqual(['awareness-cleared', 'provider-destroyed']);
+  });
+});
+
+describe('OIDC auth flow', () => {
+  afterEach(() => {
+    cleanup();
+    window.sessionStorage.clear();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('starts OIDC and marks native handoff before redirecting', async () => {
+    const redirect = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      authorizationUrl: 'https://login.example.test/authorize?state=state_1',
+    }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<SignInPage nativeMode redirect={redirect} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/auth/oidc/start', expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }));
+      expect(window.sessionStorage.getItem('marklab_native_auth')).toBe('1');
+      expect(redirect).toHaveBeenCalledWith('https://login.example.test/authorize?state=state_1');
+    });
+  });
+
+  it('turns the OIDC callback session into a native app callback URL', async () => {
+    const redirect = vi.fn();
+    window.sessionStorage.setItem('marklab_native_auth', '1');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      token: 'ml_user_secret',
+      user: {
+        userId: 'user_1',
+        email: 'alice@example.test',
+        displayName: 'Alice OIDC',
+      },
+    }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<AuthCallbackPage search="?code=oidc_code&state=oidc_state" redirect={redirect} />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/auth/oidc/callback', expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({ code: 'oidc_code', state: 'oidc_state' }),
+      }));
+      expect(redirect).toHaveBeenCalledWith(expect.stringContaining('marklab://auth/callback?'));
+    });
+    expect(redirect.mock.calls[0]?.[0]).toContain('displayName=Alice+OIDC');
+    expect(screen.getByRole('link', { name: 'Open MarkLab' }).getAttribute('href')).toContain('marklab://auth/callback?');
+    expect(window.sessionStorage.getItem('marklab_native_auth')).toBeNull();
   });
 });

@@ -13,6 +13,80 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("OIDC app callback stores account, creates a workspace, and enables hosted sharing")
+  func oidcCallbackStoresAccountCreatesWorkspaceAndEnablesHostedSharing() async throws {
+    let directory = try TemporaryDirectory()
+    let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"authenticated":true,"user":{"userId":"user_1","email":"alice@example.test","displayName":"Alice OIDC"}}"#)
+    transport.enqueue(json: #"{"workspaces":[]}"#)
+    transport.enqueue(json: #"{"workspace":{"workspaceId":"ws_created","name":"Alice OIDC Workspace","role":"Owner"}}"#, statusCode: 201)
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: "ml_user_session",
+      accountStore: accountStore,
+      accountTransport: transport
+    )
+
+    model.handleOpenURL(URL(string: "marklab://auth/callback?token=ml_user_session&apiBaseURL=https://api.example.test&webBaseURL=https://app.example.test&userId=user_1&email=alice@example.test&displayName=Alice+OIDC")!)
+    try await waitForRecordedRequests(transport, count: 3)
+    await Task.yield()
+
+    #expect(model.nativeBearerToken == "ml_user_session")
+    #expect(model.hasHostedShareController)
+    #expect(model.activeAccount?.workspaceId == "ws_created")
+    #expect(model.activeAccount?.displayName == "Alice OIDC")
+    #expect(model.statusText == "Signed in as Alice OIDC. Workspace: Alice OIDC Workspace.")
+    #expect(try accountStore.load()?.workspaceId == "ws_created")
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "GET /api/auth/session",
+      "GET /api/workspaces",
+      "POST /api/workspaces",
+    ])
+    #expect(transport.requests.allSatisfy { $0.authorization == "Bearer ml_user_session" })
+    #expect(transport.requests[2].jsonBody?["name"] as? String == "Alice OIDC Workspace")
+  }
+
+  @MainActor
+  @Test("native shared-link open requires owner sign-in")
+  func sharedLinkOpenRequiresOwnerSignIn() {
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: URL(fileURLWithPath: NSTemporaryDirectory())),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil
+    )
+
+    model.handleOpenURL(URL(string: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit")!)
+
+    #expect(model.filePath == nil)
+    #expect(model.statusText == "Sign in before opening shared documents in MarkLab.app.")
+    #expect(throws: NativeSharedDocumentLinkError.signInRequired) {
+      try model.joinSharedDocument(
+        linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit",
+        localFileURL: URL(fileURLWithPath: "/tmp/marklab-unsigned-join.md")
+      )
+    }
+  }
+
+  @MainActor
+  @Test("native shell URLs carry the signed-in display name for presence")
+  func nativeShellURLsCarryDisplayNameForPresence() throws {
+    let url = try #require(MarkLabAppModel.markEditNativeShellURL(
+      URL(string: "https://app.example.test/collab?docId=doc_1&branchId=branch_1&mode=edit&clientKind=app"),
+      displayName: "Alice OIDC"
+    ))
+    let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+
+    #expect(queryItems.contains(URLQueryItem(name: "nativeShell", value: "markedit")))
+    #expect(queryItems.contains(URLQueryItem(name: "name", value: "Alice OIDC")))
+  }
+
+  @MainActor
   @Test("shared shell disappearance retains the model for background sync")
   func sharedShellDisappearanceRetainsModelForBackgroundSync() async throws {
     let directory = try TemporaryDirectory()
@@ -245,7 +319,7 @@ struct MarkLabAppModelTests {
       baselineStore: InMemoryNativeProjectionBaselineStore(),
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
-      nativeBearerToken: nil,
+      nativeBearerToken: "ml_user_session",
       localAutosaveEnabled: true
     )
 
@@ -271,7 +345,7 @@ struct MarkLabAppModelTests {
       baselineStore: baselineStore,
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: bindingStore,
-      nativeBearerToken: nil
+      nativeBearerToken: "ml_user_session"
     )
 
     try model.joinSharedDocument(
@@ -757,7 +831,7 @@ struct MarkLabAppModelTests {
       baselineStore: InMemoryNativeProjectionBaselineStore(),
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: bindingStore,
-      nativeBearerToken: nil
+      nativeBearerToken: "ml_user_session"
     )
 
     model.loadFile(fileURL)
@@ -897,7 +971,7 @@ struct MarkLabAppModelTests {
       baselineStore: baselineStore,
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: bindingStore,
-      nativeBearerToken: nil
+      nativeBearerToken: "ml_user_session"
     )
 
     try model.joinSharedDocument(
@@ -983,7 +1057,7 @@ struct MarkLabAppModelTests {
       baselineStore: InMemoryNativeProjectionBaselineStore(),
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
-      nativeBearerToken: nil
+      nativeBearerToken: "ml_user_session"
     )
 
     #expect(throws: NativeSharedDocumentLinkError.localJoinRequiresEditLink) {

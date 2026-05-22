@@ -14,6 +14,7 @@ public enum NativeSharedDocumentLinkError: Error, Equatable {
   case invalidMode
   case localJoinRequiresEditLink
   case localFileNotEmpty
+  case signInRequired
 }
 
 public struct NativeSharedDocumentLink: Equatable, Sendable {

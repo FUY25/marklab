@@ -6,6 +6,7 @@ import {
   createWorkspace,
   createWorkspaceShareKey,
   joinWorkspaceWithShareKey,
+  listWorkspaces,
   listWorkspaceDocuments,
   listWorkspaceMembers,
   removeWorkspaceMember,
@@ -47,6 +48,16 @@ async function requireUser(pool: DbPool, req: Request) {
 
 export function createWorkspaceRoutes(pool: DbPool) {
   const router = Router();
+
+  router.get('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = await requireUser(pool, req);
+      const workspaces = await listWorkspaces(pool, { userId: user.userId });
+      res.json({ workspaces });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
     try {

@@ -25,7 +25,7 @@ struct RecordedHTTPRequest {
   }
 }
 
-final class RecordingHTTPTransport: NativeHTTPTransport {
+final class RecordingHTTPTransport: NativeHTTPTransport, @unchecked Sendable {
   private var responses: [NativeHTTPResponse] = []
   private(set) var requests: [RecordedHTTPRequest] = []
 
