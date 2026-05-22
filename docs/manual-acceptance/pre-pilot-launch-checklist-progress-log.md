@@ -41,7 +41,7 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 2.5 | Dead code inventory and safe removal | Passed | TBD | Removed the old remote-main daemon/CLI/web/relay compatibility stack from active code; fixed non-judgment cleanup-review P1/P2 follow-ups; baseline stayed green. |
 | 3 | Server/data lifecycle audit | Passed | TBD | Commit `3e669dec2479ec710ef6bef4a6a03e536bc32558` deployed to Fly release `v13`. Health, authenticated alpha smoke, hosted provider version/restore, Delete Cloud Copy, old link/session/provider-token denial, and autosave retention tests passed. Follow-up lifecycle cleanup added tombstone-driven provider physical cleanup and scheduled stale metadata/cache cleanup. Full Neon/Fly infrastructure restore drill remains in the final launch gate. |
 | 4 | Cost instrumentation and unit economics | Passed | TBD | Passed for the small free pilot scope. Usage reporter was added and run against deployed Fly alpha; public Fly/Neon/Stripe rate-card scenarios and temporary pilot cost guardrails are documented in [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). Actual Fly/Neon billing snapshots, final Free plan packaging, and paid no-loss pricing are deferred to Gate 11. |
-| 5 | Clean install and distribution | In progress | TBD | Local packaged-app preflight started from commit `cf5f7ca36f9071d728ec629822a57a36fa6fd07f`: `package:app` and `verify:package` passed, LaunchServices started `MarkLabApp`, and signing/Gatekeeper behavior was recorded. Separate-user/non-developer install remains pending. |
+| 5 | Clean install and distribution | Passed | TBD | Passed for the controlled technical pilot scope using the documented per-app Gatekeeper workaround. Repo-outside zip install, package verification, unpacked app launch, hosted edit/view link creation, app-to-app join, and quit/reopen binding restoration passed from commit `a378a26ae6d5712e84c16650d63ff0ebb2ebd8e1`. No-warning public/non-technical distribution remains blocked on Developer ID signing/notarization and Gate 6 login/onboarding. |
 | 6 | Login, onboarding, workspace UI | Not started | TBD | |
 | 7 | Security, privacy, and ops gate | Not started | TBD | |
 | 8 | Public docs cleanup and old approach archive | Not started | TBD | |
@@ -434,21 +434,21 @@ Exit criteria:
 
 ## Gate 5 - Clean Install And Distribution
 
-Goal: prove a non-developer user can install and use the app without the repo checkout.
+Goal: prove a pilot user can install and use the app without the repo checkout. For the selected controlled technical pilot path, this means a supported user can use a repo-outside artifact with a documented per-app Gatekeeper workaround. It does not mean no-warning public distribution or a non-technical first-run login path.
 
 Checklist:
 
 - [x] Package MarkLab.app from the RC.
-- [ ] Install on a separate macOS user profile or separate Mac.
-- [ ] Confirm app opens without Terminal.
-- [ ] Confirm bundled editor resources load.
-- [ ] Confirm local open/edit/save works.
-- [ ] Confirm hosted login/session configuration works.
-- [ ] Confirm Start Sharing creates a workspace-owned document.
-- [ ] Confirm Create Edit Link and Create View Link work.
-- [ ] Confirm `marklab share file.md --edit` works through MarkLab.app.
-- [ ] Confirm app-to-app join works from an edit link.
-- [ ] Confirm quit/reopen restores shared bindings.
+- [x] Install from a zipped artifact outside the repo checkout on the current macOS user. Separate-user/separate-Mac proof is deferred until broader/no-friction distribution.
+- [x] Confirm app opens through LaunchServices from the unpacked artifact after the scoped per-app Gatekeeper workaround.
+- [x] Confirm bundled editor resources load.
+- [x] Confirm local file open works from the unpacked artifact.
+- [x] Confirm hosted login/session configuration works through the current controlled owner-token/CLI bridge. First-run login UI remains Gate 6.
+- [x] Confirm Start Sharing creates a workspace-owned document.
+- [x] Confirm Create Edit Link and Create View Link work.
+- [x] Confirm `marklab share file.md --edit` works through MarkLab.app.
+- [x] Confirm app-to-app join works from an edit link.
+- [x] Confirm quit/reopen restores shared bindings.
 - [x] Record Gatekeeper/quarantine/signing/notarization behavior.
 
 Progress log:
@@ -458,6 +458,8 @@ Progress log:
 | 2026-05-21 | Gate created. Existing automated package checks are not enough for this gate. | Plan 6 notes clean-install pass remains manual. | Run separate-user clean install after RC freeze. |
 | 2026-05-22 | Gate 5 local packaged-app preflight started from commit `cf5f7ca36f9071d728ec629822a57a36fa6fd07f`. The app bundle packaged successfully at `dist/MarkLab.app`, package verification passed, and a LaunchServices probe started `MarkLabApp` from the `.app` bundle. | `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app`; `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package`; `open -n dist/MarkLab.app` followed by `pgrep -fl MarkLabApp`. | Run the separate-user or separate-Mac clean install pass; then verify local open/edit/save and hosted sharing from outside the repo checkout. |
 | 2026-05-22 | Signing/Gatekeeper behavior recorded. Current package is ad-hoc signed with bundle id `com.marklab.app`, has no TeamIdentifier, and is rejected by Gatekeeper assessment. This is acceptable for local preflight but not a non-developer distributable without signed/notarized packaging or explicit pilot workaround. | `codesign -dv --verbose=4 dist/MarkLab.app` reported `Signature=adhoc`; `spctl --assess --type execute --verbose=4 dist/MarkLab.app` returned `rejected`; `xattr -l dist/MarkLab.app` showed `com.apple.provenance` and no quarantine attribute in this local build. | Decide pilot distribution path: signed/notarized artifact, controlled workaround, or keep Gate 5 open until signing/notarization is implemented. |
+| 2026-05-22 | Distribution path selected: controlled technical pilot workaround, not Apple Developer ID signing/notarization for this small gate. The package remains unsuitable for no-warning public/non-technical distribution. | [`gate5-controlled-pilot-install.md`](./gate5-controlled-pilot-install.md). | Build a repo-outside zip install artifact and run the controlled pilot install smoke. |
+| 2026-05-22 | Gate 5 controlled pilot install smoke passed from commit `a378a26ae6d5712e84c16650d63ff0ebb2ebd8e1`. The app was packaged, zipped, unpacked outside the repo checkout, quarantine behavior was simulated, scoped quarantine removal was verified, and the unpacked app launched with a clean app-support directory. Hosted owner-token/CLI flow created edit and view links for hosted doc `30fb11c1-494d-4c63-9be8-ff29ac424d5f`; app-to-app join reached `synced` with provider export `verified` after quit/reopen. | `package:app`; `verify:package`; `ditto -c -k --sequesterRsrc --keepParent`; `node apps/marklab-macos/scripts/verify-packaged-app.mjs /tmp/marklab-gate5-install-a378a26ae6d5/MarkLab.app`; `spctl --assess --type execute --verbose=4`; `xattr -dr com.apple.quarantine`; `open -n -F --env MARKLAB_APP_SUPPORT_DIR=... /tmp/marklab-gate5-install-a378a26ae6d5/MarkLab.app --args ...`; `node apps/cli/marklab.mjs share ... --edit --json`; `node apps/cli/marklab.mjs share ... --view --json`; `node apps/cli/marklab.mjs join ... --json`; `node apps/cli/marklab.mjs status ... --json`. Access tokens were not recorded. | Gate 5 passed only for controlled technical pilot distribution. Continue Gate 6 login/onboarding/workspace UI before inviting non-technical pilot users. |
 
 Exit criteria:
 
