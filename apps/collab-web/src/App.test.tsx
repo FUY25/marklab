@@ -320,6 +320,20 @@ describe('OIDC auth flow', () => {
     });
   });
 
+  it('shows a readable sign-in failure when OIDC is not configured', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: 'oidc_not_configured',
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<SignInPage nativeMode />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Sign-in is not configured for this environment.');
+  });
+
   it('turns the OIDC callback session into a native app callback URL', async () => {
     const redirect = vi.fn();
     window.sessionStorage.setItem('marklab_native_auth', '1');
@@ -348,5 +362,11 @@ describe('OIDC auth flow', () => {
     expect(redirect.mock.calls[0]?.[0]).toContain('displayName=Alice+OIDC');
     expect(screen.getByRole('link', { name: 'Open MarkLab' }).getAttribute('href')).toContain('marklab://auth/callback?');
     expect(window.sessionStorage.getItem('marklab_native_auth')).toBeNull();
+  });
+
+  it('shows a readable callback failure when code or state is missing', async () => {
+    render(<AuthCallbackPage search="?code=oidc_code" redirect={vi.fn()} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('The sign-in response is missing required details.');
   });
 });

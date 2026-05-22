@@ -27,7 +27,7 @@ self-contained).
 
 - Stripe / paid billing — manual/free only in alpha.
 - Hosted Versions panel — README explicitly defers it.
-- OIDC sign-in UX — covered separately when OIDC is wired.
+- Hosted OIDC provider-specific behavior — covered by the Gate 6 live smoke after real `MARKLAB_OIDC_*` secrets are configured and deployed.
 - Performance under load — needs a separate load-test harness.
 
 If you find issues outside this checklist, log them anyway under the
@@ -684,18 +684,18 @@ checklist.
   somehow, and join links you provide. Drive native-app tests.
 - **Both:** test convergence, cursor, presence together over video.
 
-### Login path for your friend (until OIDC is wired)
+### Login path for your friend
 
-Three options. Recommended is a mix of A and B.
+Three options. Recommended is a mix of A and B after the Gate 6 OIDC build is deployed with real provider secrets.
 
 | Option | What the operator does | What the friend does | When |
 | --- | --- | --- | --- |
-| **A — Operator-seeded user** | Run `scripts/marklab-bootstrap-alpha-user.mjs` for the friend's email. Send them the `ml_user_...` token plus workspace id over a secure channel (Signal, 1Password share, encrypted email). | Set the env vars when launching MarkLab.app, or paste the token into the `/signin` page once it ships. | Native app tests and authenticated browser tests. |
-| **B — Share link only** | Create the edit grant. Send them the `/collab?...` URL. | Open the URL in a browser. No login required. | Browser collaboration tests; works today without a signin UI. |
-| **C — Wait for OIDC** | Don't run with friends yet. | — | If you want this to feel like a real pilot. Pushes the test out. |
+| **A — Hosted OIDC owner** | Send the packaged MarkLab.app and confirm the deployed target has `MARKLAB_OIDC_*` configured. If testing a non-default staging target, also send the target base URLs. | Launch MarkLab.app, open Settings -> Account -> Sign In, complete hosted OIDC in the browser, and allow the `marklab://auth/callback` handoff. | Native app tests and authenticated owner tests. |
+| **B — Share link only** | Create the edit grant. Send the `/collab?...` URL. | Open the URL in a browser. No login required. | Browser collaboration tests for guest edit/view links. |
+| **C — Operator-seeded fallback** | Run `scripts/marklab-bootstrap-alpha-user.mjs` for the friend's email. Send the `ml_user_...` token plus workspace id over a secure channel. | Use only the incident/smoke fallback launch path the operator specifies. | Fallback only if hosted OIDC is down or not yet deployed. |
 
 For a pre-pilot acceptance pass with one friend, use A for native app
-tests and B for browser-only tests. Both signals matter.
+tests and B for browser-only guest tests. Both signals matter.
 
 ### What to send your friend before the test
 
@@ -707,14 +707,15 @@ tests and B for browser-only tests. Both signals matter.
    produces a `.app` bundle. Do not ask them to install pnpm, swiftc,
    and clone the repo. That's developer onboarding, not pilot testing.
 
-2. **A `.env.marklab-pilot` file** (option A only) with their values:
+2. **Target configuration, only if not using the default hosted alpha.**
+   MarkLab.app defaults to `https://marklab-relay-alpha.fly.dev`; for a
+   staging target, send a tiny env file with the staging URLs:
    ```sh
    MARKLAB_CONTROL_PLANE_API_URL=https://marklab-relay-alpha.fly.dev
    MARKLAB_PUBLIC_WEB_URL=https://marklab-relay-alpha.fly.dev
-   MARKLAB_USER_TOKEN=ml_user_<their-token>
-   MARKLAB_WORKSPACE_ID=<workspace-uuid>
    ```
    They run: `set -a; source ./.env.marklab-pilot; set +a; open -a MarkLab.app`.
+   Do not send a user token for the normal OIDC path.
 
 3. **One pre-created edit grant URL and one view grant URL** for the
    browser-side tests. They confirm both URLs load before you start.
@@ -783,16 +784,18 @@ flow recovered.
 
 Total real testing: ~95 minutes, plus day-before setup.
 
-### What you cannot test until OIDC ships
+### What remains out of scope after Gate 6 repo wiring
 
 Mark these as deferred in the final report — they're not failures of
-this pass, just out of scope until login is wired:
+this pass, just out of scope until the real hosted provider and later
+account-management gates are complete:
 
 - Self-serve sign-up (friend creates their own account from a marketing
   page).
 - Password reset / account recovery from the product UI.
 - Multi-provider sign-in (Google, GitHub, etc.).
-- Workspace invite flow that doesn't require operator DB writes.
+- Hosted provider edge cases not covered by the local mock OIDC smoke.
+- Workspace invite flow beyond the current owner settings/share-key path.
 
 If any of these surface a real problem during testing (e.g. friend
 cannot find a sign-in URL at all), that is itself a finding — log it

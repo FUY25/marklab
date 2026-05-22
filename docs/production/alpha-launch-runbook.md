@@ -120,6 +120,14 @@ Primary Gate 6 owner path is hosted OIDC:
 
 The app stores the owner session locally and sends the OIDC display name to hosted `/collab` app sessions for cursor/presence display. Browser edit/view links remain guest links and do not require collaborator login.
 
+Local pre-provider regression check:
+
+```sh
+npx -y pnpm@10.0.0 smoke:oidc-local
+```
+
+This starts a local mock OIDC provider plus the API, verifies discovery, authorize, code exchange, userinfo, bearer session auth, workspace list/create, and a redacted `marklab://auth/callback` shape. It does not replace the hosted smoke against the real OIDC provider after `MARKLAB_OIDC_*` secrets are configured.
+
 Fallback operator bootstrap remains available for smoke testing or incidents. Use it from the operator machine with direct Neon access:
 
 ```sh

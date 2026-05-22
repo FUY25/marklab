@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MARKLAB_API_URL } from '@marklab/collab-editor';
+import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle, LogIn } from 'lucide-react';
 
 const NATIVE_AUTH_STORAGE_KEY = 'marklab_native_auth';
 
@@ -30,6 +31,28 @@ function apiPath(path: string): string {
 
 function defaultRedirect(url: string): void {
   window.location.assign(url);
+}
+
+function authErrorMessage(error: string): string {
+  switch (error) {
+    case 'oidc_not_configured':
+      return 'Sign-in is not configured for this environment.';
+    case 'oidc_login_failed':
+    case 'oidc_code_exchange_failed':
+    case 'oidc_userinfo_failed':
+      return 'Sign-in could not be completed. Try again or ask the operator for a fresh invite.';
+    case 'missing_oidc_callback':
+      return 'The sign-in response is missing required details.';
+    case 'invalid_oidc_start_response':
+    case 'invalid_auth_callback_response':
+    case 'invalid_auth_token':
+    case 'invalid_auth_user':
+    case 'invalid_auth_email':
+    case 'invalid_auth_display_name':
+      return 'The sign-in response was not recognized.';
+    default:
+      return 'Sign-in failed. Try again or ask the operator to check the deployment.';
+  }
 }
 
 function hostedBaseURL(): string {
@@ -110,14 +133,23 @@ export function SignInPage({ nativeMode = false, redirect = defaultRedirect }: S
 
   return (
     <main className="auth-page">
-      <section className="auth-panel">
-        <h1>Sign in to MarkLab</h1>
-        <p>Use your pilot account to create or open your workspace.</p>
-        <button type="button" onClick={() => void startSignIn()} disabled={status === 'starting'}>
-          Sign in
+      <section className="auth-panel" aria-labelledby="auth-title">
+        <p className="auth-mark">MarkLab</p>
+        <h1 id="auth-title">Sign in to MarkLab</h1>
+        <p className="auth-copy">Use your pilot account to create or open your workspace.</p>
+        <button className="auth-primary" type="button" onClick={() => void startSignIn()} disabled={status === 'starting'}>
+          {status === 'starting' ? <LoaderCircle className="auth-spin" size={17} aria-hidden="true" /> : <LogIn size={17} aria-hidden="true" />}
+          <span>{status === 'starting' ? 'Opening sign-in' : 'Sign in'}</span>
         </button>
-        {status === 'starting' ? <p role="status">Opening sign-in...</p> : null}
-        {error ? <p role="alert">{error}</p> : null}
+        {status === 'starting' ? (
+          <p className="auth-status" role="status">Opening your identity provider...</p>
+        ) : null}
+        {error ? (
+          <p className="auth-alert" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>{authErrorMessage(error)}</span>
+          </p>
+        ) : null}
       </section>
     </main>
   );
@@ -173,12 +205,33 @@ export function AuthCallbackPage({ search = window.location.search, redirect = d
 
   return (
     <main className="auth-page">
-      <section className="auth-panel">
-        <h1>Signing in</h1>
-        {status === 'loading' ? <p role="status">Finishing sign-in...</p> : null}
-        {status === 'done' && nativeURL ? <a href={nativeURL}>Open MarkLab</a> : null}
-        {status === 'done' && !nativeURL ? <p role="status">Signed in.</p> : null}
-        {error ? <p role="alert">{error}</p> : null}
+      <section className="auth-panel" aria-labelledby="auth-callback-title">
+        <p className="auth-mark">MarkLab</p>
+        <h1 id="auth-callback-title">Signing in</h1>
+        {status === 'loading' ? (
+          <p className="auth-status" role="status">
+            <LoaderCircle className="auth-spin" size={16} aria-hidden="true" />
+            <span>Finishing sign-in...</span>
+          </p>
+        ) : null}
+        {status === 'done' && nativeURL ? (
+          <a className="auth-primary auth-link" href={nativeURL}>
+            <span>Open MarkLab</span>
+            <ExternalLink size={16} aria-hidden="true" />
+          </a>
+        ) : null}
+        {status === 'done' && !nativeURL ? (
+          <p className="auth-success" role="status">
+            <CheckCircle2 size={16} aria-hidden="true" />
+            <span>Signed in.</span>
+          </p>
+        ) : null}
+        {error ? (
+          <p className="auth-alert" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>{authErrorMessage(error)}</span>
+          </p>
+        ) : null}
       </section>
     </main>
   );
