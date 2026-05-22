@@ -30,15 +30,8 @@ textarea {
   width: min(100%, 360px);
   border: 1px solid #e6e6e4;
   border-radius: 8px;
-  padding: 30px;
+  padding: 32px 30px;
   background: #ffffff;
-}
-
-.auth-mark {
-  margin: 0 0 22px;
-  color: #191919;
-  font-size: 14px;
-  font-weight: 650;
 }
 
 .auth-panel h1 {
@@ -63,8 +56,8 @@ textarea {
   gap: 8px;
   width: 100%;
   min-height: 44px;
-  border: 1px solid #d9d9d6;
-  border-radius: 6px;
+  border: 1px solid #191919;
+  border-radius: 999px;
   padding: 0 15px;
   background: #ffffff;
   color: #191919;
@@ -88,17 +81,10 @@ textarea {
   outline-offset: 2px;
 }
 
-.auth-google-mark {
-  display: inline-grid;
+.auth-google-logo {
   width: 18px;
   height: 18px;
-  place-items: center;
-  border: 1px solid #d9d9d6;
-  border-radius: 50%;
-  color: #191919;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
+  flex: 0 0 auto;
 }
 
 .auth-status,

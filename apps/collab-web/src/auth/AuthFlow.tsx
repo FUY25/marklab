@@ -98,6 +98,17 @@ function authSessionFromResponse(value: unknown): AuthSessionResponse {
   };
 }
 
+function GoogleLogo() {
+  return (
+    <svg className="auth-google-logo" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+      <path fill="#4285f4" d="M17.6 9.2c0-.6-.1-1.1-.2-1.6H9v3.1h4.8a4.1 4.1 0 0 1-1.8 2.7v2.2h2.8c1.7-1.5 2.8-3.7 2.8-6.4Z" />
+      <path fill="#34a853" d="M9 18c2.4 0 4.5-.8 6-2.2l-2.9-2.2c-.8.5-1.8.9-3.1.9a5.4 5.4 0 0 1-5.1-3.7H1v2.3A9 9 0 0 0 9 18Z" />
+      <path fill="#fbbc05" d="M3.9 10.8a5.4 5.4 0 0 1 0-3.6V4.9H1a9 9 0 0 0 0 8.2l2.9-2.3Z" />
+      <path fill="#ea4335" d="M9 3.6c1.3 0 2.5.5 3.4 1.3L15 2.4A9 9 0 0 0 1 4.9l2.9 2.3A5.4 5.4 0 0 1 9 3.6Z" />
+    </svg>
+  );
+}
+
 export function nativeAuthCallbackURL(session: AuthSessionResponse): string {
   const url = new URL('marklab://auth/callback');
   url.searchParams.set('token', session.token);
@@ -134,11 +145,10 @@ export function SignInPage({ nativeMode = false, redirect = defaultRedirect }: S
   return (
     <main className="auth-page">
       <section className="auth-panel" aria-labelledby="auth-title">
-        <p className="auth-mark">MarkLab</p>
         <h1 id="auth-title">Welcome to MarkLab</h1>
         <p className="auth-copy">Sign in or sign up with Google to continue.</p>
         <button className="auth-google" type="button" onClick={() => void startSignIn()} disabled={status === 'starting'}>
-          {status === 'starting' ? <LoaderCircle className="auth-spin" size={17} aria-hidden="true" /> : <span className="auth-google-mark" aria-hidden="true">G</span>}
+          {status === 'starting' ? <LoaderCircle className="auth-spin" size={17} aria-hidden="true" /> : <GoogleLogo />}
           <span>{status === 'starting' ? 'Opening Google' : 'Continue with Google'}</span>
         </button>
         {status === 'starting' ? (
@@ -206,7 +216,6 @@ export function AuthCallbackPage({ search = window.location.search, redirect = d
   return (
     <main className="auth-page">
       <section className="auth-panel" aria-labelledby="auth-callback-title">
-        <p className="auth-mark">MarkLab</p>
         <h1 id="auth-callback-title">Signing in</h1>
         {status === 'loading' ? (
           <p className="auth-status" role="status">

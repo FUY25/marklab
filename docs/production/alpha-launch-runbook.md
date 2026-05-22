@@ -120,6 +120,38 @@ Primary Gate 6 owner path is hosted OIDC:
 
 The app stores the owner session locally and sends the OIDC display name to hosted `/collab` app sessions for cursor/presence display. Browser edit/view links remain guest links and do not require collaborator login.
 
+### Google OIDC Setup
+
+Use this when the pilot owner login button says `Continue with Google`.
+
+1. In Google Cloud Console, create or select the MarkLab pilot project.
+2. Configure the Google Auth / OAuth consent screen:
+   - Audience: `External`, unless the pilot is limited to one Google Workspace organization.
+   - Publishing status: `Testing` is acceptable for the small pilot.
+   - App name: `MarkLab`.
+   - User support email and developer contact email: an operator email you monitor.
+   - Scopes: only `openid`, `email`, and `profile`.
+   - Test users: add every pilot owner email if Google requires test users for the selected audience/status.
+3. Create an OAuth client:
+   - Application type: `Web application`.
+   - Name: `MarkLab Alpha`.
+   - Authorized JavaScript origin: `https://marklab-relay-alpha.fly.dev`.
+   - Authorized redirect URI: `https://marklab-relay-alpha.fly.dev/auth/callback`.
+4. Store the client ID and client secret outside the repo, then set Fly secrets:
+   ```sh
+   fly secrets set -a marklab-relay-alpha \
+     MARKLAB_OIDC_ISSUER=https://accounts.google.com \
+     MARKLAB_OIDC_CLIENT_ID='<google-client-id>' \
+     MARKLAB_OIDC_CLIENT_SECRET='<google-client-secret>' \
+     MARKLAB_OIDC_REDIRECT_URI=https://marklab-relay-alpha.fly.dev/auth/callback
+   ```
+5. Confirm the secrets are present without printing values:
+   ```sh
+   fly secrets list -a marklab-relay-alpha | rg 'MARKLAB_OIDC_(ISSUER|CLIENT_ID|CLIENT_SECRET|REDIRECT_URI)'
+   ```
+
+Do not set `MARKLAB_OIDC_AUTHORIZATION_ENDPOINT` for Google unless discovery is failing; the API can discover Google endpoints from `https://accounts.google.com/.well-known/openid-configuration`.
+
 Local pre-provider regression check:
 
 ```sh
