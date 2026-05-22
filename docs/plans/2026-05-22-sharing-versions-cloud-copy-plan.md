@@ -40,7 +40,7 @@ Version backend:
 
 Deletion/local cleanup:
 
-- No product API/UI exists for deleting a cloud document/provider state/version history.
+- Delete Cloud Copy API/UI now exists locally for deleting a cloud document/provider access/version history while keeping the local Markdown file.
 - No complete product UI exists for clearing local MarkLab app/browser data.
 - Cleanup jobs for old grants, sessions, provider token audit rows, provider orphans, browser IndexedDB, and local handoff files are still missing.
 
@@ -236,6 +236,8 @@ Testing:
 
 ### Phase 5 - Delete Cloud Copy Backend
 
+Status: implemented locally; full verification and hosted lifecycle smoke still required before Gate 3 can pass. An operator-only cleanup fallback is no longer sufficient for the pilot gate.
+
 Scope:
 
 - Add an owner/manage-access-only deletion or tombstone API.
@@ -255,7 +257,7 @@ Expected files:
 - `apps/api/src/routes/*`
 - `apps/api/src/services/*`
 - `apps/api/src/db/schema.sql` if tombstone columns are needed.
-- Provider cleanup code or an explicit operator-only fallback runbook if provider deletion cannot be made self-serve in this gate.
+- Provider tombstone/cleanup code for denying future provider access, plus follow-up physical provider-store cleanup if compaction cannot be self-serve in this gate.
 
 Acceptance:
 
@@ -272,6 +274,8 @@ Testing:
 - E2E smoke for old link after deletion.
 
 ### Phase 6 - Delete Cloud Copy UI
+
+Status: implemented locally; full verification and hosted lifecycle smoke still required before Gate 3 can pass.
 
 Scope:
 
@@ -325,6 +329,11 @@ Testing:
 
 Scope:
 
+- Implement autosave-version retention:
+  - manual/import/create/rollback checkpoints are protected from automatic pruning;
+  - autosaves inside the latest 30 days of the branch edit timeline are kept;
+  - current wall-clock time is not used as the retention anchor;
+  - pruning only deletes `operation = 'autosave'` rows and must never advance or corrupt branch head state.
 - Add scheduled cleanup for:
   - expired/used OIDC states;
   - expired/revoked user sessions;
@@ -333,13 +342,13 @@ Scope:
   - native completed CLI responses;
   - stale browser localStorage/IndexedDB entries where possible;
   - provider orphans created by Delete Cloud Copy.
-- Run and record Neon/Fly provider restore drill before inviting more than 10 users.
+- Move the full Neon/Fly provider restore drill to the final launch gate.
 
 Acceptance:
 
 - Retention windows are explicit.
 - Cleanup jobs are idempotent.
-- Restore drill result is recorded in Gate 3 docs.
+- Restore drill is explicitly tracked in the final launch gate.
 - Cost instrumentation can rely on bounded storage categories.
 
 ## Visual Checkpoints
@@ -359,9 +368,10 @@ Gate 3 can pass for a small manual pilot when:
 
 - `Stop Sharing` behavior and copy clearly say the cloud copy/version history are kept.
 - Version History is inspectable from native UI or deliberately deferred with pilot wording.
-- `Delete Cloud Copy` is either implemented or covered by an operator-only cleanup fallback with no self-serve promise.
+- `Delete Cloud Copy` is implemented and tested as a self-serve destructive cloud-copy action.
+- Autosave-version retention is implemented and tested: manual/import/create/rollback checkpoints stay protected, while old autosave rows are bounded by the latest 30 days of each branch's edit timeline.
 - `Clear Local MarkLab Data` is either implemented or covered by support wording with no false privacy promise.
-- Restore drill is recorded or scheduled before more than 10 users.
+- Restore drill is tracked for the final launch gate.
 - Public docs do not claim cloud deletion, local cleanup, or version-history UI beyond what exists.
 
 Paid/public launch requires:

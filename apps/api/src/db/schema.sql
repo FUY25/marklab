@@ -432,6 +432,20 @@ create table if not exists provider_token_refreshes (
 create index if not exists provider_token_refreshes_session_created_idx
   on provider_token_refreshes (session_id, created_at desc);
 
+create table if not exists provider_doc_deletions (
+  id uuid primary key default gen_random_uuid(),
+  doc_id uuid not null,
+  branch_id uuid not null,
+  provider_doc_id text not null unique,
+  deleted_by_actor_type text not null check (deleted_by_actor_type in ('user', 'agent', 'system')),
+  deleted_by_actor_id text,
+  cleanup_status text not null default 'pending' check (cleanup_status in ('pending', 'complete', 'failed')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists provider_doc_deletions_provider_doc_id_idx
+  on provider_doc_deletions (provider_doc_id);
+
 do $$
 begin
   if exists (
@@ -504,6 +518,15 @@ $$;
 
 create index if not exists document_versions_branch_created_idx
   on document_versions (branch_id, created_at desc);
+
+create table if not exists document_branch_autosave_state (
+  branch_id uuid primary key references document_branches(id) on delete cascade,
+  pending_hash text not null,
+  active_started_at timestamptz not null default now(),
+  pending_first_seen_at timestamptz not null,
+  pending_last_seen_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists agent_tokens (
   id uuid primary key default gen_random_uuid(),

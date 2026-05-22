@@ -13,6 +13,7 @@ interface CapturedQuery {
 function createAutosavePool(input: { liveMarkdown: string }) {
   const queries: CapturedQuery[] = [];
   const liveHash = sha256Hex(input.liveMarkdown);
+  const finalQuietStartedAt = new Date(Date.now() - 3 * 60 * 1000);
 
   const query: DbPool['query'] = async <Row = unknown>(
     sql: string,
@@ -33,6 +34,7 @@ function createAutosavePool(input: { liveMarkdown: string }) {
           head_version_id: 'ver_001',
           head_version_number: 1,
           head_hash: 'sha256:old',
+          current_hash: 'sha256:old',
         } as Row],
         rowCount: 1,
       };
@@ -40,6 +42,17 @@ function createAutosavePool(input: { liveMarkdown: string }) {
 
     if (sql.includes('update document_branch_states')) {
       return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('from document_branch_autosave_state')) {
+      return {
+        rows: [{
+          pending_hash: liveHash,
+          active_started_at: finalQuietStartedAt,
+          pending_first_seen_at: finalQuietStartedAt,
+        } as Row],
+        rowCount: 1,
+      };
     }
 
     if (sql.includes('select max(created_at) as last_autosave_at')) {
@@ -56,6 +69,18 @@ function createAutosavePool(input: { liveMarkdown: string }) {
 
     if (sql.includes('update document_branches')) {
       return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('delete from document_branch_autosave_state')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('select max(created_at) as branch_edit_clock')) {
+      return { rows: [{ branch_edit_clock: new Date() } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('select id') && sql.includes('operation = \'autosave\'') && sql.includes('created_at <')) {
+      return { rows: [], rowCount: 0 };
     }
 
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') {

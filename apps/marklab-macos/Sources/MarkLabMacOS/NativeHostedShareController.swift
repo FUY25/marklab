@@ -84,4 +84,13 @@ public final class NativeHostedShareController: @unchecked Sendable {
     guard let document else { throw NativeHostedShareError.documentNotShared }
     return try await client.restoreVersion(document: document, versionId: versionId)
   }
+
+  public func deleteCloudCopy() async throws -> NativeDeleteCloudCopyResult {
+    guard let document else { throw NativeHostedShareError.documentNotShared }
+    let result = try await client.deleteCloudCopy(document: document)
+    self.document = nil
+    localDocId = nil
+    suggestedFilename = nil
+    return result
+  }
 }

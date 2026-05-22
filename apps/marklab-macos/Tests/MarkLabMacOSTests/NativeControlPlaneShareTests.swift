@@ -111,6 +111,43 @@ struct NativeControlPlaneShareTests {
     #expect(try #require(transport.requests[4].jsonBody)["versionId"] as? String == "ver_002")
   }
 
+  @Test("deletes the cloud copy through the hosted document route")
+  func deletesCloudCopyThroughHostedDocumentRoute() async throws {
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"deleted":true,"docId":"doc_hosted","branchIds":["branch_main"],"providerDocIds":["ml_doc_1"],"localFilePreserved":true}"#)
+    let client = NativeControlPlaneShareClient(
+      apiBaseURL: URL(string: "https://api.example.test")!,
+      webBaseURL: URL(string: "https://app.example.test")!,
+      bearerToken: "ml_user_session",
+      workspaceId: "workspace_1",
+      transport: transport
+    )
+    let controller = NativeHostedShareController(client: client)
+    controller.restoreSharedDocument(
+      from: NativeSharedDocumentBinding(
+        fileURL: URL(fileURLWithPath: "/tmp/note.md"),
+        document: NativeHostedDocument(
+          docId: "doc_hosted",
+          branchId: "branch_main",
+          versionId: "version_1",
+          hash: "sha256:hosted"
+        ),
+        appEditorURL: URL(string: "https://app.example.test/collab?docId=doc_hosted&branchId=branch_main")!,
+        baselineMarkdown: "# Base\n"
+      )
+    )
+
+    let result = try await controller.deleteCloudCopy()
+
+    #expect(result.deleted)
+    #expect(result.localFilePreserved)
+    #expect(result.providerDocIds == ["ml_doc_1"])
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "DELETE /api/docs/doc_hosted/branches/branch_main/cloud-copy",
+    ])
+    #expect(transport.requests.first?.authorization == "Bearer ml_user_session")
+  }
+
   @Test("maps version history HTTP failures into explicit native errors")
   func mapsVersionHistoryHTTPFailuresIntoExplicitNativeErrors() async throws {
     let transport = RecordingHTTPTransport()

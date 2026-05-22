@@ -15,10 +15,12 @@ import {
   isYSweetProviderHttpPath,
   isYSweetProviderWebSocketOriginAllowed,
   isYSweetProviderWebSocketPath,
+  extractYSweetProviderDocId,
   proxyYSweetProviderHttpRequest,
   proxyYSweetProviderWebSocketUpgrade,
 } from './provider/ysweet-provider-websocket-proxy';
 import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
+import { isProviderDocDeleted } from './services/cloud-copy-service';
 import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
 import { startProviderAutosaveCheckpointJob } from './services/provider-autosave-service';
 
@@ -63,12 +65,22 @@ async function main() {
     ...(providerTokenService ? { providerTokenService } : {}),
     ...(ysweetProvider
       ? {
-          providerHttpProxy: (req, res, next) => {
-            if (!isYSweetProviderHttpPath(req.originalUrl ?? req.url)) {
-              next();
+          providerHttpProxy: async (req, res, next) => {
+            try {
+              if (!isYSweetProviderHttpPath(req.originalUrl ?? req.url)) {
+                next();
+                return;
+              }
+              const providerDocId = extractYSweetProviderDocId(req.originalUrl ?? req.url);
+              if (providerDocId && await isProviderDocDeleted(pool, providerDocId)) {
+                res.status(410).json({ error: 'cloud_copy_deleted' });
+                return;
+              }
+              proxyYSweetProviderHttpRequest(ysweetProvider.serverUrl, req, res);
+            } catch (error) {
+              next(error);
               return;
             }
-            proxyYSweetProviderHttpRequest(ysweetProvider.serverUrl, req, res);
           },
         }
       : {}),
@@ -96,9 +108,11 @@ async function main() {
         'document_access_sessions',
         'share_links',
         'document_branch_states',
+        'document_branch_autosave_state',
         'collab_sessions',
         'provider_token_issuances',
         'provider_token_refreshes',
+        'provider_doc_deletions',
       ],
       schemaColumns: {
         documents: ['workspace_id', 'folder_id'],
@@ -155,6 +169,20 @@ async function main() {
         })
       ) {
         socket.destroy();
+        return;
+      }
+      const providerDocId = extractYSweetProviderDocId(request.url);
+      if (providerDocId) {
+        void isProviderDocDeleted(pool, providerDocId).then((deleted) => {
+          if (deleted) {
+            socket.write('HTTP/1.1 410 Gone\r\ncontent-type: application/json\r\n\r\n{"error":"cloud_copy_deleted"}');
+            socket.destroy();
+            return;
+          }
+          proxyYSweetProviderWebSocketUpgrade(ysweetProvider.serverUrl, request, socket, head);
+        }).catch(() => {
+          socket.destroy();
+        });
         return;
       }
       proxyYSweetProviderWebSocketUpgrade(ysweetProvider.serverUrl, request, socket, head);

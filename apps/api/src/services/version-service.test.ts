@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { sha256Hex } from '@marklab/shared/src/hash';
 import type { DbExecutor, DbPool, DbQueryResult, DbTransactionClient } from '../db/client';
 import {
   branchFromVersion,
@@ -6,6 +7,7 @@ import {
   listBranches,
   listVersions,
   nextVersionNumber,
+  persistBranchMarkdownSnapshot,
   showVersion,
 } from './version-service';
 import { initializeBranchEditorState } from './milkdown-transformer';
@@ -243,5 +245,265 @@ describe('branchFromVersion', () => {
       '# Branched\n',
       'sha256:branched',
     ]);
+  });
+});
+
+function createPersistPool(input: {
+  currentHeadHash?: string;
+  currentBranchHash?: string;
+  lastAutosaveAt?: Date | null;
+  pendingHash?: string | null;
+  activeStartedAt?: Date | null;
+  pendingFirstSeenAt?: Date | null;
+  nextVersionNumber?: number;
+  versionCreatedAt?: Date;
+}) {
+  const queries: CapturedQuery[] = [];
+  const oldAutosaveIds = ['ver_old_auto'];
+
+  const query: DbPool['query'] = async <Row = unknown>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<DbQueryResult<Row>> => {
+    queries.push(params === undefined ? { sql } : { sql, params });
+
+    if (sql.includes('select b.head_version_id')) {
+      return {
+        rows: [{
+          head_version_id: 'ver_head',
+          head_version_number: 5,
+          head_hash: input.currentHeadHash ?? 'sha256:head',
+          current_hash: input.currentBranchHash ?? 'sha256:head',
+        } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('update document_branch_states')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('from document_branch_autosave_state')) {
+      return {
+        rows: [{
+          pending_hash: input.pendingHash ?? null,
+          active_started_at: input.activeStartedAt ?? null,
+          pending_first_seen_at: input.pendingFirstSeenAt ?? null,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('insert into document_branch_autosave_state')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('delete from document_branch_autosave_state')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('select max(created_at) as last_autosave_at')) {
+      return {
+        rows: [{ last_autosave_at: input.lastAutosaveAt ?? null } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('select coalesce(max(version_number), 0) + 1')) {
+      return { rows: [{ next_version_number: input.nextVersionNumber ?? 6 } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('insert into document_versions')) {
+      return { rows: [{ id: 'ver_new_auto' } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('update document_branches') && sql.includes('set head_version_id')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('select max(created_at) as branch_edit_clock')) {
+      return {
+        rows: [{ branch_edit_clock: input.versionCreatedAt ?? new Date('2026-05-01T12:00:00Z') } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('select id') && sql.includes('operation = \'autosave\'') && sql.includes('created_at <')) {
+      return { rows: oldAutosaveIds.map((id) => ({ id }) as Row), rowCount: oldAutosaveIds.length };
+    }
+
+    if (sql.includes('update document_versions') && sql.includes('parent_version_id = null')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('update document_branches') && sql.includes('created_from_version_id = null')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('delete from document_versions') && sql.includes('operation = \'autosave\'')) {
+      return { rows: oldAutosaveIds.map((id) => ({ id }) as Row), rowCount: oldAutosaveIds.length };
+    }
+
+    if (/^(begin|commit|rollback)$/iu.test(sql.trim())) return { rows: [], rowCount: 0 };
+
+    throw new Error(`unexpected query: ${sql}`);
+  };
+
+  const client: DbTransactionClient = {
+    query,
+    release: () => undefined,
+  };
+
+  const pool: DbPool = {
+    query,
+    connect: async () => client,
+  };
+
+  return { pool, queries };
+}
+
+describe('persistBranchMarkdownSnapshot', () => {
+  it('creates a final quiet autosave when the same dirty hash has been observed for two minutes', async () => {
+    const markdown = '# Final quiet state\n';
+    const hash = sha256Hex(markdown);
+    const { pool, queries } = createPersistPool({
+      lastAutosaveAt: new Date('2026-05-01T12:09:00Z'),
+      pendingHash: hash,
+      activeStartedAt: new Date('2026-05-01T12:00:00Z'),
+      pendingFirstSeenAt: new Date('2026-05-01T12:08:00Z'),
+    });
+
+    await expect(persistBranchMarkdownSnapshot({
+      pool,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown,
+      hash,
+      actorType: 'system',
+      actorId: 'provider-autosave',
+      operation: 'autosave',
+      now: new Date('2026-05-01T12:10:00Z'),
+    })).resolves.toMatchObject({
+      versionId: 'ver_new_auto',
+      versionNumber: 6,
+      createdVersion: true,
+    });
+
+    const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInsert?.params).toEqual([
+      'doc_001',
+      'br_main',
+      'ver_head',
+      6,
+      markdown,
+      hash,
+      'system',
+      'provider-autosave',
+      'autosave',
+    ]);
+  });
+
+  it('records pending autosave observation without moving branch head inside the active editing window', async () => {
+    const markdown = '# Still changing\n';
+    const hash = sha256Hex(markdown);
+    const { pool, queries } = createPersistPool({
+      lastAutosaveAt: new Date('2026-05-01T12:09:00Z'),
+      pendingHash: 'sha256:previous-observed',
+      activeStartedAt: new Date('2026-05-01T12:00:00Z'),
+      pendingFirstSeenAt: new Date('2026-05-01T12:08:00Z'),
+    });
+
+    await expect(persistBranchMarkdownSnapshot({
+      pool,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown,
+      hash,
+      actorType: 'system',
+      actorId: 'provider-autosave',
+      operation: 'autosave',
+      now: new Date('2026-05-01T12:10:00Z'),
+    })).resolves.toMatchObject({
+      versionId: 'ver_head',
+      versionNumber: 5,
+      createdVersion: false,
+    });
+
+    const pendingUpsert = queries.find((query) => query.sql.includes('insert into document_branch_autosave_state'));
+    expect(pendingUpsert?.params).toEqual([
+      'br_main',
+      hash,
+      new Date('2026-05-01T12:00:00Z'),
+      new Date('2026-05-01T12:10:00Z'),
+      new Date('2026-05-01T12:10:00Z'),
+    ]);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+    expect(queries.filter((query) => query.sql.includes('update document_branches') && query.sql.includes('set head_version_id'))).toHaveLength(0);
+  });
+
+  it('records the first dirty autosave observation without creating an immediate version', async () => {
+    const markdown = '# First provider edit\n';
+    const hash = sha256Hex(markdown);
+    const { pool, queries } = createPersistPool({
+      lastAutosaveAt: null,
+      pendingHash: null,
+      pendingFirstSeenAt: null,
+      activeStartedAt: null,
+    });
+
+    await expect(persistBranchMarkdownSnapshot({
+      pool,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown,
+      hash,
+      actorType: 'system',
+      actorId: 'provider-autosave',
+      operation: 'autosave',
+      now: new Date('2026-05-01T12:00:00Z'),
+    })).resolves.toMatchObject({
+      versionId: 'ver_head',
+      versionNumber: 5,
+      createdVersion: false,
+    });
+
+    const pendingUpsert = queries.find((query) => query.sql.includes('insert into document_branch_autosave_state'));
+    expect(pendingUpsert?.params).toEqual([
+      'br_main',
+      hash,
+      new Date('2026-05-01T12:00:00Z'),
+      new Date('2026-05-01T12:00:00Z'),
+      new Date('2026-05-01T12:00:00Z'),
+    ]);
+    expect(queries.some((query) => query.sql.includes('insert into document_versions'))).toBe(false);
+  });
+
+  it('prunes only autosave versions older than the latest branch edit minus thirty days', async () => {
+    const markdown = '# Manual checkpoint\n';
+    const hash = sha256Hex(markdown);
+    const { pool, queries } = createPersistPool({
+      versionCreatedAt: new Date('2026-05-31T12:00:00Z'),
+    });
+
+    await persistBranchMarkdownSnapshot({
+      pool,
+      docId: 'doc_001',
+      branchId: 'br_main',
+      markdown,
+      hash,
+      actorType: 'user',
+      actorId: 'user_1',
+      operation: 'manual_save',
+      now: new Date('2026-08-01T00:00:00Z'),
+    });
+
+    const pruneSelect = queries.find((query) =>
+      query.sql.includes('operation = \'autosave\'') && query.sql.includes('created_at <'),
+    );
+    expect(pruneSelect?.params).toEqual(['br_main', new Date('2026-05-31T12:00:00Z'), '30 days']);
+    const parentNull = queries.find((query) => query.sql.includes('update document_versions') && query.sql.includes('parent_version_id = null'));
+    expect(parentNull?.params).toEqual([['ver_old_auto']]);
+    const deleteOldAutosaves = queries.find((query) => query.sql.includes('delete from document_versions') && query.sql.includes('operation = \'autosave\''));
+    expect(deleteOldAutosaves?.params).toEqual([['ver_old_auto']]);
   });
 });

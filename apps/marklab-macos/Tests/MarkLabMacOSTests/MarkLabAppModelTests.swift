@@ -499,6 +499,61 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("delete cloud copy clears hosted state while keeping local markdown on disk")
+  func deleteCloudCopyClearsHostedStateAndKeepsLocalMarkdown() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "delete-cloud.md")
+    try Data("Local survivor\n".utf8).write(to: fileURL)
+    let link = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_delete&branchId=branch_main&token=ml_access_edit&mode=edit")
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: fileURL,
+        document: NativeHostedDocument(docId: "doc_delete", branchId: "branch_main", versionId: "version_1", hash: "sha256:host"),
+        appEditorURL: link.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)),
+        baselineMarkdown: "Local survivor\n"
+      ),
+      fileURL: fileURL
+    )
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"deleted":true,"docId":"doc_delete","branchIds":["branch_main"],"providerDocIds":["ml_doc_1"],"localFilePreserved":true}"#)
+    transport.enqueue(json: #"{"grants":[]}"#)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    model.deleteCloudCopyConfirmation = "DELETE CLOUD COPY"
+    #expect(model.canDeleteCloudCopy)
+    await model.deleteCloudCopy()
+
+    #expect(!model.hasSharedDocument)
+    #expect(model.managedAccessLinks.isEmpty)
+    #expect(model.activeCollaborators.isEmpty)
+    #expect(model.latestLink == nil)
+    #expect(model.latestGrantId == nil)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "Local survivor\n")
+    #expect(try bindingStore.loadBinding(fileURL: fileURL) == nil)
+    #expect(try baselineStore.loadBaseline(fileURL: fileURL) == nil)
+    #expect(model.deleteCloudCopyConfirmation.isEmpty)
+    #expect(model.statusText == "Deleted cloud copy for delete-cloud.md. Local file stays on disk.")
+    #expect(transport.requests.filter { $0.method == "DELETE" }.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "DELETE /api/docs/doc_delete/branches/branch_main/cloud-copy",
+    ])
+  }
+
+  @MainActor
   @Test("stop sharing refreshes and revokes server grants created before this app session")
   func stopSharingRevokesServerHydratedGrants() async throws {
     let directory = try TemporaryDirectory()

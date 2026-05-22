@@ -463,7 +463,12 @@ describe('marklab CLI', () => {
       },
     }), 'utf8');
 
-    const env = { MARKLAB_APP_SUPPORT_DIR: appSupportDirectory };
+    const env = {
+      MARKLAB_APP_SUPPORT_DIR: appSupportDirectory,
+      MARKLAB_CONTROL_PLANE_API_URL: '',
+      MARKLAB_PUBLIC_API_URL: '',
+      MARKLAB_USER_TOKEN: '',
+    };
 
     const status = await runCli(['status', markdownPath, '--json'], env, 30000);
     expectCliOk(status);

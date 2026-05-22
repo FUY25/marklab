@@ -4,6 +4,12 @@ import { withTransaction } from '../db/client';
 import { initializeBranchEditorState } from './milkdown-transformer';
 import { shouldCreateAutosaveVersion } from './save-policy';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
+import {
+  clearAutosaveObservation,
+  pruneOldAutosaveVersions,
+  readAutosaveObservation,
+  recordAutosaveObservation,
+} from './autosave-version-state';
 
 export type VersionActorType = 'agent' | 'user' | 'system';
 export type VersionOperation = 'create' | 'import' | 'autosave' | 'manual_save' | 'write' | 'edit' | 'rollback' | 'branch';
@@ -39,6 +45,7 @@ export interface PersistBranchMarkdownSnapshotInput {
   actorType: VersionActorType;
   actorId?: string | undefined;
   operation: Extract<VersionOperation, 'autosave' | 'manual_save'>;
+  now?: Date | undefined;
 }
 
 export interface PersistBranchMarkdownSnapshotResult {
@@ -117,16 +124,19 @@ export async function persistBranchMarkdownSnapshot(
   input: PersistBranchMarkdownSnapshotInput,
 ): Promise<PersistBranchMarkdownSnapshotResult> {
   if (sha256Hex(input.markdown) !== input.hash) throw new Error('invalid_live_yjs_state');
+  const now = input.now ?? new Date();
 
   return withTransaction(input.pool, async (client) => {
     const state = await client.query<{
       head_version_id: string | null;
       head_version_number: number | null;
       head_hash: string | null;
+      current_hash: string | null;
     }>(
       `select b.head_version_id,
               v.version_number as head_version_number,
-              v.hash as head_hash
+              v.hash as head_hash,
+              s.current_hash
          from document_branches b
          join document_branch_states s on s.branch_id = b.id
          join document_versions v on v.id = b.head_version_id
@@ -139,28 +149,33 @@ export async function persistBranchMarkdownSnapshot(
     if (!row.head_version_id || !row.head_version_number || !row.head_hash) throw new Error('branch_head_not_found');
 
     const yjsState = input.yjsState;
-    const update = yjsState
-      ? await client.query(
-          `update document_branch_states
-              set current_markdown = $2,
-                  current_hash = $3,
-                  yjs_state = $4,
-                  yjs_state_fingerprint = $5,
-                  updated_at = now()
-            where branch_id = $1`,
-          [input.branchId, input.markdown, input.hash, Buffer.from(yjsState), encodeYjsStateFingerprint(yjsState)],
-        )
-      : await client.query(
-          `update document_branch_states
-              set current_markdown = $2,
-                  current_hash = $3,
-                  updated_at = now()
-            where branch_id = $1`,
-          [input.branchId, input.markdown, input.hash],
-        );
-    if ((update.rowCount ?? 1) === 0) throw new Error('branch_not_found');
+    if (input.hash !== row.current_hash || yjsState) {
+      const update = yjsState
+        ? await client.query(
+            `update document_branch_states
+                set current_markdown = $2,
+                    current_hash = $3,
+                    yjs_state = $4,
+                    yjs_state_fingerprint = $5,
+                    updated_at = $6
+              where branch_id = $1`,
+            [input.branchId, input.markdown, input.hash, Buffer.from(yjsState), encodeYjsStateFingerprint(yjsState), now],
+          )
+        : await client.query(
+            `update document_branch_states
+                set current_markdown = $2,
+                    current_hash = $3,
+                    updated_at = $4
+              where branch_id = $1`,
+            [input.branchId, input.markdown, input.hash, now],
+          );
+      if ((update.rowCount ?? 1) === 0) throw new Error('branch_not_found');
+    }
 
     if (input.hash === row.head_hash) {
+      if (input.operation === 'autosave') {
+        await clearAutosaveObservation(client, input.branchId);
+      }
       return {
         branchId: input.branchId,
         markdown: input.markdown,
@@ -172,6 +187,12 @@ export async function persistBranchMarkdownSnapshot(
     }
 
     if (input.operation === 'autosave') {
+      const observation = await readAutosaveObservation(client, input.branchId);
+      const pendingFirstSeenAt =
+        observation.pendingHash === input.hash
+          ? observation.pendingFirstSeenAt ?? now
+          : now;
+      const activeStartedAt = observation.activeStartedAt ?? now;
       const autosave = await client.query<{ last_autosave_at: Date | string | null }>(
         `select max(created_at) as last_autosave_at
            from document_versions
@@ -185,9 +206,12 @@ export async function persistBranchMarkdownSnapshot(
           currentHash: input.hash,
           headHash: row.head_hash,
           lastAutosaveAt: lastAutosaveAt ? new Date(lastAutosaveAt) : null,
-          now: new Date(),
+          activeStartedAt,
+          pendingHashFirstSeenAt: pendingFirstSeenAt,
+          now,
         })
       ) {
+        await recordAutosaveObservation(client, input.branchId, input.hash, activeStartedAt, pendingFirstSeenAt, now);
         return {
           branchId: input.branchId,
           markdown: input.markdown,
@@ -210,6 +234,12 @@ export async function persistBranchMarkdownSnapshot(
       actorId: input.actorId,
       operation: input.operation,
     });
+    if (input.operation === 'autosave') {
+      await clearAutosaveObservation(client, input.branchId);
+    } else if (input.operation === 'manual_save') {
+      await clearAutosaveObservation(client, input.branchId);
+    }
+    await pruneOldAutosaveVersions(client, input.branchId);
 
     return {
       branchId: input.branchId,

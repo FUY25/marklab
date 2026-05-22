@@ -4,6 +4,7 @@ import {
   buildYSweetProviderProxyHeaders,
   buildYSweetProviderResponseHeaders,
   buildYSweetProviderWebSocketTarget,
+  extractYSweetProviderDocId,
   isYSweetProviderHttpPath,
   isYSweetProviderWebSocketOriginAllowed,
   isYSweetProviderWebSocketPath,
@@ -24,6 +25,13 @@ afterEach(() => {
 });
 
 describe('ysweet provider websocket proxy helpers', () => {
+  it('extracts provider doc ids from proxied HTTP and websocket paths for deletion guards', () => {
+    expect(extractYSweetProviderDocId('/d/ml_doc_1/ws/ml_doc_1?token=secret')).toBe('ml_doc_1');
+    expect(extractYSweetProviderDocId('/d/ml_doc_2/as-update?token=secret')).toBe('ml_doc_2');
+    expect(extractYSweetProviderDocId('/doc/ml_doc_3/update')).toBe('ml_doc_3');
+    expect(extractYSweetProviderDocId('/collab?docId=doc_1')).toBeNull();
+  });
+
   it('recognizes only upstream Y-Sweet websocket document paths', () => {
     expect(isYSweetProviderWebSocketPath('/doc/ws/abc?token=secret')).toBe(true);
     expect(isYSweetProviderWebSocketPath('/doc/ws/')).toBe(true);

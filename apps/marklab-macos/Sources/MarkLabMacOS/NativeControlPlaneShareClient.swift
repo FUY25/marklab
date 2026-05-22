@@ -94,6 +94,14 @@ public struct NativeVersionRestoreResult: Decodable, Equatable, Sendable {
   public let hash: String
 }
 
+public struct NativeDeleteCloudCopyResult: Decodable, Equatable, Sendable {
+  public let deleted: Bool
+  public let docId: String
+  public let branchIds: [String]
+  public let providerDocIds: [String]
+  public let localFilePreserved: Bool
+}
+
 public enum NativeVersionHistoryError: Error, Equatable {
   case forbidden
   case unavailable
@@ -249,6 +257,14 @@ public final class NativeControlPlaneShareClient: @unchecked Sendable {
       "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/restore",
       body: try nativeJSONData(Body(versionId: versionId)),
       response: NativeVersionRestoreResult.self
+    )
+  }
+
+  public func deleteCloudCopy(document: NativeHostedDocument) async throws -> NativeDeleteCloudCopyResult {
+    try await sendVersionJSON(
+      "DELETE",
+      "/api/docs/\(encodeNativePathSegment(document.docId))/branches/\(encodeNativePathSegment(document.branchId))/cloud-copy",
+      response: NativeDeleteCloudCopyResult.self
     )
   }
 

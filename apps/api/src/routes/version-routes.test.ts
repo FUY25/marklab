@@ -642,6 +642,7 @@ describe('version routes', () => {
       liveHash,
       Buffer.from(liveYjsState),
       expect.any(String),
+      expect.any(Date),
     ]);
     const versionInsert = queries.find((query) => query.sql.includes('insert into document_versions'));
     expect(versionInsert?.params).toEqual([

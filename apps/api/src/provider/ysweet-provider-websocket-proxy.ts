@@ -14,6 +14,20 @@ export function isYSweetProviderWebSocketPath(value: string | undefined): boolea
   }
 }
 
+export function extractYSweetProviderDocId(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const pathname = new URL(value, 'http://marklab.local').pathname;
+    const dMatch = /^\/d\/([^/]+)\/(?:ws|as-update|update)(?:\/[^/]+)?\/?$/u.exec(pathname);
+    if (dMatch?.[1]) return decodeURIComponent(dMatch[1]);
+    const docMatch = /^\/doc\/([^/]+)\/(?:ws|as-update|update)(?:\/[^/]+)?\/?$/u.exec(pathname);
+    if (docMatch?.[1]) return decodeURIComponent(docMatch[1]);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function isYSweetProviderHttpPath(value: string | undefined): boolean {
   if (!value) return false;
   try {

@@ -6,6 +6,7 @@ import type { DbPool } from '../db/client';
 import { createAccessRoutes } from '../routes/access-routes';
 import { createAuthRoutes } from '../routes/auth-routes';
 import { createBillingRoutes } from '../routes/billing-routes';
+import { createCloudCopyRoutes } from '../routes/cloud-copy-routes';
 import { createCollabSessionRoutes } from '../routes/collab-session-routes';
 import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
@@ -239,9 +240,11 @@ async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
           'document_access_sessions',
           'share_links',
           'document_branch_states',
+          'document_branch_autosave_state',
           'collab_sessions',
           'provider_token_issuances',
           'provider_token_refreshes',
+          'provider_doc_deletions',
         ]),
         ...Object.keys(schemaColumns),
       ]));
@@ -634,6 +637,7 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   app.use('/api', createWorkspaceRoutes(pool));
   app.use('/api', createBillingRoutes(pool));
   app.use('/api', createAccessRoutes(pool, routeOptions));
+  app.use('/api', createCloudCopyRoutes(pool, routeOptions));
   if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
   app.use('/api', createImportExportRoutes(pool, routeOptions));
   app.use('/api', createCollabSessionRoutes(pool, routeOptions));

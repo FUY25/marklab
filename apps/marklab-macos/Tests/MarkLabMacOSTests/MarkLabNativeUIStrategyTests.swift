@@ -270,9 +270,11 @@ struct MarkLabNativeUIStrategyTests {
         == "Restoring creates a new current rollback version. Old snapshots stay in version history, and the local Markdown file updates through normal shared projection."
     )
     #expect(
-      MarkEditDocumentShellView.deleteCloudCopyUnavailableSummary
-        == "Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history."
+      MarkEditDocumentShellView.deleteCloudCopySummary
+        == "Deletes the hosted copy, online version history, access links, and active cloud sessions. The local Markdown file stays on disk."
     )
+    #expect(MarkEditDocumentShellView.deleteCloudCopyButtonTitle == "Delete Cloud Copy")
+    #expect(MarkEditDocumentShellView.deleteCloudCopyConfirmationPrompt == "Type DELETE CLOUD COPY to confirm")
     #expect(
       MarkEditDocumentShellView.cloudCopyRetentionSummary
         == "Cloud copy and online version history are kept after Stop Sharing."

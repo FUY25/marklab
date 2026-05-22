@@ -59,7 +59,9 @@ struct MarkEditDocumentShellView: View {
   static let restoreVersionButtonTitle = "Restore This Version"
   static let restoreVersionConfirmationPrompt = "Type RESTORE to confirm"
   static let restoreVersionExplanation = "Restoring creates a new current rollback version. Old snapshots stay in version history, and the local Markdown file updates through normal shared projection."
-  static let deleteCloudCopyUnavailableSummary = "Delete Cloud Copy is not available yet. Stop Sharing keeps the hosted copy and online version history."
+  static let deleteCloudCopySummary = "Deletes the hosted copy, online version history, access links, and active cloud sessions. The local Markdown file stays on disk."
+  static let deleteCloudCopyButtonTitle = "Delete Cloud Copy"
+  static let deleteCloudCopyConfirmationPrompt = "Type DELETE CLOUD COPY to confirm"
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
 
@@ -543,9 +545,17 @@ struct MarkEditDocumentShellView: View {
       }
 
       inspectorSection("Danger Zone") {
-        Text(Self.deleteCloudCopyUnavailableSummary)
+        Text(Self.deleteCloudCopySummary)
           .font(.callout)
           .foregroundStyle(.secondary)
+        if model.hasSharedDocument {
+          TextField(Self.deleteCloudCopyConfirmationPrompt, text: $model.deleteCloudCopyConfirmation)
+            .textFieldStyle(.roundedBorder)
+          Button(Self.deleteCloudCopyButtonTitle) {
+            Task { await model.deleteCloudCopy() }
+          }
+          .disabled(!model.canDeleteCloudCopy)
+        }
       }
     }
     .onAppear {

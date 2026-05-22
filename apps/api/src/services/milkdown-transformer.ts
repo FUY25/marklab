@@ -4,6 +4,12 @@ import { createHeadlessMilkdownRuntime } from './milkdown-headless-runtime';
 import { shouldCreateAutosaveVersion } from './save-policy';
 import { createVersionWithClient, type VersionActorType } from './version-service';
 import { encodeYjsStateFingerprint } from './yjs-state-fingerprint';
+import {
+  clearAutosaveObservation,
+  pruneOldAutosaveVersions,
+  readAutosaveObservation,
+  recordAutosaveObservation,
+} from './autosave-version-state';
 
 export interface InitializedBranchEditorState {
   yjsState: Uint8Array;
@@ -101,6 +107,9 @@ export async function flushBranchMarkdownMirror(
     if ((update.rowCount ?? 1) === 0) throw new Error('branch_not_found');
 
     if (serialized.hash === row.head_hash) {
+      if (operation === 'autosave') {
+        await clearAutosaveObservation(client, branchId);
+      }
       return {
         branchId,
         markdown: serialized.markdown,
@@ -111,7 +120,14 @@ export async function flushBranchMarkdownMirror(
       };
     }
 
+    const now = new Date();
     if (operation === 'autosave') {
+      const observation = await readAutosaveObservation(client, branchId);
+      const pendingFirstSeenAt =
+        observation.pendingHash === serialized.hash
+          ? observation.pendingFirstSeenAt ?? now
+          : now;
+      const activeStartedAt = observation.activeStartedAt ?? now;
       const autosave = await client.query<{ last_autosave_at: Date | string | null }>(
         `select max(created_at) as last_autosave_at
            from document_versions
@@ -125,9 +141,12 @@ export async function flushBranchMarkdownMirror(
           currentHash: serialized.hash,
           headHash: row.head_hash,
           lastAutosaveAt: lastAutosaveAt ? new Date(lastAutosaveAt) : null,
-          now: new Date(),
+          activeStartedAt,
+          pendingHashFirstSeenAt: pendingFirstSeenAt,
+          now,
         })
       ) {
+        await recordAutosaveObservation(client, branchId, serialized.hash, activeStartedAt, pendingFirstSeenAt, now);
         return {
           branchId,
           markdown: serialized.markdown,
@@ -150,6 +169,10 @@ export async function flushBranchMarkdownMirror(
       actorId: actor.actorId ?? undefined,
       operation,
     });
+    if (operation === 'autosave' || operation === 'manual_save') {
+      await clearAutosaveObservation(client, branchId);
+    }
+    await pruneOldAutosaveVersions(client, branchId);
 
     return {
       branchId,

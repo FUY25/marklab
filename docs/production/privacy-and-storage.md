@@ -48,9 +48,9 @@ Revoking a link removes that grant. It does not delete local files, unrelated li
 
 `Stop Sharing` returns the app document to local-only mode and asks the server for active access grants before revoking the grants it can manage. It keeps the hosted copy and online version history. After relaunch, older links may be listed without a copyable URL because raw access tokens are not stored after creation; revoke still works from the grant id. If the server grant list is temporarily unavailable, the app falls back to active links known to the current app session.
 
-`Version History` is the user-facing view of hosted snapshots. The native app exposes version history for shared documents. Browser collaborators write into the same provider state and are captured by online checkpoints, but browser version controls are not exposed yet.
+`Version History` is the user-facing view of hosted snapshots. The native app exposes version history for shared documents. Browser collaborators write into the same provider state and are captured by online checkpoints, but browser version controls are not exposed yet. Shared autosave checkpoints are created every 10 minutes during active editing, plus a final checkpoint after the provider state is stable for 2 minutes; old autosave checkpoints are pruned outside the latest 30 days of that branch's edit timeline.
 
-`Delete Cloud Copy` should be the separate destructive action for deleting hosted content and online version history. It is not the same as Stop Sharing and must not delete the user's local Markdown file.
+`Delete Cloud Copy` is the separate destructive action for deleting hosted content and online version history. It is not the same as Stop Sharing and must not delete the user's local Markdown file.
 
 `Clear Local MarkLab Data` should be the separate device/browser privacy and reset action for removing local MarkLab support data and caches. It must not delete hosted content or local Markdown files.
 

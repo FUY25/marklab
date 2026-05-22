@@ -31,6 +31,10 @@ interface FakePoolOptions {
   currentVersionId?: string;
   currentVersionNumber?: number;
   headHash?: string;
+  lastAutosaveAt?: Date | null;
+  pendingAutosaveHash?: string | null;
+  pendingAutosaveFirstSeenAt?: Date | null;
+  activeAutosaveStartedAt?: Date | null;
   versionIds?: string[];
   yjsState?: Uint8Array;
   agentTokens?: Array<{
@@ -197,6 +201,21 @@ function createFakePool(options: FakePoolOptions = {}) {
       return { rows: [{ next_version_number: nextVersionNumber++ } as Row], rowCount: 1 };
     }
 
+    if (sql.includes('from document_branch_autosave_state')) {
+      return {
+        rows: [{
+          pending_hash: options.pendingAutosaveHash ?? null,
+          active_started_at: options.activeAutosaveStartedAt ?? null,
+          pending_first_seen_at: options.pendingAutosaveFirstSeenAt ?? null,
+        } as Row],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.includes('select max(created_at) as last_autosave_at')) {
+      return { rows: [{ last_autosave_at: options.lastAutosaveAt ?? null } as Row], rowCount: 1 };
+    }
+
     if (sql.includes('insert into document_versions')) {
       const id = versionIds.shift() ?? 'ver_next';
       pendingVersion = {
@@ -216,6 +235,22 @@ function createFakePool(options: FakePoolOptions = {}) {
       headHash = pendingVersion.hash;
       pendingVersion = undefined;
       return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('insert into document_branch_autosave_state')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('delete from document_branch_autosave_state')) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('select max(created_at) as branch_edit_clock')) {
+      return { rows: [{ branch_edit_clock: new Date() } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('select id') && sql.includes('operation = \'autosave\'') && sql.includes('created_at <')) {
+      return { rows: [], rowCount: 0 };
     }
 
     return { rows: [], rowCount: 1 };
@@ -401,6 +436,9 @@ describe('doc AI routes minimal transaction e2e', () => {
       currentVersionNumber: 1,
       headHash: 'sha256:old',
       yjsState: seeded.yjsState,
+      pendingAutosaveHash: seeded.hash,
+      activeAutosaveStartedAt: new Date('2026-05-22T12:00:00Z'),
+      pendingAutosaveFirstSeenAt: new Date(Date.now() - 3 * 60 * 1000),
       versionIds: ['ver_002'],
     });
     const operations: string[] = [];

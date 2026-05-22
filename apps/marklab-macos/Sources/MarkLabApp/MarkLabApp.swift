@@ -320,6 +320,7 @@ final class MarkLabAppModel: ObservableObject {
   @Published var selectedVersion: NativeDocumentVersionSnapshot?
   @Published var isLoadingVersions = false
   @Published var restoreVersionConfirmation = ""
+  @Published var deleteCloudCopyConfirmation = ""
 
   private var document: LocalMarkdownDocument?
   private let hostedShareController: NativeHostedShareController?
@@ -437,6 +438,10 @@ final class MarkLabAppModel: ObservableObject {
 
   var canApplySelectedVersionRestore: Bool {
     selectedVersion != nil && restoreVersionConfirmation == "RESTORE" && embeddedCollabURL != nil && conflict == nil
+  }
+
+  var canDeleteCloudCopy: Bool {
+    embeddedCollabURL != nil && conflict == nil && deleteCloudCopyConfirmation == "DELETE CLOUD COPY"
   }
 
   static func markEditNativeShellURL(_ url: URL?) -> URL? {
@@ -945,6 +950,59 @@ final class MarkLabAppModel: ObservableObject {
     }
   }
 
+  func deleteCloudCopy() async {
+    guard hasSharedDocument else { return }
+    guard canDeleteCloudCopy else {
+      statusText = "Type DELETE CLOUD COPY before deleting the hosted copy."
+      return
+    }
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before deleting the cloud copy."
+      return
+    }
+    guard let hostedShareController else {
+      statusText = "Start sharing before deleting the cloud copy."
+      return
+    }
+
+    let fileURL = document?.fileURL
+    do {
+      try flushPendingSharedProjection()
+      _ = try await hostedShareController.deleteCloudCopy()
+    } catch {
+      statusText = Self.versionHistoryStatus(for: error)
+      return
+    }
+
+    projectionTask?.cancel()
+    projectionTask = nil
+    pendingSharedMarkdown = nil
+    pendingDiskIngestion = nil
+    embeddedCollabURL = nil
+    latestLink = nil
+    latestGrantId = nil
+    managedAccessLinks = []
+    activeCollaborators = []
+    clearVersionHistoryState()
+    deleteCloudCopyConfirmation = ""
+    lastProjectedMarkdown = nil
+
+    if let fileURL {
+      try? sharedDocumentBindingStore.clearBinding(fileURL: fileURL)
+      try? baselineStore.clearBaseline(fileURL: fileURL)
+      sessionManager.removeSession(fileURL: fileURL)
+      MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
+      if let localDocument = try? LocalMarkdownDocument.open(fileURL: fileURL, shared: false) {
+        document = localDocument
+        text = localDocument.text
+        filePath = fileURL.path
+      }
+      statusText = "Deleted cloud copy for \(fileURL.lastPathComponent). Local file stays on disk."
+    } else {
+      statusText = "Deleted cloud copy. Local file stays on disk."
+    }
+  }
+
   func copyLatestLink() {
     guard let latestLink else { return }
     copyLinkToPasteboard(latestLink)
@@ -1140,6 +1198,7 @@ final class MarkLabAppModel: ObservableObject {
     selectedVersionId = nil
     selectedVersion = nil
     restoreVersionConfirmation = ""
+    deleteCloudCopyConfirmation = ""
     isLoadingVersions = false
   }
 

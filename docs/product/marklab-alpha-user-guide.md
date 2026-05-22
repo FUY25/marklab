@@ -114,7 +114,7 @@ Realtime sync keeps connected editors current. It is not a substitute for versio
 
 The native `Sharing & Versions` inspector exposes online version history for shared documents.
 
-Shared documents create online checkpoints from the active provider state. `Save Checkpoint` and `Cmd+S` create manual checkpoints from the current shared state; server-side autosave creates automatic checkpoints after quiet periods. The Versions panel lists checkpoints, previews the selected snapshot, and restores a selected version only after confirmation. Restore creates a new rollback checkpoint instead of mutating old snapshots.
+Shared documents create online checkpoints from the active provider state. `Save Checkpoint` and `Cmd+S` create manual checkpoints from the current shared state; server-side autosave creates automatic checkpoints every 10 minutes during active editing, plus a final checkpoint after the provider state is stable for 2 minutes. The Versions panel lists checkpoints, previews the selected snapshot, and restores a selected version only after confirmation. Restore creates a new rollback checkpoint instead of mutating old snapshots.
 
 Browser collaborators participate in the same shared provider state and their edits are captured by online checkpoints, but the browser surface does not expose version controls yet. Pilot users should still keep important Markdown files in Git, Time Machine, or another external backup/version system.
 
