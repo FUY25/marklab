@@ -32,6 +32,7 @@ import {
 } from '@marklab/collab-editor/markdown-commands';
 import {
   clearPersistedEditSession,
+  cleanupStalePersistedEditSessions,
   loadPersistedEditSession,
   persistEditSession,
   type PersistedEditSession,
@@ -200,6 +201,7 @@ export function CollaborativeMarkdownEditor({
     const providerTokenRef: { current: IssuedProviderToken | null } = { current: null };
     const activeSessionRef: { current: EditorSession | null } = { current: null };
     const storageKeyInput = { docId, branchId, token };
+    if (clientKind !== 'app') cleanupStalePersistedEditSessions();
 
     function reconfigureEditability() {
       view?.dispatch({

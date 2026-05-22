@@ -131,4 +131,16 @@ describe('control-plane schema contract', () => {
     expect(normalized).toContain('constraint provider_token_issuances_session_fk');
     expect(normalized).not.toContain('references document_access_sessions(id)');
   });
+
+  it('tracks provider document physical cleanup attempts after cloud copy deletion', async () => {
+    const schema = await schemaSql();
+    const normalized = compact(schema);
+
+    expect(normalized).toContain('create table if not exists provider_doc_deletions');
+    expect(normalized).toContain('cleanup_attempted_at timestamptz');
+    expect(normalized).toContain('cleanup_completed_at timestamptz');
+    expect(normalized).toContain('cleanup_error text');
+    expect(normalized).toContain('alter table provider_doc_deletions add column if not exists cleanup_attempted_at timestamptz');
+    expect(normalized).toContain('create index if not exists provider_doc_deletions_cleanup_idx');
+  });
 });

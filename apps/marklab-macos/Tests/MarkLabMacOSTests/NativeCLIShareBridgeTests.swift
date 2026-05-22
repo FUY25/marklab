@@ -105,6 +105,47 @@ struct NativeCLIShareBridgeTests {
     #expect(try store.loadResponse(requestId: "req_stale") == nil)
   }
 
+  @Test("native CLI share request store prunes stale completed response handoff files")
+  func requestStorePrunesStaleCompletedResponses() throws {
+    let directory = try TemporaryDirectory()
+    let store = FileNativeCLIShareRequestStore(
+      appSupportDirectory: directory.url,
+      maximumPendingRequestAge: 600,
+      maximumCompletedResponseAge: 60,
+      now: { Date(timeIntervalSince1970: 1_200) }
+    )
+    try store.writeRequest(NativeCLIShareRequest(
+      requestId: "req_done",
+      action: .share,
+      file: "/tmp/done.md",
+      role: .edit,
+      createdAt: "1970-01-01T00:19:30.000Z"
+    ))
+    try store.writeResponse(.failure(
+      requestId: "req_done",
+      code: "native_share_failed",
+      message: "done response"
+    ))
+    let requestURL = directory.url
+      .appending(path: "cli-requests", directoryHint: .isDirectory)
+      .appending(path: "req_done.json", directoryHint: .notDirectory)
+    let responseURL = directory.url
+      .appending(path: "cli-responses", directoryHint: .isDirectory)
+      .appending(path: "req_done.json", directoryHint: .notDirectory)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_000)],
+      ofItemAtPath: requestURL.path
+    )
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_000)],
+      ofItemAtPath: responseURL.path
+    )
+
+    #expect(try store.pendingRequestIds() == [])
+    #expect(try store.loadRequest(requestId: "req_done") == nil)
+    #expect(try store.loadResponse(requestId: "req_done") == nil)
+  }
+
   @Test("native CLI share request store skips malformed requests without blocking valid requests")
   func requestStoreSkipsMalformedPendingRequests() throws {
     let directory = try TemporaryDirectory()

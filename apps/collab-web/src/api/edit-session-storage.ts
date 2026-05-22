@@ -1,6 +1,8 @@
 import type { ActiveEditSession, RefreshableEditSession } from '@marklab/collab-editor';
 
 const persistedSessionVersion = 1;
+const persistedSessionKeyPrefix = 'marklab:collab-web:edit-session:v1';
+const defaultPersistedEditSessionMaximumAgeMs = 30 * 24 * 60 * 60 * 1000;
 
 export interface PersistedEditSession extends RefreshableEditSession {
   providerDocId: string;
@@ -16,6 +18,17 @@ interface EditSessionStorageKeyInput {
   docId: string;
   branchId: string;
   token?: string | undefined;
+}
+
+export interface CleanupStalePersistedEditSessionsOptions {
+  now?: Date;
+  maximumAgeMs?: number;
+  deleteIndexedDb?: (name: string) => void;
+}
+
+export interface CleanupStalePersistedEditSessionsResult {
+  scanned: number;
+  removed: number;
 }
 
 function localStorageOrNull(options: { requireWritable?: boolean } = {}): Storage | null {
@@ -74,11 +87,15 @@ function routeTokenHashForStorage(token: string | undefined): string | null {
 
 export function persistedEditSessionStorageKey(input: EditSessionStorageKeyInput): string {
   return [
-    'marklab:collab-web:edit-session:v1',
+    persistedSessionKeyPrefix,
     encodeKeyPart(input.docId),
     encodeKeyPart(input.branchId),
     encodeKeyPart(routeTokenHashForStorage(input.token) ?? 'direct'),
   ].join(':');
+}
+
+function indexedDbPersistenceKey(providerDocId: string, sessionId: string): string {
+  return `marklab:collab-web:${providerDocId}:${sessionId}`;
 }
 
 function isString(value: unknown): value is string {
@@ -160,4 +177,56 @@ export function clearPersistedEditSession(input: EditSessionStorageKeyInput): vo
   const storage = localStorageOrNull();
   if (!storage) return;
   safeRemoveItem(storage, persistedEditSessionStorageKey(input));
+}
+
+function defaultDeleteIndexedDb(name: string): void {
+  if (typeof indexedDB === 'undefined') return;
+  try {
+    indexedDB.deleteDatabase(name);
+  } catch {
+    // Stale browser caches are best-effort cleanup only.
+  }
+}
+
+export function cleanupStalePersistedEditSessions(
+  options: CleanupStalePersistedEditSessionsOptions = {},
+): CleanupStalePersistedEditSessionsResult {
+  const storage = localStorageOrNull();
+  if (!storage) return { scanned: 0, removed: 0 };
+  const now = options.now ?? new Date();
+  const maximumAgeMs = options.maximumAgeMs ?? defaultPersistedEditSessionMaximumAgeMs;
+  const deleteIndexedDb = options.deleteIndexedDb ?? defaultDeleteIndexedDb;
+  let scanned = 0;
+  let removed = 0;
+  const keys: string[] = [];
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(`${persistedSessionKeyPrefix}:`)) keys.push(key);
+    }
+  } catch {
+    return { scanned, removed };
+  }
+
+  for (const key of keys) {
+    scanned += 1;
+    const raw = safeGetItem(storage, key);
+    let parsed: unknown;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch {
+      safeRemoveItem(storage, key);
+      removed += 1;
+      continue;
+    }
+    const session = parsePersistedEditSession(parsed);
+    const updatedAtMs = session ? Date.parse(session.updatedAt) : Number.NaN;
+    if (!session || !Number.isFinite(updatedAtMs) || now.getTime() - updatedAtMs > maximumAgeMs) {
+      safeRemoveItem(storage, key);
+      if (session) deleteIndexedDb(indexedDbPersistenceKey(session.providerDocId, session.sessionId));
+      removed += 1;
+    }
+  }
+
+  return { scanned, removed };
 }

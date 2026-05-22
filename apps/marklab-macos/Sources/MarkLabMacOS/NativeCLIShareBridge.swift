@@ -151,6 +151,7 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
   private let appSupportDirectory: URL
   private let fileManager: FileManager
   private let maximumPendingRequestAge: TimeInterval
+  private let maximumCompletedResponseAge: TimeInterval
   private let now: () -> Date
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
@@ -159,11 +160,13 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
     appSupportDirectory: URL,
     fileManager: FileManager = .default,
     maximumPendingRequestAge: TimeInterval = 600,
+    maximumCompletedResponseAge: TimeInterval = 86_400,
     now: @escaping () -> Date = Date.init
   ) {
     self.appSupportDirectory = appSupportDirectory
     self.fileManager = fileManager
     self.maximumPendingRequestAge = maximumPendingRequestAge
+    self.maximumCompletedResponseAge = maximumCompletedResponseAge
     self.now = now
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
   }
@@ -185,6 +188,7 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
   }
 
   public func pendingRequestIds() throws -> [String] {
+    _ = try cleanupCompletedResponses()
     let requestsDirectory = appSupportDirectory.appending(path: "cli-requests", directoryHint: .isDirectory)
     guard fileManager.fileExists(atPath: requestsDirectory.path) else { return [] }
     let requestIds = try fileManager
@@ -212,6 +216,22 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
       pending.append(requestId)
     }
     return pending
+  }
+
+  @discardableResult
+  public func cleanupCompletedResponses() throws -> Int {
+    guard maximumCompletedResponseAge > 0 else { return 0 }
+    let responsesDirectory = appSupportDirectory.appending(path: "cli-responses", directoryHint: .isDirectory)
+    guard fileManager.fileExists(atPath: responsesDirectory.path) else { return 0 }
+    let responseIds = try fileManager
+      .contentsOfDirectory(at: responsesDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+      .filter { $0.pathExtension == "json" }
+      .filter { completedResponseIsStale($0) }
+      .map { $0.deletingPathExtension().lastPathComponent }
+    for requestId in responseIds {
+      try removeRequestFiles(requestId: requestId)
+    }
+    return responseIds.count
   }
 
   public func writeResponse(_ response: NativeCLIShareResponse) throws {
@@ -265,6 +285,16 @@ public final class FileNativeCLIShareRequestStore: NativeCLIShareRequestStore {
       return false
     }
     return now().timeIntervalSince(modifiedAt) > maximumPendingRequestAge
+  }
+
+  private func completedResponseIsStale(_ responseURL: URL) -> Bool {
+    guard
+      let attributes = try? fileManager.attributesOfItem(atPath: responseURL.path),
+      let modifiedAt = attributes[.modificationDate] as? Date
+    else {
+      return false
+    }
+    return now().timeIntervalSince(modifiedAt) > maximumCompletedResponseAge
   }
 
   private static func date(from value: String) -> Date? {

@@ -42,7 +42,7 @@ Deletion/local cleanup:
 
 - Delete Cloud Copy API/UI now exists locally for deleting a cloud document/provider access/version history while keeping the local Markdown file.
 - No complete product UI exists for clearing local MarkLab app/browser data.
-- Cleanup jobs for old grants, sessions, provider token audit rows, provider orphans, browser IndexedDB, and local handoff files are still missing.
+- Cleanup jobs now exist for old grants, sessions, provider token audit rows, provider docs tombstoned by Delete Cloud Copy, stale browser edit-session storage, and completed native CLI handoff responses. Full user-facing `Clear Local MarkLab Data` remains a later app-settings/support action.
 
 ## Target IA
 
@@ -257,7 +257,7 @@ Expected files:
 - `apps/api/src/routes/*`
 - `apps/api/src/services/*`
 - `apps/api/src/db/schema.sql` if tombstone columns are needed.
-- Provider tombstone/cleanup code for denying future provider access, plus follow-up physical provider-store cleanup if compaction cannot be self-serve in this gate.
+- Provider tombstone/cleanup code for denying future provider access plus tombstone-driven physical provider-store cleanup for known direct-child Y-Sweet provider directories.
 
 Acceptance:
 
@@ -327,6 +327,8 @@ Testing:
 
 ### Phase 8 - Cleanup Jobs And Restore Drill
 
+Status: scheduled lifecycle cleanup implemented for Gate 3; full Neon/Fly infrastructure restore drill remains deferred to the final launch gate.
+
 Scope:
 
 - Implement autosave-version retention:
@@ -378,8 +380,7 @@ Gate 3 can pass for a small manual pilot when:
 Paid/public launch requires:
 
 - self-serve cloud deletion or legally/product-approved retention wording;
-- provider-state cleanup;
-- cleanup jobs;
+- restore drill evidence;
+- workspace/account deletion promises to be implemented or explicitly excluded from public/privacy wording;
 - version retention/storage policy;
-- backup/restore evidence;
 - pricing model that accounts for retained stopped-sharing cloud copies and version snapshots.

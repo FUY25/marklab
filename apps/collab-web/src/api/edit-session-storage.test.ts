@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearPersistedEditSession,
+  cleanupStalePersistedEditSessions,
   loadPersistedEditSession,
   persistedEditSessionStorageKey,
   persistEditSession,
@@ -97,5 +98,47 @@ describe('edit session storage', () => {
     expect(loadPersistedEditSession(storageInput)).toBeNull();
     expect(() => persistEditSession(storageInput, activeSession())).not.toThrow();
     expect(() => clearPersistedEditSession(storageInput)).not.toThrow();
+  });
+
+  it('prunes stale persisted edit sessions and their matching IndexedDB cache names', () => {
+    const freshInput = { docId: 'doc_fresh', branchId: 'branch_fresh', token: 'fresh_token' };
+    const staleKey = persistedEditSessionStorageKey(storageInput);
+    const freshKey = persistedEditSessionStorageKey(freshInput);
+    localStorage.setItem(staleKey, JSON.stringify({
+      version: 1,
+      docId: storageInput.docId,
+      branchId: storageInput.branchId,
+      routeTokenHash: 'shared',
+      sessionId: 'session_stale',
+      refreshToken: 'refresh_stale',
+      providerDocId: 'provider_stale',
+      updatedAt: '2026-04-01T00:00:00.000Z',
+    }));
+    localStorage.setItem(freshKey, JSON.stringify({
+      version: 1,
+      docId: freshInput.docId,
+      branchId: freshInput.branchId,
+      routeTokenHash: 'shared',
+      sessionId: 'session_fresh',
+      refreshToken: 'refresh_fresh',
+      providerDocId: 'provider_fresh',
+      updatedAt: '2026-05-21T00:00:00.000Z',
+    }));
+    localStorage.setItem('unrelated', 'keep');
+    const deletedIndexedDbNames: string[] = [];
+
+    const result = cleanupStalePersistedEditSessions({
+      now: new Date('2026-05-22T00:00:00.000Z'),
+      maximumAgeMs: 30 * 24 * 60 * 60 * 1000,
+      deleteIndexedDb(name) {
+        deletedIndexedDbNames.push(name);
+      },
+    });
+
+    expect(result.removed).toBe(1);
+    expect(localStorage.getItem(staleKey)).toBeNull();
+    expect(localStorage.getItem(freshKey)).toBeTruthy();
+    expect(localStorage.getItem('unrelated')).toBe('keep');
+    expect(deletedIndexedDbNames).toEqual(['marklab:collab-web:provider_stale:session_stale']);
   });
 });

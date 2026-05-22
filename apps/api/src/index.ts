@@ -20,9 +20,11 @@ import {
   proxyYSweetProviderWebSocketUpgrade,
 } from './provider/ysweet-provider-websocket-proxy';
 import { createYSweetSnapshotService, createYSweetTokenService } from './provider/ysweet-token-service';
+import { PROVIDER_TOKEN_TTL_SECONDS } from './config/provider-token-policy';
 import { isProviderDocDeleted } from './services/cloud-copy-service';
 import { createPostgresLiveMarkdownWriter } from './services/postgres-live-writer';
 import { startProviderAutosaveCheckpointJob } from './services/provider-autosave-service';
+import { startDataLifecycleCleanupJob } from './services/lifecycle-cleanup-service';
 
 const env = loadApiEnv();
 const port = env.port;
@@ -57,6 +59,14 @@ async function main() {
         },
       })
     : undefined;
+  const dataLifecycleCleanupJob = startDataLifecycleCleanupJob({
+    pool,
+    providerStorePath: ysweetProviderConfig?.storePath,
+    providerDocDeletionGraceMs: (PROVIDER_TOKEN_TTL_SECONDS + 300) * 1000,
+    onError(error) {
+      console.warn('data lifecycle cleanup failed', error);
+    },
+  });
   const app = createHttpApp(pool, liveWriter, {
     flushCollabDocument: collab.flushDocument,
     applyCollabDocumentState: collab.applyDocumentState,
@@ -123,6 +133,7 @@ async function main() {
         collab_sessions: ['refresh_token_hash', 'is_guest', 'status', 'expires_at'],
         provider_token_issuances: ['workspace_id', 'folder_id', 'actor_type', 'actor_id', 'actor_grant_id', 'status', 'provider_error'],
         provider_token_refreshes: ['session_id', 'issued_at', 'expires_at', 'denied_at', 'deny_reason'],
+        provider_doc_deletions: ['cleanup_attempted_at', 'cleanup_completed_at', 'cleanup_error'],
       },
     },
   });
@@ -202,6 +213,7 @@ async function main() {
     isShuttingDown = true;
     try {
       providerAutosaveJob?.stop();
+      dataLifecycleCleanupJob.stop();
       await new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
       });

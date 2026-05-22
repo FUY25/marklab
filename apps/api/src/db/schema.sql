@@ -440,11 +440,23 @@ create table if not exists provider_doc_deletions (
   deleted_by_actor_type text not null check (deleted_by_actor_type in ('user', 'agent', 'system')),
   deleted_by_actor_id text,
   cleanup_status text not null default 'pending' check (cleanup_status in ('pending', 'complete', 'failed')),
+  cleanup_attempted_at timestamptz,
+  cleanup_completed_at timestamptz,
+  cleanup_error text,
   created_at timestamptz not null default now()
 );
 
+alter table provider_doc_deletions
+  add column if not exists cleanup_attempted_at timestamptz,
+  add column if not exists cleanup_completed_at timestamptz,
+  add column if not exists cleanup_error text;
+
 create index if not exists provider_doc_deletions_provider_doc_id_idx
   on provider_doc_deletions (provider_doc_id);
+
+create index if not exists provider_doc_deletions_cleanup_idx
+  on provider_doc_deletions (cleanup_status, created_at)
+  where cleanup_status in ('pending', 'failed');
 
 do $$
 begin
