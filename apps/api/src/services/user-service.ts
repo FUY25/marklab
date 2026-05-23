@@ -136,8 +136,31 @@ async function upsertUserBySubject(pool: DbExecutor, normalized: Required<Pick<A
   return row;
 }
 
+async function rebindManualAlphaUserByEmail(pool: DbExecutor, normalized: Required<Pick<AlphaLoginClaims, 'provider' | 'subject' | 'email' | 'name'>>): Promise<UserRow | null> {
+  if (normalized.provider === 'dev' || normalized.provider === 'manual-alpha') return null;
+  const result = await pool.query<UserRow>(
+    `update users
+        set auth_provider = $3,
+            auth_subject = $4,
+            display_name = $2,
+            updated_at = now()
+      where email = $1
+        and auth_provider = 'manual-alpha'
+      returning id, email, display_name`,
+    [normalized.email, normalized.name, normalized.provider, normalized.subject],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function upsertUserFromClaims(pool: DbExecutor, claims: AlphaLoginClaims): Promise<AuthenticatedUser> {
   const normalized = normalizeOidcClaims(claims);
+  try {
+    const rebound = await rebindManualAlphaUserByEmail(pool, normalized);
+    if (rebound) return toUser(rebound);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new Error('email_already_linked');
+    throw error;
+  }
   try {
     return toUser(await upsertUserBySubject(pool, normalized));
   } catch (error) {

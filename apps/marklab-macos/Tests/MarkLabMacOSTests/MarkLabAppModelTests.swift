@@ -17,6 +17,7 @@ struct MarkLabAppModelTests {
   func oidcCallbackStoresAccountCreatesWorkspaceAndEnablesHostedSharing() async throws {
     let directory = try TemporaryDirectory()
     let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
+    try accountStore.savePendingAuthState("native_state_native_state_native_state_1")
     let transport = RecordingHTTPTransport()
     transport.enqueue(json: #"{"authenticated":true,"user":{"userId":"user_1","email":"alice@example.test","displayName":"Alice OIDC"}}"#)
     transport.enqueue(json: #"{"workspaces":[]}"#)
@@ -28,10 +29,14 @@ struct MarkLabAppModelTests {
       sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
       nativeBearerToken: "ml_user_session",
       accountStore: accountStore,
-      accountTransport: transport
+      accountTransport: transport,
+      hostedDefaults: NativeHostedDefaults(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!
+      )
     )
 
-    model.handleOpenURL(URL(string: "marklab://auth/callback?token=ml_user_session&apiBaseURL=https://api.example.test&webBaseURL=https://app.example.test&userId=user_1&email=alice@example.test&displayName=Alice+OIDC")!)
+    model.handleOpenURL(URL(string: "marklab://auth/callback?token=ml_user_session&appState=native_state_native_state_native_state_1&apiBaseURL=https://api.example.test&webBaseURL=https://app.example.test&userId=user_1&email=alice@example.test&displayName=Alice+OIDC")!)
     try await waitForRecordedRequests(transport, count: 3)
     await Task.yield()
 
@@ -48,6 +53,67 @@ struct MarkLabAppModelTests {
     ])
     #expect(transport.requests.allSatisfy { $0.authorization == "Bearer ml_user_session" })
     #expect(transport.requests[2].jsonBody?["name"] as? String == "Alice OIDC Workspace")
+    #expect(try accountStore.loadPendingAuthState() == nil)
+  }
+
+  @MainActor
+  @Test("OIDC app callback rejects untrusted hosted origins")
+  func oidcCallbackRejectsUntrustedHostedOrigins() async throws {
+    let directory = try TemporaryDirectory()
+    let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
+    let transport = RecordingHTTPTransport()
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      accountStore: accountStore,
+      accountTransport: transport,
+      hostedDefaults: NativeHostedDefaults(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!
+      )
+    )
+
+    model.handleOpenURL(URL(string: "marklab://auth/callback?token=ml_user_session&appState=native_state_native_state_native_state_1&apiBaseURL=https://evil.example.test&webBaseURL=https://app.example.test&userId=user_1&email=alice@example.test&displayName=Alice+OIDC")!)
+    try await Task.sleep(nanoseconds: 40_000_000)
+
+    #expect(model.activeAccount == nil)
+    #expect(model.hasHostedShareController == false)
+    #expect(transport.requests.isEmpty)
+  }
+
+  @MainActor
+  @Test("OIDC app callback rejects callbacks not bound to the pending native state")
+  func oidcCallbackRejectsMismatchedPendingAppState() async throws {
+    let directory = try TemporaryDirectory()
+    let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
+    try accountStore.savePendingAuthState("native_state_native_state_native_state_1")
+    let transport = RecordingHTTPTransport()
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      accountStore: accountStore,
+      accountTransport: transport,
+      hostedDefaults: NativeHostedDefaults(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!
+      )
+    )
+
+    model.handleOpenURL(URL(string: "marklab://auth/callback?token=ml_user_session&appState=attacker_state_attacker_state_attacker_1&apiBaseURL=https://api.example.test&webBaseURL=https://app.example.test&userId=user_1&email=alice@example.test&displayName=Alice+OIDC")!)
+    try await Task.sleep(nanoseconds: 40_000_000)
+
+    #expect(model.activeAccount == nil)
+    #expect(model.hasHostedShareController == false)
+    #expect(model.nativeBearerToken == nil)
+    #expect(model.statusText == "Sign-in failed. Try again from Settings.")
+    #expect(transport.requests.isEmpty)
+    #expect(try accountStore.loadPendingAuthState() == nil)
   }
 
   @MainActor
@@ -71,6 +137,45 @@ struct MarkLabAppModelTests {
         localFileURL: URL(fileURLWithPath: "/tmp/marklab-unsigned-join.md")
       )
     }
+  }
+
+  @MainActor
+  @Test("sign out revokes the server session and clears local account state")
+  func signOutRevokesServerSessionAndClearsLocalAccountState() async throws {
+    let directory = try TemporaryDirectory()
+    let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
+    try accountStore.save(NativeStoredAccount(
+      apiBaseURL: URL(string: "https://api.example.test")!,
+      webBaseURL: URL(string: "https://app.example.test")!,
+      token: "ml_user_session",
+      userId: "user_1",
+      email: "alice@example.test",
+      displayName: "Alice OIDC",
+      workspaceId: "ws_1",
+      workspaceName: "Alice Workspace"
+    ))
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(data: Data(), statusCode: 204)
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      accountStore: accountStore,
+      accountTransport: transport
+    )
+
+    model.signOut()
+    try await waitForRecordedRequests(transport, count: 1)
+
+    #expect(model.activeAccount == nil)
+    #expect(model.nativeBearerToken == nil)
+    #expect(model.hasHostedShareController == false)
+    #expect(try accountStore.load() == nil)
+    #expect(transport.requests.first?.method == "POST")
+    #expect(transport.requests.first?.percentEncodedPath == "/api/auth/logout")
+    #expect(transport.requests.first?.authorization == "Bearer ml_user_session")
   }
 
   @MainActor

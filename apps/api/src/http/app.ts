@@ -415,6 +415,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'native_auth_state_required') {
+    res.status(400).json({ error: 'native_auth_state_required' });
+    return;
+  }
+
   if (
     error instanceof Error
     && (

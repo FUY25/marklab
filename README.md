@@ -54,8 +54,9 @@ Host:
 2. Click `Start Sharing`.
 3. Use `Create Edit Link` or `Create View Link`.
 4. The created link is copied to the clipboard.
-5. Use `Show Collaboration` to manage active access links, active human collaborators, and local sync state.
-6. Use `Stop Sharing` to flush local projection, revoke active links known to this app session, and return the window to local-only editing.
+5. Use `Show Sharing & Versions` to manage active access links, active human collaborators, cloud versions, and local sync state.
+6. Use `Stop Sharing` to flush local projection, revoke currently manageable active links, and return the window to local-only editing. It keeps the hosted cloud copy and online version history so the owner can inspect, restore, or delete them later.
+7. Use `Delete Cloud Copy` from the Versions danger zone when the hosted document, online version history, grants, sessions, and provider access should be deleted while preserving the local Markdown file.
 
 Browser collaborator:
 

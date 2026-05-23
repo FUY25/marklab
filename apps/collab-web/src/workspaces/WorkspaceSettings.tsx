@@ -24,6 +24,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'workspace_settings_unavailable';
 }
 
+function isUnauthorized(error: string | null): boolean {
+  return error === 'unauthorized' || error === 'http_401';
+}
+
 export function WorkspaceSettings({ workspaceId, client: injectedClient }: WorkspaceSettingsProps) {
   const defaultClient = useMemo(() => createWorkspaceSettingsClient(), []);
   const client = injectedClient ?? defaultClient;
@@ -139,7 +143,14 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
         </button>
       </nav>
       {error ? (
-        <section className="unavailable-banner" role="status">{error}</section>
+        <section className="unavailable-banner" role="status">
+          {isUnauthorized(error) ? (
+            <>
+              <span>Session expired. Continue with Google to manage this workspace.</span>
+              <a href={`/signin?returnTo=${encodeURIComponent(`/workspaces/${encodeURIComponent(workspaceId)}/settings`)}`}>Continue with Google</a>
+            </>
+          ) : error}
+        </section>
       ) : null}
       {loading ? (
         <section className="settings-panel">Loading settings</section>

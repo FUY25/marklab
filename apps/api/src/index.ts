@@ -152,6 +152,7 @@ async function main() {
         'provider_doc_deletions',
       ],
       schemaColumns: {
+        oidc_login_states: ['native_callback', 'native_app_state', 'return_to'],
         documents: ['workspace_id', 'folder_id'],
         document_access_grants: ['workspace_id', 'folder_id', 'created_by_user_id', 'grant_kind'],
         document_access_sessions: ['doc_id', 'branch_id', 'actor_kind', 'actor_id'],

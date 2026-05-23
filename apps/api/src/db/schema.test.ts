@@ -14,11 +14,11 @@ describe('control-plane schema contract', () => {
   it('defines login, workspace, folder, plan, seat, and subscription tables', async () => {
     const schema = await schemaSql();
 
-	    for (const table of [
-	      'users',
-	      'user_sessions',
+    for (const table of [
+      'users',
+      'user_sessions',
       'oidc_login_states',
-	      'workspaces',
+      'workspaces',
       'workspace_members',
       'workspace_share_keys',
       'workspace_folders',
@@ -33,6 +33,10 @@ describe('control-plane schema contract', () => {
     expect(schema).toContain('token_hash text not null unique');
     expect(schema).toContain('state_hash text not null unique');
     expect(schema).toContain('code_verifier text not null');
+    expect(schema).toContain('native_callback boolean not null default false');
+    expect(schema).toContain('native_app_state text');
+    expect(schema).toContain('return_to text');
+    expect(schema).toContain('alter table oidc_login_states');
     expect(schema).toContain('create index if not exists oidc_login_states_expiration_idx');
     const workspaceShareKeysDefinition = schema.match(/create table if not exists workspace_share_keys \([\s\S]*?\n\);/u)?.[0] ?? '';
     expect(workspaceShareKeysDefinition).toContain("role text not null check (role in ('Member', 'Reader'))");

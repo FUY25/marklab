@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react';
 import { MARKLAB_API_URL } from '@marklab/collab-editor';
 import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle } from 'lucide-react';
 
-const NATIVE_AUTH_STORAGE_KEY = 'marklab_native_auth';
-
 interface AuthSessionUser {
   userId: string;
   email: string;
@@ -13,10 +11,15 @@ interface AuthSessionUser {
 interface AuthSessionResponse {
   token: string;
   user: AuthSessionUser;
+  nativeCallback?: boolean;
+  nativeAppState?: string;
+  returnTo?: string;
 }
 
 export interface SignInPageProps {
   nativeMode?: boolean;
+  appState?: string | null;
+  returnTo?: string | null;
   redirect?: (url: string) => void;
 }
 
@@ -50,6 +53,8 @@ function authErrorMessage(error: string): string {
     case 'invalid_auth_email':
     case 'invalid_auth_display_name':
       return 'The sign-in response was not recognized.';
+    case 'native_auth_state_required':
+      return 'Open sign-in from MarkLab.app and try again.';
     default:
       return 'Google sign-in failed. Try again or ask the operator to check the deployment.';
   }
@@ -88,6 +93,9 @@ function authSessionFromResponse(value: unknown): AuthSessionResponse {
   if (typeof user.userId !== 'string' || !user.userId) throw new Error('invalid_auth_user');
   if (typeof user.email !== 'string') throw new Error('invalid_auth_email');
   if (typeof user.displayName !== 'string' || !user.displayName.trim()) throw new Error('invalid_auth_display_name');
+  if (record.nativeCallback === true && (typeof record.nativeAppState !== 'string' || !record.nativeAppState)) {
+    throw new Error('invalid_auth_callback_response');
+  }
   return {
     token: record.token,
     user: {
@@ -95,6 +103,9 @@ function authSessionFromResponse(value: unknown): AuthSessionResponse {
       email: user.email,
       displayName: user.displayName,
     },
+    nativeCallback: record.nativeCallback === true,
+    ...(typeof record.nativeAppState === 'string' && record.nativeAppState ? { nativeAppState: record.nativeAppState } : {}),
+    ...(typeof record.returnTo === 'string' && record.returnTo.startsWith('/') ? { returnTo: record.returnTo } : {}),
   };
 }
 
@@ -117,10 +128,11 @@ export function nativeAuthCallbackURL(session: AuthSessionResponse): string {
   url.searchParams.set('userId', session.user.userId);
   url.searchParams.set('email', session.user.email);
   url.searchParams.set('displayName', session.user.displayName);
+  if (session.nativeAppState) url.searchParams.set('appState', session.nativeAppState);
   return url.toString();
 }
 
-export function SignInPage({ nativeMode = false, redirect = defaultRedirect }: SignInPageProps) {
+export function SignInPage({ nativeMode = false, appState = null, returnTo = null, redirect = defaultRedirect }: SignInPageProps) {
   const [status, setStatus] = useState<'idle' | 'starting' | 'failed'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -131,10 +143,15 @@ export function SignInPage({ nativeMode = false, redirect = defaultRedirect }: S
       const response = await fetch(apiPath('/api/auth/oidc/start'), {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          native: nativeMode,
+          ...(nativeMode && appState ? { appState } : {}),
+          ...(!nativeMode && returnTo ? { returnTo } : {}),
+        }),
       });
       const body = requireObject(await readJsonResponse(response), 'oidc_start_response');
       if (typeof body.authorizationUrl !== 'string' || !body.authorizationUrl) throw new Error('invalid_oidc_start_response');
-      if (nativeMode) window.sessionStorage.setItem(NATIVE_AUTH_STORAGE_KEY, '1');
       redirect(body.authorizationUrl);
     } catch (caught) {
       setStatus('failed');
@@ -191,12 +208,15 @@ export function AuthCallbackPage({ search = window.location.search, redirect = d
         });
         const session = authSessionFromResponse(await readJsonResponse(response));
         if (disposed) return;
-        if (window.sessionStorage.getItem(NATIVE_AUTH_STORAGE_KEY) === '1') {
-          window.sessionStorage.removeItem(NATIVE_AUTH_STORAGE_KEY);
+        if (session.nativeCallback === true) {
           const callbackURL = nativeAuthCallbackURL(session);
           setNativeURL(callbackURL);
           setStatus('done');
           redirect(callbackURL);
+          return;
+        }
+        if (session.returnTo) {
+          redirect(session.returnTo);
           return;
         }
         setStatus('done');

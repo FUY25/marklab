@@ -44,6 +44,9 @@ interface SessionRecord {
 interface OidcStateRecord {
   state_hash: string;
   code_verifier: string;
+  native_callback: boolean;
+  native_app_state: string | null;
+  return_to: string | null;
   expires_at: Date | string;
   used_at: Date | string | null;
 }
@@ -86,6 +89,21 @@ function createAuthPool(input: { expired?: boolean } = {}) {
       return { rows: [user as Row], rowCount: 1 };
     }
 
+    if (sql.includes('update users') && sql.includes("auth_provider = 'manual-alpha'")) {
+      const user = users.find((candidate) => candidate.email === params?.[0] && candidate.auth_provider === 'manual-alpha');
+      if (!user) return { rows: [], rowCount: 0 };
+      if (users.some((candidate) => candidate !== user && candidate.auth_provider === params?.[2] && candidate.auth_subject === params?.[3])) {
+        const error = new Error('duplicate subject') as Error & { code: string; constraint: string };
+        error.code = '23505';
+        error.constraint = 'users_auth_provider_auth_subject_key';
+        throw error;
+      }
+      user.display_name = String(params?.[1]);
+      user.auth_provider = String(params?.[2]);
+      user.auth_subject = String(params?.[3]);
+      return { rows: [user as Row], rowCount: 1 };
+    }
+
     if (sql.includes('insert into user_sessions')) {
       const row: SessionRecord = {
         id: `usr_session_${nextSessionId++}`,
@@ -102,6 +120,9 @@ function createAuthPool(input: { expired?: boolean } = {}) {
       oidcStates.push({
         state_hash: String(params?.[0]),
         code_verifier: String(params?.[1]),
+        native_callback: params?.[2] === true,
+        native_app_state: typeof params?.[3] === 'string' ? params[3] : null,
+        return_to: typeof params?.[4] === 'string' ? params[4] : null,
         expires_at: '2999-01-01T00:00:00.000Z',
         used_at: null,
       });
@@ -112,7 +133,12 @@ function createAuthPool(input: { expired?: boolean } = {}) {
       const state = oidcStates.find((candidate) => candidate.state_hash === params?.[0] && !candidate.used_at);
       if (!state) return { rows: [], rowCount: 0 };
       state.used_at = '2026-05-11T00:00:00.000Z';
-      return { rows: [{ code_verifier: state.code_verifier } as Row], rowCount: 1 };
+      return { rows: [{
+        code_verifier: state.code_verifier,
+        native_callback: state.native_callback,
+        native_app_state: state.native_app_state,
+        return_to: state.return_to,
+      } as Row], rowCount: 1 };
     }
 
     if (sql.includes('update user_sessions') && sql.includes('from users')) {
@@ -227,12 +253,16 @@ describe('auth routes', () => {
 
     const started = await request(app)
       .post('/api/auth/oidc/start')
+      .send({ native: true, appState: 'native_state_native_state_native_state_1', returnTo: '/workspaces/ws_1/settings' })
       .expect(201);
     const state = new URL(started.body.authorizationUrl).searchParams.get('state');
     const codeChallenge = new URL(started.body.authorizationUrl).searchParams.get('code_challenge');
     expect(state).toMatch(/^[A-Za-z0-9_-]{43,}$/u);
     expect(codeChallenge).toMatch(/^[A-Za-z0-9_-]{43,}$/u);
     expect(oidcStates).toHaveLength(1);
+    expect(oidcStates[0]?.native_callback).toBe(true);
+    expect(oidcStates[0]?.native_app_state).toBe('native_state_native_state_native_state_1');
+    expect(oidcStates[0]?.return_to).toBe('/workspaces/ws_1/settings');
     const cookies = setCookies(started);
 
     const login = await request(app)
@@ -249,6 +279,9 @@ describe('auth routes', () => {
       },
       sessionId: 'usr_session_1',
       token: expect.stringMatching(/^ml_user_/u),
+      nativeCallback: true,
+      nativeAppState: 'native_state_native_state_native_state_1',
+      returnTo: '/workspaces/ws_1/settings',
     });
     expect(sessions[0]?.token_hash).toBe(hashToken(login.body.token));
 
@@ -256,6 +289,80 @@ describe('auth routes', () => {
       .post('/api/auth/dev-login')
       .send({ email: 'attacker@example.com', name: 'Attacker' })
       .expect(403, { error: 'dev_auth_disabled' });
+  });
+
+  it('requires a native app state when starting a native OIDC sign-in', async () => {
+    const { pool } = createAuthPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      authEnvironment: {
+        oidc: {
+          issuer: 'https://login.example.test',
+          clientId: 'marklab-client',
+          clientSecret: 'marklab-secret',
+          redirectUri: 'https://marklab.example.test/auth/callback',
+          authorizationEndpoint: 'https://login.example.test/authorize',
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/auth/oidc/start')
+      .send({ native: true })
+      .expect(400, { error: 'native_auth_state_required' });
+  });
+
+  it('rebinds a manual-alpha bootstrap owner to verified OIDC without losing the user id', async () => {
+    process.env.MARKLAB_ENABLE_DEV_AUTH = 'false';
+    const { pool, users } = createAuthPool();
+    users.push({
+      id: 'user_manual',
+      email: 'alice@example.com',
+      display_name: 'Alice Manual',
+      auth_provider: 'manual-alpha',
+      auth_subject: 'alice@example.com',
+    });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      authEnvironment: {
+        devAuth: false,
+        oidc: {
+          issuer: 'https://accounts.google.com',
+          clientId: 'marklab-client',
+          clientSecret: 'marklab-secret',
+          redirectUri: 'https://marklab.example.test/auth/callback',
+          authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+        },
+      },
+      oidcExchange: async () => ({
+        provider: 'https://accounts.google.com',
+        subject: 'google-subject-1',
+        email: 'ALICE@example.com',
+        name: 'Alice Google',
+      }),
+    });
+
+    const started = await request(app)
+      .post('/api/auth/oidc/start')
+      .expect(201);
+    const state = new URL(started.body.authorizationUrl).searchParams.get('state');
+
+    const login = await request(app)
+      .post('/api/auth/oidc/callback')
+      .set('Cookie', setCookies(started))
+      .send({ code: 'oidc_code_1', state })
+      .expect(201);
+
+    expect(login.body.user).toMatchObject({
+      userId: 'user_manual',
+      email: 'alice@example.com',
+      displayName: 'Alice Google',
+    });
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      id: 'user_manual',
+      auth_provider: 'https://accounts.google.com',
+      auth_subject: 'google-subject-1',
+      display_name: 'Alice Google',
+    });
   });
 
   it('rejects missing and replayed OIDC login state before exchanging the code', async () => {

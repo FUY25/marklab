@@ -28,10 +28,22 @@ create table if not exists oidc_login_states (
   id uuid primary key default gen_random_uuid(),
   state_hash text not null unique,
   code_verifier text not null,
+  native_callback boolean not null default false,
+  native_app_state text,
+  return_to text,
   expires_at timestamptz not null,
   used_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table oidc_login_states
+  add column if not exists native_callback boolean not null default false;
+
+alter table oidc_login_states
+  add column if not exists native_app_state text;
+
+alter table oidc_login_states
+  add column if not exists return_to text;
 
 create index if not exists oidc_login_states_expiration_idx
   on oidc_login_states (expires_at)

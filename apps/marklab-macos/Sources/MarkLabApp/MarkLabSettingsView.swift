@@ -1,4 +1,5 @@
 import AppKit
+import MarkLabMacOS
 import SwiftUI
 
 enum MarkLabAppSettings {
@@ -18,13 +19,16 @@ struct MarkLabSettingsView: View {
   @State private var accountStatus: String?
   private let accountStore: NativeAccountStore
   private let hostedDefaults: NativeHostedDefaults
+  private let accountTransport: NativeHTTPTransport
 
   init(
     accountStore: NativeAccountStore = .defaultStore(),
-    hostedDefaults: NativeHostedDefaults = .fromEnvironment()
+    hostedDefaults: NativeHostedDefaults = .fromEnvironment(),
+    accountTransport: NativeHTTPTransport = URLSessionNativeHTTPTransport()
   ) {
     self.accountStore = accountStore
     self.hostedDefaults = hostedDefaults
+    self.accountTransport = accountTransport
     _account = State(initialValue: try? accountStore.load())
   }
 
@@ -66,21 +70,57 @@ struct MarkLabSettingsView: View {
     .formStyle(.grouped)
     .padding(20)
     .frame(width: 440)
+    .onReceive(NotificationCenter.default.publisher(for: .markLabAccountDidSignIn)) { _ in
+      account = try? accountStore.load()
+      if account != nil {
+        accountStatus = "Signed in."
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .markLabAccountDidSignOut)) { notification in
+      let token = notification.userInfo?[NativeAccountSignOutNotification.tokenKey] as? String
+      if token == nil || token == account?.token {
+        account = nil
+        accountStatus = "Signed out."
+      }
+    }
   }
 
   private var signInURL: URL {
     var components = URLComponents(url: hostedDefaults.webBaseURL.appending(path: "signin"), resolvingAgainstBaseURL: false)!
-    components.queryItems = [URLQueryItem(name: "native", value: "1")]
+    let appState = NativeAuthPendingState.generate()
+    try? accountStore.savePendingAuthState(appState)
+    components.queryItems = [
+      URLQueryItem(name: "native", value: "1"),
+      URLQueryItem(name: "appState", value: appState),
+    ]
     return components.url!
   }
 
   private func signOut() {
-    do {
-      try accountStore.clear()
-      account = nil
+    guard let currentAccount = account else {
       accountStatus = "Signed out."
-    } catch {
-      accountStatus = "Unable to sign out."
+      return
+    }
+    accountStatus = "Signing out..."
+    Task { @MainActor in
+      let client = NativeAccountClient(
+        apiBaseURL: currentAccount.apiBaseURL,
+        bearerToken: currentAccount.token,
+        transport: accountTransport
+      )
+      let didLogout = (try? await client.logout()) != nil
+      do {
+        try accountStore.clear()
+        account = nil
+        accountStatus = didLogout ? "Signed out." : "Signed out locally. Server session may already be expired."
+        NotificationCenter.default.post(
+          name: .markLabAccountDidSignOut,
+          object: nil,
+          userInfo: [NativeAccountSignOutNotification.tokenKey: currentAccount.token]
+        )
+      } catch {
+        accountStatus = "Unable to clear the local account."
+      }
     }
   }
 }

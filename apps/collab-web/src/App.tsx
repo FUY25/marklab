@@ -25,7 +25,13 @@ export function App() {
   const path = window.location.pathname;
 
   if (path === '/signin' || path === '/signin/') {
-    return <SignInPage nativeMode={searchParam('native') === '1'} />;
+    return (
+      <SignInPage
+        nativeMode={searchParam('native') === '1'}
+        appState={searchParam('appState')}
+        returnTo={searchParam('returnTo')}
+      />
+    );
   }
 
   if (path === '/auth/callback' || path === '/auth/callback/') {

@@ -355,6 +355,8 @@ final class MarkLabAppModel: ObservableObject {
   private var projectionTask: Task<Void, Never>?
   private var localAutosaveTask: Task<Void, Never>?
   private var localAutosaveDefaultsObserver: NotificationObserverToken?
+  private var accountSignOutObserver: NotificationObserverToken?
+  private var accountSignInObserver: NotificationObserverToken?
   private var diskIngestionRevision = 0
   private var versionHistoryRequestRevision = 0
   private var fileWatcher: DispatchSourceFileSystemObject?
@@ -405,6 +407,32 @@ final class MarkLabAppModel: ObservableObject {
       }
       localAutosaveDefaultsObserver = NotificationObserverToken(observer)
     }
+    let accountObserver = NotificationCenter.default.addObserver(
+      forName: .markLabAccountDidSignOut,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      let token = notification.userInfo?[NativeAccountSignOutNotification.tokenKey] as? String
+      Task { @MainActor in
+        guard let self else { return }
+        guard token == nil || token == self.activeAccount?.token else { return }
+        self.applySignedOutState(status: "Signed out. Sign in before sharing.", clearStore: false, broadcast: false)
+      }
+    }
+    accountSignOutObserver = NotificationObserverToken(accountObserver)
+    let signInObserver = NotificationCenter.default.addObserver(
+      forName: .markLabAccountDidSignIn,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      let token = notification.userInfo?[NativeAccountSignInNotification.tokenKey] as? String
+      Task { @MainActor in
+        guard let self, let account = try? self.accountStore?.load() else { return }
+        guard token == nil || token == account.token else { return }
+        self.applySignedInState(account, status: "Signed in as \(account.displayName). Workspace: \(account.workspaceName).")
+      }
+    }
+    accountSignInObserver = NotificationObserverToken(signInObserver)
     if self.hostedShareController == nil {
       statusText = "Open a Markdown file. Sign in before sharing."
     } else if let storedAccount {
@@ -414,6 +442,8 @@ final class MarkLabAppModel: ObservableObject {
 
   deinit {
     localAutosaveDefaultsObserver?.invalidate()
+    accountSignOutObserver?.invalidate()
+    accountSignInObserver?.invalidate()
     localAutosaveTask?.cancel()
     projectionTask?.cancel()
     fileWatcher?.cancel()
@@ -433,7 +463,12 @@ final class MarkLabAppModel: ObservableObject {
 
   var signInURL: URL {
     var components = URLComponents(url: hostedDefaults.webBaseURL.appending(path: "signin"), resolvingAgainstBaseURL: false)!
-    components.queryItems = [URLQueryItem(name: "native", value: "1")]
+    let appState = NativeAuthPendingState.generate()
+    try? accountStore?.savePendingAuthState(appState)
+    components.queryItems = [
+      URLQueryItem(name: "native", value: "1"),
+      URLQueryItem(name: "appState", value: appState),
+    ]
     return components.url!
   }
 
@@ -639,7 +674,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func handleOpenURL(_ url: URL) {
-    if let callback = NativeAuthCallback.parse(url) {
+    if let callback = NativeAuthCallback.parse(url, hostedDefaults: hostedDefaults) {
       completeSignIn(from: callback)
       return
     }
@@ -651,11 +686,50 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func signOut() {
-    try? accountStore?.clear()
+    let account = activeAccount
+    applySignedOutState(status: "Signed out. Sign in before sharing.", clearStore: true, broadcast: account?.token != nil, broadcastToken: account?.token)
+    guard let account else { return }
+    Task { @MainActor in
+      let client = NativeAccountClient(
+        apiBaseURL: account.apiBaseURL,
+        bearerToken: account.token,
+        transport: accountTransport
+      )
+      try? await client.logout()
+    }
+  }
+
+  private func applySignedOutState(status: String, clearStore: Bool, broadcast: Bool, broadcastToken: String? = nil) {
+    if clearStore {
+      try? accountStore?.clear()
+    }
     activeAccount = nil
     hostedShareController = nil
     nativeBearerToken = nil
-    statusText = "Signed out. Sign in before sharing."
+    embeddedCollabURL = nil
+    activeCollaborators = []
+    managedAccessLinks = []
+    latestLink = nil
+    latestGrantId = nil
+    pendingDiskIngestion = nil
+    pendingSharedMarkdown = nil
+    projectionTask?.cancel()
+    projectionTask = nil
+    statusText = status
+    if broadcast {
+      var userInfo: [String: String] = [:]
+      if let broadcastToken {
+        userInfo[NativeAccountSignOutNotification.tokenKey] = broadcastToken
+      }
+      NotificationCenter.default.post(name: .markLabAccountDidSignOut, object: nil, userInfo: userInfo)
+    }
+  }
+
+  private func applySignedInState(_ account: NativeStoredAccount, status: String) {
+    activeAccount = account
+    nativeBearerToken = account.token
+    hostedShareController = Self.makeHostedShareController(from: account, transport: accountTransport)
+    statusText = status
   }
 
   private func requireSignedInForNativeSharedDocumentOpen() -> Bool {
@@ -670,6 +744,11 @@ final class MarkLabAppModel: ObservableObject {
     statusText = "Finishing sign-in..."
     Task { @MainActor in
       do {
+        guard let expectedAppState = try accountStore?.loadPendingAuthState(), expectedAppState == callback.appState else {
+          try? accountStore?.clearPendingAuthState()
+          statusText = "Sign-in failed. Try again from Settings."
+          return
+        }
         let client = NativeAccountClient(
           apiBaseURL: callback.apiBaseURL,
           bearerToken: callback.token,
@@ -694,11 +773,15 @@ final class MarkLabAppModel: ObservableObject {
           workspaceName: workspace.name
         )
         try accountStore?.save(account)
-        activeAccount = account
-        nativeBearerToken = account.token
-        hostedShareController = Self.makeHostedShareController(from: account, transport: accountTransport)
-        statusText = "Signed in as \(account.displayName). Workspace: \(account.workspaceName)."
+        try? accountStore?.clearPendingAuthState()
+        applySignedInState(account, status: "Signed in as \(account.displayName). Workspace: \(account.workspaceName).")
+        NotificationCenter.default.post(
+          name: .markLabAccountDidSignIn,
+          object: nil,
+          userInfo: [NativeAccountSignInNotification.tokenKey: account.token]
+        )
       } catch {
+        try? accountStore?.clearPendingAuthState()
         statusText = "Sign-in failed. Try again from Settings."
       }
     }

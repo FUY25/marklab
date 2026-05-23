@@ -66,6 +66,12 @@ Apply the checked-in schema to Neon before deploying an image that depends on ne
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
 ```
 
+If the operator does not have the Neon `DATABASE_URL` locally but the Fly secret is already configured, apply the same checked-in schema from inside the running Fly machine without printing the secret:
+
+```sh
+fly ssh console -a marklab-relay-alpha -C "cd /app/apps/api && node --input-type=module -e \"import { readFileSync } from 'node:fs'; import pg from 'pg'; const client = new pg.Client({ connectionString: process.env.DATABASE_URL }); await client.connect(); await client.query(readFileSync('/app/apps/api/src/db/schema.sql', 'utf8')); await client.end(); console.log('schema_applied');\""
+```
+
 Deploy after schema readiness is in place:
 
 ```sh
@@ -88,6 +94,8 @@ The current migration path is the checked-in schema file. It is expected to be s
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
 ```
+
+If `/healthz` reports missing schema columns and local Neon credentials are unavailable, use the Fly-machine fallback from `Build, Migrate, And Deploy`, then re-check health before continuing.
 
 The launch gate is not just "SQL ran"; `/healthz` must show database, schema, provider, and provider store ready.
 
@@ -269,9 +277,28 @@ Investigate by layer:
 - Quota failures: check `/api/workspaces/:workspaceId/billing` and `seat_limits`.
 - Link failures: check grant revocation/expiry and provider-token refresh errors.
 
-## Alpha User Start
+## Pilot Packaged App Start
 
-Start MarkLab.app against the hosted pilot:
+Normal pilot owners should use the packaged app and hosted OIDC path:
+
+```sh
+unzip MarkLab-controlled-pilot.zip
+mv MarkLab.app /Applications/
+open /Applications/MarkLab.app
+```
+
+If macOS blocks the current ad-hoc signed controlled-pilot artifact, use only the scoped per-app Gatekeeper workaround and then open the app again:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MarkLab.app
+open /Applications/MarkLab.app
+```
+
+In the app, open `Settings` -> `Account` -> `Sign In`, choose `Continue with Google`, complete hosted OIDC in the browser, and allow the `marklab://auth/callback` handoff. The app should show the signed-in owner and a selected or newly created workspace before the owner starts sharing.
+
+## Operator Fallback Dev Start
+
+Use this only for smoke testing or incidents when the packaged OIDC path is unavailable. It is not the normal pilot-owner start path:
 
 ```sh
 MARKLAB_CONTROL_PLANE_API_URL=https://marklab-relay-alpha.fly.dev \

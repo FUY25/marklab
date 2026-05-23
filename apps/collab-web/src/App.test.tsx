@@ -298,7 +298,7 @@ describe('OIDC auth flow', () => {
     vi.clearAllMocks();
   });
 
-  it('starts OIDC and marks native handoff before redirecting', async () => {
+  it('starts OIDC with server-side native handoff intent before redirecting', async () => {
     const redirect = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       authorizationUrl: 'https://login.example.test/authorize?state=state_1',
@@ -307,15 +307,15 @@ describe('OIDC auth flow', () => {
       headers: { 'Content-Type': 'application/json' },
     })));
 
-    render(<SignInPage nativeMode redirect={redirect} />);
+    render(<SignInPage nativeMode appState="native_state_native_state_native_state_1" redirect={redirect} />);
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/auth/oidc/start', expect.objectContaining({
         method: 'POST',
         credentials: 'include',
+        body: JSON.stringify({ native: true, appState: 'native_state_native_state_native_state_1' }),
       }));
-      expect(window.sessionStorage.getItem('marklab_native_auth')).toBe('1');
       expect(redirect).toHaveBeenCalledWith('https://login.example.test/authorize?state=state_1');
     });
   });
@@ -334,11 +334,26 @@ describe('OIDC auth flow', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Google sign-in is not configured for this environment.');
   });
 
+  it('shows a native state error when native sign-in was not launched from the app', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: 'native_auth_state_required',
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<SignInPage nativeMode />);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Open sign-in from MarkLab.app and try again.');
+  });
+
   it('turns the OIDC callback session into a native app callback URL', async () => {
     const redirect = vi.fn();
-    window.sessionStorage.setItem('marklab_native_auth', '1');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       token: 'ml_user_secret',
+      nativeCallback: true,
+      nativeAppState: 'native_state_native_state_native_state_1',
       user: {
         userId: 'user_1',
         email: 'alice@example.test',
@@ -360,8 +375,51 @@ describe('OIDC auth flow', () => {
       expect(redirect).toHaveBeenCalledWith(expect.stringContaining('marklab://auth/callback?'));
     });
     expect(redirect.mock.calls[0]?.[0]).toContain('displayName=Alice+OIDC');
+    expect(redirect.mock.calls[0]?.[0]).toContain('appState=native_state_native_state_native_state_1');
     expect(screen.getByRole('link', { name: 'Open MarkLab' }).getAttribute('href')).toContain('marklab://auth/callback?');
-    expect(window.sessionStorage.getItem('marklab_native_auth')).toBeNull();
+  });
+
+  it('rejects native callback responses missing the server-bound app state', async () => {
+    const redirect = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      token: 'ml_user_secret',
+      nativeCallback: true,
+      user: {
+        userId: 'user_1',
+        email: 'alice@example.test',
+        displayName: 'Alice OIDC',
+      },
+    }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<AuthCallbackPage search="?code=oidc_code&state=oidc_state" redirect={redirect} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('The sign-in response was not recognized.');
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it('redirects browser sign-in back to same-origin relative workspace settings returnTo', async () => {
+    const redirect = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      token: 'ml_user_secret',
+      returnTo: '/workspaces/ws_1/settings',
+      user: {
+        userId: 'user_1',
+        email: 'alice@example.test',
+        displayName: 'Alice OIDC',
+      },
+    }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    render(<AuthCallbackPage search="?code=oidc_code&state=oidc_state" redirect={redirect} />);
+
+    await waitFor(() => {
+      expect(redirect).toHaveBeenCalledWith('/workspaces/ws_1/settings');
+    });
   });
 
   it('shows a readable callback failure when code or state is missing', async () => {

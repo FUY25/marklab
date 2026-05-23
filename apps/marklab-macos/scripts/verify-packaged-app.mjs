@@ -13,11 +13,26 @@ function fail(message) {
   process.exit(1);
 }
 
+function combinedOutput(result) {
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+}
+
+function detailValue(output, key) {
+  const match = output.match(new RegExp(`^${key}=(.+)$`, 'm'));
+  return match ? match[1].trim() : null;
+}
+
 function plistValue(key) {
   const result = spawnSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, infoPlist], {
     encoding: 'utf8',
   });
   return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function signingModeFor(signature) {
+  if (signature === 'adhoc') return 'ad-hoc';
+  if (signature) return 'certificate';
+  return 'unknown';
 }
 
 if (!existsSync(appPath)) fail(`missing app bundle: ${appPath}`);
@@ -38,6 +53,26 @@ if (codeSign.status !== 0) {
   fail(`codesign verification failed: ${codeSign.stderr || codeSign.stdout}`);
 }
 
+const codeSignDetails = spawnSync('codesign', ['-dv', '--verbose=4', appPath], {
+  encoding: 'utf8',
+});
+const codeSignDetailOutput = combinedOutput(codeSignDetails);
+const signature = detailValue(codeSignDetailOutput, 'Signature');
+const teamIdentifier = detailValue(codeSignDetailOutput, 'TeamIdentifier');
+const developerIdSigned = /Authority=Developer ID Application:/m.test(codeSignDetailOutput);
+
+const gatekeeper = spawnSync('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath], {
+  encoding: 'utf8',
+});
+const gatekeeperStatus = combinedOutput(gatekeeper);
+
+const stapler = spawnSync('xcrun', ['stapler', 'validate', appPath], {
+  encoding: 'utf8',
+});
+const staplerStatus = combinedOutput(stapler);
+const notarized = stapler.status === 0;
+const distributionReady = developerIdSigned && gatekeeper.status === 0 && notarized;
+
 const fileType = execFileSync('file', [executable], { encoding: 'utf8' }).trim();
 if (!fileType.includes('Mach-O')) fail(`unexpected executable type: ${fileType}`);
 
@@ -47,4 +82,14 @@ console.log(JSON.stringify({
   bundleIdentifier: plistValue('CFBundleIdentifier'),
   urlScheme: scheme,
   executable,
+  codeSignaturePresent: true,
+  signingMode: signingModeFor(signature),
+  signature,
+  teamIdentifier,
+  developerIdSigned,
+  gatekeeperAccepted: gatekeeper.status === 0,
+  gatekeeperStatus,
+  notarized,
+  notarizationStatus: staplerStatus,
+  distributionReady,
 }));

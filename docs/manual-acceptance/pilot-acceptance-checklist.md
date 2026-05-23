@@ -699,13 +699,24 @@ tests and B for browser-only guest tests. Both signals matter.
 
 ### What to send your friend before the test
 
-1. **A packaged MarkLab.app, not source.** Build once:
+1. **A packaged MarkLab.app, not source.** Build and verify the app bundle:
    ```sh
-   swift build -c release --package-path apps/marklab-macos
+   npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app
+   npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package
+   ditto -c -k --sequesterRsrc --keepParent dist/MarkLab.app dist/MarkLab-controlled-pilot.zip
    ```
-   then zip the resulting binary, or run the packaging script if it
-   produces a `.app` bundle. Do not ask them to install pnpm, swiftc,
-   and clone the repo. That's developer onboarding, not pilot testing.
+   Send the zip that contains `MarkLab.app`, not a bare Swift binary.
+   Do not ask them to install pnpm, swiftc, and clone the repo. That's
+   developer onboarding, not pilot testing.
+
+   Current controlled-pilot artifacts are ad-hoc signed and not
+   notarized. If macOS blocks the app after unzipping, use only the
+   scoped per-app workaround against the actual installed bundle path:
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/MarkLab.app
+   open /Applications/MarkLab.app
+   ```
+   Do not disable Gatekeeper globally.
 
 2. **Target configuration, only if not using the default hosted alpha.**
    MarkLab.app defaults to `https://marklab-relay-alpha.fly.dev`; for a

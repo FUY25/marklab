@@ -8,7 +8,8 @@ Scope decision: use the controlled technical pilot path for Gate 5. Do not regis
 
 Current package state:
 
-- Artifact: `dist/MarkLab-a378a26ae6d5-controlled-pilot.zip`
+- Historical artifact: `dist/MarkLab-a378a26ae6d5-controlled-pilot.zip`
+- Current artifact rule: rebuild from the current release candidate with `package:app`, verify with `verify:package`, then zip `dist/MarkLab.app` with `ditto -c -k --sequesterRsrc --keepParent`.
 - App bundle inside artifact: `MarkLab.app`
 - Bundle id: `com.marklab.app`
 - URL scheme: `marklab`
@@ -39,7 +40,7 @@ Alternative UI path for a supported pilot user is macOS System Settings > Privac
 
 ## Verification Run
 
-Commands and evidence from the current repo checkout:
+Historical Gate 5 verification evidence from commit `a378a26ae6d5712e84c16650d63ff0ebb2ebd8e1`:
 
 - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app` passed.
 - `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package` passed for `dist/MarkLab.app`.
@@ -50,7 +51,7 @@ Commands and evidence from the current repo checkout:
 - LaunchServices started the unpacked app from `/tmp/marklab-gate5-install-a378a26ae6d5/MarkLab.app` with a repo-outside app support directory.
 - The unpacked app opened `gate5-local.md` through app launch arguments and loaded the MarkEdit shell.
 
-Hosted flow evidence through the unpacked app and current CLI bridge:
+Historical hosted flow evidence through the unpacked app and the pre-Gate-6 operator-token/CLI bridge:
 
 | Check | Result |
 | --- | --- |
@@ -67,6 +68,15 @@ Hosted flow evidence through the unpacked app and current CLI bridge:
 
 Access tokens were intentionally not copied into this document.
 
+Current Gate 6 owner onboarding changes do not change the Gate 5 distribution claim: the same packaged `.app` shape is still used, but the normal owner path is now hosted OIDC through `Settings` -> `Account` -> `Sign In` and `marklab://auth/callback`. A final pre-invite clean-install smoke should use a freshly rebuilt zip plus the live OIDC/native callback path, not the historical owner-token bridge.
+
+Current RC package verification after Gate 5/6 review fixes:
+
+- `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app` passed.
+- `npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package` passed for `dist/MarkLab.app`.
+- Verification output reported `signingMode: "ad-hoc"`, `signature: "adhoc"`, `teamIdentifier: "not set"`, `developerIdSigned: false`, `gatekeeperAccepted: false`, `notarized: false`, and `distributionReady: false`.
+- This current RC package check confirms the artifact shape and install limitation only; it does not repeat the historical repo-outside install, hosted sharing, app-to-app join, or quit/reopen smoke.
+
 ## Gate 5 Claims
 
 Passed for the controlled technical pilot:
@@ -76,13 +86,13 @@ Passed for the controlled technical pilot:
 - The current unsigned/ad-hoc package behavior is understood and documented.
 - A scoped per-app Gatekeeper workaround is documented and tested.
 - Local file editing and saving remain covered by the Gate 1 packaged-app acceptance pass; Gate 5 rechecked repo-outside local file open and hosted projection from the install artifact.
-- The unpacked app can create hosted edit/view links through the current owner-token/CLI bridge.
+- The historical unpacked app smoke proved hosted edit/view link creation through the operator-token/CLI bridge; current pilot owner sharing should be re-smoked through Gate 6 OIDC before inviting non-technical users.
 - A second local file can join from the edit link and restore sync after app quit/reopen.
 
 Not claimed by this gate:
 
 - Developer ID signed and notarized distribution.
 - No-warning Finder double-click install for ordinary public users.
-- A non-technical first-run login/onboarding path; this remains Gate 6.
+- Completed live Google/OIDC first-run login/onboarding acceptance; this remains Gate 6 until an interactive native callback/workspace smoke passes.
 - Paid/public distribution or auto-update semantics.
 - A separate physical Mac or separate macOS account pass. Run that before expanding beyond the supported technical pilot audience.

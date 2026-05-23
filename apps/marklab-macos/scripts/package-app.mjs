@@ -115,5 +115,10 @@ console.log(JSON.stringify({
   app: output,
   executable: resolve(output, 'Contents/MacOS/MarkLabApp'),
   resourceBundle: resolve(output, 'Contents/Resources/MarkLabMacOS_MarkLabApp.bundle'),
-  signed: sign,
+  codeSignaturePresent: sign,
+  signingMode: sign ? 'ad-hoc' : 'none',
+  signingIdentity: sign ? '-' : null,
+  developerIdSigned: false,
+  notarized: false,
+  distributionReady: false,
 }));

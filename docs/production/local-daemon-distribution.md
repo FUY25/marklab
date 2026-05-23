@@ -54,4 +54,6 @@ Future production distribution should focus on:
 - Server-backed access-link listing so the app can revoke all active grants after relaunch.
 - Native hosted Versions UI.
 
+Homebrew can improve install routing, but it is only a distribution channel. No-warning public or non-technical distribution still requires Developer ID signing and notarization of `MarkLab.app`.
+
 Do not revive the old daemon as the normal distribution path.

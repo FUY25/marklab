@@ -14,7 +14,10 @@ final class MarkEditDocumentWindowCoordinator {
 
   @discardableResult
   func openDocumentWindow(fileURL: URL) -> MarkEditDocumentWindowOpenResult {
-    let model = MarkLabAppModel(opensSelectedFilesInNewDocumentWindow: false)
+    let model = MarkLabAppModel(
+      accountStore: NativeAccountStore.defaultStore(),
+      opensSelectedFilesInNewDocumentWindow: false
+    )
     model.loadFile(fileURL)
     guard model.filePath != nil else { return .failed(statusText: model.statusText) }
     MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)

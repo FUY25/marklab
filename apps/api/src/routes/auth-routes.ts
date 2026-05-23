@@ -21,6 +21,12 @@ const alphaLoginSchema = z.object({
   subject: z.string().min(1).max(160).optional(),
 });
 
+const oidcStartSchema = z.object({
+  native: z.boolean().optional(),
+  appState: z.string().min(32).max(512).optional(),
+  returnTo: z.string().min(1).max(1024).optional(),
+}).optional();
+
 const oidcCallbackSchema = z.object({
   code: z.string().min(1).max(4096),
   state: z.string().min(32).max(512),
@@ -79,19 +85,30 @@ function parseCookieHeader(header: string | undefined): Record<string, string> {
   return cookies;
 }
 
+function normalizeReturnTo(value: string | undefined): string | null {
+  if (!value) return null;
+  if (!value.startsWith('/') || value.startsWith('//')) return null;
+  return value;
+}
+
 export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
   const router = Router();
 
-  router.post('/auth/oidc/start', async (_req: Request, res: Response, next: NextFunction) => {
+  router.post('/auth/oidc/start', async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!options.oidcConfig) throw new Error('oidc_not_configured');
+      const body = oidcStartSchema.parse(req.body);
       const state = authToken();
       const codeVerifier = authToken();
+      const nativeCallback = body?.native === true;
+      const nativeAppState = nativeCallback ? body?.appState : null;
+      if (nativeCallback && !nativeAppState) throw new Error('native_auth_state_required');
+      const returnTo = normalizeReturnTo(body?.returnTo);
       await pool.query(
         `insert into oidc_login_states
-           (state_hash, code_verifier, expires_at)
-         values ($1, $2, now() + ($3 * interval '1 second'))`,
-        [hashToken(state), codeVerifier, OIDC_LOGIN_STATE_TTL_SECONDS],
+           (state_hash, code_verifier, native_callback, native_app_state, return_to, expires_at)
+         values ($1, $2, $3, $4, $5, now() + ($6 * interval '1 second'))`,
+        [hashToken(state), codeVerifier, nativeCallback, nativeAppState, returnTo, OIDC_LOGIN_STATE_TTL_SECONDS],
       );
       res.setHeader('set-cookie', oidcStateCookie(state, options));
       res.status(201).json({
@@ -112,16 +129,17 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
       const body = oidcCallbackSchema.parse(req.body);
       const cookieState = parseCookieHeader(req.header('cookie'))[OIDC_STATE_COOKIE];
       if (!cookieState || cookieState !== body.state) throw new Error('oidc_login_state_invalid');
-      const stateResult = await pool.query<{ code_verifier: string }>(
+      const stateResult = await pool.query<{ code_verifier: string; native_callback: boolean; native_app_state: string | null; return_to: string | null }>(
         `update oidc_login_states
             set used_at = now()
           where state_hash = $1
             and used_at is null
             and expires_at > now()
-          returning code_verifier`,
+          returning code_verifier, native_callback, native_app_state, return_to`,
         [hashToken(body.state)],
       );
-      const codeVerifier = stateResult.rows[0]?.code_verifier;
+      const stateRow = stateResult.rows[0];
+      const codeVerifier = stateRow?.code_verifier;
       if (!codeVerifier) throw new Error('oidc_login_state_invalid');
       const claims = await (options.oidcExchange ?? exchangeOidcCode)({
         code: body.code,
@@ -130,7 +148,12 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
       });
       const session = await createUserSession(pool, claims);
       res.setHeader('set-cookie', [sessionCookie(session.token, options), clearOidcStateCookie(options), clearLegacyRootSessionCookie(options)]);
-      res.status(201).json(session);
+      res.status(201).json({
+        ...session,
+        nativeCallback: stateRow.native_callback,
+        ...(stateRow.native_app_state ? { nativeAppState: stateRow.native_app_state } : {}),
+        ...(stateRow.return_to ? { returnTo: stateRow.return_to } : {}),
+      });
     } catch (error) {
       next(error);
     }

@@ -262,11 +262,22 @@ textarea {
 }
 
 .unavailable-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid #e7c3bd;
   padding: 10px 20px;
   color: #8b1e12;
   background: #fff0ed;
   font-size: 13px;
+}
+
+.unavailable-banner a {
+  flex: 0 0 auto;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
 }
 
 .preview-pane,

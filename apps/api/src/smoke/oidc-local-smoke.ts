@@ -28,6 +28,9 @@ interface LocalSessionRecord {
 interface LocalOidcStateRecord {
   state_hash: string;
   code_verifier: string;
+  native_callback: boolean;
+  native_app_state: string | null;
+  return_to: string | null;
   expires_at: string;
   used_at: string | null;
 }
@@ -163,6 +166,9 @@ function createLocalGate6Pool(): { pool: DbPool; state: { users: LocalUserRecord
       oidcStates.push({
         state_hash: String(params?.[0]),
         code_verifier: String(params?.[1]),
+        native_callback: params?.[2] === true,
+        native_app_state: typeof params?.[3] === 'string' ? params[3] : null,
+        return_to: typeof params?.[4] === 'string' ? params[4] : null,
         expires_at: '2999-01-01T00:00:00.000Z',
         used_at: null,
       });
@@ -173,7 +179,12 @@ function createLocalGate6Pool(): { pool: DbPool; state: { users: LocalUserRecord
       const state = oidcStates.find((candidate) => candidate.state_hash === params?.[0] && !candidate.used_at);
       if (!state) return { rows: [], rowCount: 0 };
       state.used_at = '2026-05-22T00:00:00.000Z';
-      return { rows: [{ code_verifier: state.code_verifier } as Row], rowCount: 1 };
+      return { rows: [{
+        code_verifier: state.code_verifier,
+        native_callback: state.native_callback,
+        native_app_state: state.native_app_state,
+        return_to: state.return_to,
+      } as Row], rowCount: 1 };
     }
 
     if (sql.includes('insert into users')) {
@@ -199,6 +210,15 @@ function createLocalGate6Pool(): { pool: DbPool; state: { users: LocalUserRecord
         user.email = String(params?.[0]);
         user.display_name = String(params?.[1]);
       }
+      return { rows: [{ id: user.id, email: user.email, display_name: user.display_name } as Row], rowCount: 1 };
+    }
+
+    if (sql.includes('update users') && sql.includes("auth_provider = 'manual-alpha'")) {
+      const user = users.find((candidate) => candidate.email === params?.[0] && candidate.auth_provider === 'manual-alpha');
+      if (!user) return { rows: [], rowCount: 0 };
+      user.display_name = String(params?.[1]);
+      user.auth_provider = String(params?.[2]);
+      user.auth_subject = String(params?.[3]);
       return { rows: [{ id: user.id, email: user.email, display_name: user.display_name } as Row], rowCount: 1 };
     }
 
@@ -391,6 +411,7 @@ function requireOk(response: Response, label: string): void {
 
 function redactedNativeCallbackUrl(input: {
   rawToken: string;
+  appState: string;
   apiBaseUrl: string;
   webBaseUrl: string;
   userId: string;
@@ -404,6 +425,7 @@ function redactedNativeCallbackUrl(input: {
   callbackUrl.searchParams.set('userId', input.userId);
   callbackUrl.searchParams.set('email', input.email);
   callbackUrl.searchParams.set('displayName', input.displayName);
+  callbackUrl.searchParams.set('appState', input.appState);
   if (!input.rawToken.startsWith('ml_user_')) throw new Error('unexpected_user_token_shape');
   return callbackUrl.toString();
 }
@@ -435,6 +457,8 @@ export async function runLocalOidcSmoke(): Promise<OidcLocalSmokeResult> {
 
     const start = await fetchJson<{ authorizationUrl: string }>(`${apiBaseUrl}/api/auth/oidc/start`, {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ native: true, appState: 'native_state_native_state_native_state_1' }),
     });
     requireOk(start.response, 'oidc_start');
     const state = new URL(start.body.authorizationUrl).searchParams.get('state');
@@ -455,6 +479,8 @@ export async function runLocalOidcSmoke(): Promise<OidcLocalSmokeResult> {
     const callback = await fetchJson<{
       user: { userId: string; email: string; displayName: string };
       token: string;
+      nativeCallback: boolean;
+      nativeAppState?: string;
     }>(`${apiBaseUrl}/api/auth/oidc/callback`, {
       method: 'POST',
       headers: {
@@ -465,6 +491,8 @@ export async function runLocalOidcSmoke(): Promise<OidcLocalSmokeResult> {
     });
     requireOk(callback.response, 'oidc_callback');
     if (!callback.body.token.startsWith('ml_user_')) throw new Error('missing_user_session_token');
+    if (callback.body.nativeCallback !== true) throw new Error('missing_native_callback_intent');
+    if (callback.body.nativeAppState !== 'native_state_native_state_native_state_1') throw new Error('missing_native_app_state');
     if (callback.body.user.email !== mockUser.email || callback.body.user.displayName !== mockUser.name) {
       throw new Error('unexpected_user_identity');
     }
@@ -521,6 +549,7 @@ export async function runLocalOidcSmoke(): Promise<OidcLocalSmokeResult> {
       workspace: created.body.workspace,
       nativeCallbackUrl: redactedNativeCallbackUrl({
         rawToken: callback.body.token,
+        appState: callback.body.nativeAppState,
         apiBaseUrl,
         webBaseUrl,
         userId: callback.body.user.userId,

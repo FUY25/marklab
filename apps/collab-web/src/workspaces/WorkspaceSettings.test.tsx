@@ -114,6 +114,19 @@ describe('WorkspaceSettings', () => {
     expect((await screen.findByRole('status')).textContent).toContain('forbidden');
   });
 
+  it('shows a Google sign-in path when the workspace session expires', async () => {
+    const client = createClient({
+      listMembers: vi.fn(async () => {
+        throw new Error('unauthorized');
+      }),
+    });
+
+    render(<WorkspaceSettings workspaceId="ws_1" client={client} />);
+
+    expect((await screen.findByRole('status')).textContent).toContain('Session expired');
+    expect(screen.getByRole('link', { name: 'Continue with Google' }).getAttribute('href')).toBe('/signin?returnTo=%2Fworkspaces%2Fws_1%2Fsettings');
+  });
+
   it('reverts a role dropdown when the server rejects a member role update', async () => {
     const client = createClient({
       updateMemberRole: vi.fn(async () => {
