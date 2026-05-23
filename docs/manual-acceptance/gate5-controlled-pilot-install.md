@@ -94,5 +94,5 @@ Not claimed by this gate:
 - Developer ID signed and notarized distribution.
 - No-warning Finder double-click install for ordinary public users.
 - Completed live Google/OIDC first-run login/onboarding acceptance; this remains Gate 6 until an interactive native callback/workspace smoke passes.
-- Paid/public distribution or auto-update semantics.
+- Paid/public distribution or auto-update semantics; signed distribution and update pipeline are deferred to Gate 10.5.
 - A separate physical Mac or separate macOS account pass. Run that before expanding beyond the supported technical pilot audience.

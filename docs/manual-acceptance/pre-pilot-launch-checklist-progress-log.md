@@ -27,9 +27,11 @@ Current product path under test:
 
 Do not invite external pilot users until Gates 0-8, including Gate 2.5, are either `Passed` or explicitly marked `Deferred` with a reason and owner.
 
-Do not enable paid billing until Gate 11 is `Passed`.
+Do not enable paid billing until Gates 10.5 and 11 are `Passed`.
 
 Do not publish website/video broadly until Gates 0-10 are `Passed` or the website/video clearly labels the product as private pilot. Gate 9.5 is allowed to remain deferred for private pilot, but must be completed before broader beta or public launch.
+
+Do not launch paid or broader public distribution until Gate 10.5 proves the app can be installed and updated through an accepted signed/notarized or explicitly bounded beta channel.
 
 ## Gate Summary
 
@@ -48,7 +50,8 @@ Do not publish website/video broadly until Gates 0-10 are `Passed` or the websit
 | 9 | Small external pilot | Not started | TBD | |
 | 9.5 | Post-pilot active-code simplification | Deferred | TBD | Wait for real pilot findings. |
 | 10 | Brand, website, and video | Not started | TBD | |
-| 11 | Paid billing and pricing launch | Deferred | TBD | Not required for small free pilot. |
+| 10.5 | Signed distribution and update pipeline | Deferred | TBD | Not required for the small controlled pilot. Required before broader beta/public or paid launch; covers Developer ID signing/notarization, release artifacts, manual update instructions, and later auto-update/appcast. |
+| 11 | Paid billing and pricing launch | Deferred | TBD | Not required for small free pilot. Must wait for Gate 4 unit economics and Gate 10.5 distribution/update readiness. |
 
 ## Gate 0 - Release Candidate Freeze
 
@@ -711,6 +714,49 @@ Exit criteria:
 
 - Website/video match the real pilot flow and do not promise features still deferred.
 
+## Gate 10.5 - Signed Distribution And Update Pipeline
+
+Goal: make app distribution and updates reliable enough for broader beta/public or paid users.
+
+Timing:
+
+- Deferred for the small controlled pilot.
+- Start after Gate 9 pilot evidence and after Gate 9.5 simplification decisions, unless pilot support pain makes manual updates a blocker earlier.
+- Must pass before public/no-warning distribution, broader beta, or paid launch.
+
+Checklist:
+
+- [ ] Decide update channel:
+  - [ ] manual versioned zip replacement for alpha;
+  - [ ] Sparkle appcast or equivalent in-app updater;
+  - [ ] Homebrew cask as an optional install channel.
+- [ ] Implement Developer ID signing.
+- [ ] Implement notarization.
+- [ ] Produce versioned release artifacts with checksum and release notes.
+- [ ] Verify old app to new app update preserves:
+  - [ ] local files;
+  - [ ] stored owner account;
+  - [ ] workspace selection;
+  - [ ] shared document bindings;
+  - [ ] app support files;
+  - [ ] browser links and cloud copies.
+- [ ] Verify rollback/downgrade instructions.
+- [ ] Document manual alpha update instructions until auto-update is implemented.
+- [ ] Confirm docs do not imply auto-update during the small controlled pilot.
+
+Progress log:
+
+| Date | Update | Evidence | Next |
+| --- | --- | --- | --- |
+| 2026-05-23 | Gate added by product decision. App update pipeline is not part of Gate 6 and is not required before the controlled small pilot manual test. Gate 5 remains clean install only and explicitly does not claim paid/public distribution or auto-update semantics. | User decision; [`gate5-controlled-pilot-install.md`](./gate5-controlled-pilot-install.md) limitations. | Keep small pilot on manual replace-app updates; revisit after Gate 9 evidence before broader beta/public or paid launch. |
+
+Exit criteria:
+
+- A non-technical user can install/update without disabling Gatekeeper globally, or the beta limitation is explicitly accepted and bounded.
+- Release artifacts are signed/notarized, or unsigned/ad-hoc distribution is limited to a named beta audience with written workaround instructions.
+- Update/replace preserves account, workspace, local files, and shared-document bindings.
+- Rollback instructions are tested.
+
 ## Gate 11 - Paid Billing And Pricing Launch
 
 Goal: enable billing only after measured unit economics prove prices will not lose money.
@@ -718,6 +764,7 @@ Goal: enable billing only after measured unit economics prove prices will not lo
 Checklist:
 
 - [ ] Use Gate 4 data to set no-loss floor.
+- [ ] Pass Gate 10.5 distribution/update readiness before taking paid users.
 - [ ] Decide initial packaging:
   - [ ] free trial;
   - [ ] personal/pro;
@@ -742,11 +789,13 @@ Progress log:
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Deferred for small free pilot. Pricing requires measured usage first. | Gate 4 pending. | Do not implement paid billing yet. |
+| 2026-05-23 | Paid launch also depends on the new Gate 10.5 distribution/update pipeline. The small controlled pilot can proceed without auto-update, but paid users should not depend on ad-hoc unsigned app replacement. | Gate 10.5 added above. | Keep Stripe/paid flows disabled until real usage, support cost, and distribution/update evidence exist. |
 
 Exit criteria:
 
 - Paid plans are backed by real usage data and tested billing flows.
 - No-loss floor and target margin are documented.
+- Paid users have an accepted app installation/update path from Gate 10.5.
 
 ## Global Progress Log
 
@@ -792,8 +841,9 @@ Use this table for cross-gate updates.
 | Dead code scope | Delete now vs archive only vs keep temporarily | TBD | Gate 2.5 | Decided: delete only confirmed unreferenced tracked files; keep active compatibility paths temporarily. |
 | Pilot P2 timing | Fix before pilot vs defer | TBD | Gate 2.5 | Decided: fix small/testable P2 items before Gate 3 when product direction is clear. P2-003 and P2-004 fixed. P2-002 cursor re-anchor latency remains deferred for the small pilot. |
 | Active simplification timing | Before pilot only for blockers vs after pilot evidence | TBD | Gate 9.5 | Deferred |
+| App update pipeline | Manual zip replacement vs Sparkle/appcast vs Homebrew channel | TBD | Gate 10.5 | Deferred for the small controlled pilot; required before broader beta/public or paid launch. |
 | Pilot size | 3-10 users vs 10-50 users | TBD | Gate 9 | Open |
-| Paid launch timing | After small pilot vs after broader beta | TBD | Gate 11 | Deferred |
+| Paid launch timing | After small pilot vs after broader beta | TBD | Gate 11 | Deferred until Gate 4 bill/support evidence and Gate 10.5 distribution/update readiness. |
 
 ## Next Action
 
