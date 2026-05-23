@@ -5,6 +5,7 @@ import {
   type CollabSessionRequest,
   type ViewCollabSession,
 } from '@marklab/collab-editor';
+import { BrandLockup } from '../BrandLockup';
 import { renderMarkdownSnapshot } from './markdown-render';
 
 export interface ReadOnlyMarkdownSessionClient {
@@ -70,10 +71,7 @@ export function ReadOnlyMarkdownView({
   return (
     <main className="view-shell">
       <header className="collab-topbar">
-        <div>
-          <h1>MarkLab</h1>
-          <p>View session</p>
-        </div>
+        <BrandLockup title="MarkLab" subtitle="View session" />
         {state.kind === 'ready' ? (
           <span className="connection-pill connected">View only</span>
         ) : null}

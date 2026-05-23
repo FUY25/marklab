@@ -38,6 +38,7 @@ import {
   persistEditSession,
   type PersistedEditSession,
 } from '../api/edit-session-storage';
+import { BrandLockup } from '../BrandLockup';
 import { createMarkLabYjsProvider, type MarkLabYjsProvider } from '../provider/yjs-provider';
 import { renderMarkdownSnapshot } from './markdown-render';
 import {
@@ -505,10 +506,7 @@ export function CollaborativeMarkdownEditor({
     <main className={`collab-shell${usesMarkEditNativeShell ? ' markedit-native-shell' : ''}`}>
       {!usesMarkEditNativeShell ? (
         <header className="collab-topbar">
-          <div>
-            <h1>MarkLab</h1>
-            <p>Edit session</p>
-          </div>
+          <BrandLockup title="MarkLab" subtitle="Edit session" />
           <span className={`connection-pill ${connectionState}`}>{connectionLabel(connectionState)}</span>
         </header>
       ) : null}

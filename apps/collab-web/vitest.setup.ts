@@ -1,3 +1,5 @@
+import { beforeEach } from 'vitest';
+
 // Vitest setup: install a working `localStorage` / `sessionStorage` shim
 // inside the jsdom environment, but only when the broken-state signature
 // is detected. This file is loaded by both the root and the per-package
@@ -16,13 +18,28 @@
 
 function isBrokenStorage(value: unknown): boolean {
   if (!value || typeof value !== 'object') return true;
+  const storage = value as Partial<Storage>;
+  if (
+    typeof storage.getItem !== 'function' ||
+    typeof storage.setItem !== 'function' ||
+    typeof storage.removeItem !== 'function' ||
+    typeof storage.clear !== 'function'
+  ) {
+    return true;
+  }
   // Working Storage instances inherit from Storage.prototype.
   return Object.getPrototypeOf(value) === null;
 }
 
+function storageConstructorOrNull(): typeof Storage | null {
+  if (typeof window !== 'undefined' && typeof window.Storage !== 'undefined') return window.Storage;
+  const globalStorage = (globalThis as { Storage?: typeof Storage }).Storage;
+  return typeof globalStorage === 'undefined' ? null : globalStorage;
+}
+
 function shouldInstallShim(): boolean {
   if (typeof window === 'undefined') return false;
-  if (typeof (globalThis as { Storage?: unknown }).Storage === 'undefined') return false;
+  if (!storageConstructorOrNull()) return false;
   try {
     return isBrokenStorage(window.localStorage) || isBrokenStorage(window.sessionStorage);
   } catch {
@@ -30,7 +47,12 @@ function shouldInstallShim(): boolean {
   }
 }
 
-if (shouldInstallShim()) {
+function installStorageShim(): void {
+  if (!shouldInstallShim()) return;
+
+  const StorageConstructor = storageConstructorOrNull();
+  if (!StorageConstructor) return;
+
   const STORAGE_BACKING = new WeakMap<object, Map<string, string>>();
 
   const backingStore = (instance: object): Map<string, string> => {
@@ -53,7 +75,7 @@ if (shouldInstallShim()) {
     }
   };
 
-  tryDefine(Storage.prototype, 'getItem', {
+  tryDefine(StorageConstructor.prototype, 'getItem', {
     configurable: true,
     writable: true,
     value: function getItem(this: Storage, key: string): string | null {
@@ -61,35 +83,35 @@ if (shouldInstallShim()) {
       return store.has(String(key)) ? store.get(String(key))! : null;
     },
   });
-  tryDefine(Storage.prototype, 'setItem', {
+  tryDefine(StorageConstructor.prototype, 'setItem', {
     configurable: true,
     writable: true,
     value: function setItem(this: Storage, key: string, value: string): void {
       backingStore(this).set(String(key), String(value));
     },
   });
-  tryDefine(Storage.prototype, 'removeItem', {
+  tryDefine(StorageConstructor.prototype, 'removeItem', {
     configurable: true,
     writable: true,
     value: function removeItem(this: Storage, key: string): void {
       backingStore(this).delete(String(key));
     },
   });
-  tryDefine(Storage.prototype, 'clear', {
+  tryDefine(StorageConstructor.prototype, 'clear', {
     configurable: true,
     writable: true,
     value: function clear(this: Storage): void {
       backingStore(this).clear();
     },
   });
-  tryDefine(Storage.prototype, 'key', {
+  tryDefine(StorageConstructor.prototype, 'key', {
     configurable: true,
     writable: true,
     value: function key(this: Storage, index: number): string | null {
       return Array.from(backingStore(this).keys())[index] ?? null;
     },
   });
-  tryDefine(Storage.prototype, 'length', {
+  tryDefine(StorageConstructor.prototype, 'length', {
     configurable: true,
     get(this: Storage) {
       return backingStore(this).size;
@@ -97,15 +119,28 @@ if (shouldInstallShim()) {
   });
 
   const installWindowStorage = (propName: 'localStorage' | 'sessionStorage'): void => {
-    const instance = Object.create(Storage.prototype) as Storage;
+    const instance = Object.create(StorageConstructor.prototype) as Storage;
     tryDefine(window, propName, {
       configurable: true,
       get() {
         return instance;
       },
     });
+    if (globalThis !== window) {
+      tryDefine(globalThis, propName, {
+        configurable: true,
+        get() {
+          return instance;
+        },
+      });
+    }
   };
 
   installWindowStorage('localStorage');
   installWindowStorage('sessionStorage');
 }
+
+installStorageShim();
+beforeEach(() => {
+  installStorageShim();
+});

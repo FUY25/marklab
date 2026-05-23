@@ -7,6 +7,7 @@ const appPath = resolve(process.argv[2] ?? 'dist/MarkLab.app');
 const executable = resolve(appPath, 'Contents/MacOS/MarkLabApp');
 const infoPlist = resolve(appPath, 'Contents/Info.plist');
 const resourceBundle = resolve(appPath, 'Contents/Resources/MarkLabMacOS_MarkLabApp.bundle');
+const appIcon = resolve(appPath, 'Contents/Resources/MarkLab.icns');
 
 function fail(message) {
   console.error(message);
@@ -38,11 +39,13 @@ function signingModeFor(signature) {
 if (!existsSync(appPath)) fail(`missing app bundle: ${appPath}`);
 if (!existsSync(executable)) fail(`missing executable: ${executable}`);
 if (!existsSync(infoPlist)) fail(`missing Info.plist: ${infoPlist}`);
+if (!existsSync(appIcon)) fail(`missing app icon: ${appIcon}`);
 if (!existsSync(resolve(resourceBundle, 'index.html'))) fail('missing bundled editor index.html');
 if (!existsSync(resolve(resourceBundle, 'local-editor.js'))) fail('missing bundled editor local-editor.js');
 
 if (plistValue('CFBundleIdentifier') !== 'com.marklab.app') fail('unexpected CFBundleIdentifier');
 if (plistValue('CFBundleExecutable') !== 'MarkLabApp') fail('unexpected CFBundleExecutable');
+if (plistValue('CFBundleIconFile') !== 'MarkLab') fail('unexpected CFBundleIconFile');
 const scheme = plistValue('CFBundleURLTypes:0:CFBundleURLSchemes:0');
 if (scheme !== 'marklab') fail('marklab:// URL scheme is not registered');
 
@@ -75,6 +78,8 @@ const distributionReady = developerIdSigned && gatekeeper.status === 0 && notari
 
 const fileType = execFileSync('file', [executable], { encoding: 'utf8' }).trim();
 if (!fileType.includes('Mach-O')) fail(`unexpected executable type: ${fileType}`);
+const iconType = execFileSync('file', [appIcon], { encoding: 'utf8' }).trim();
+if (!iconType.includes('Mac OS X icon')) fail(`unexpected app icon type: ${iconType}`);
 
 console.log(JSON.stringify({
   ok: true,
@@ -82,6 +87,7 @@ console.log(JSON.stringify({
   bundleIdentifier: plistValue('CFBundleIdentifier'),
   urlScheme: scheme,
   executable,
+  icon: appIcon,
   codeSignaturePresent: true,
   signingMode: signingModeFor(signature),
   signature,

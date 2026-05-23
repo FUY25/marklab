@@ -59,7 +59,7 @@ describe('ReadOnlyMarkdownView', () => {
     expect(screen.getByRole('columnheader', { name: 'A' })).toBeTruthy();
     expect(screen.getByRole('cell', { name: '2' })).toBeTruthy();
     expect(screen.getByText('Image: diagram')).toBeTruthy();
-    expect(document.querySelector('img')).toBeNull();
+    expect(document.querySelector('.markdown-rendered-view img')).toBeNull();
     expect(document.querySelector('script')).toBeNull();
     expect(client.createSession).toHaveBeenCalledWith({
       docId: 'doc_1',

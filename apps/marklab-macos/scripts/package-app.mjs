@@ -55,14 +55,17 @@ const binPath = execFileSync('swift', ['build', '--configuration', configuration
 }).trim();
 const executable = resolve(binPath, 'MarkLabApp');
 const resourceBundle = resolve(binPath, 'MarkLabMacOS_MarkLabApp.bundle');
+const appIcon = resolve(packageRoot, 'Assets/MarkLabIcon.icns');
 if (!existsSync(executable)) throw new Error(`missing built executable: ${executable}`);
 if (!existsSync(resourceBundle)) throw new Error(`missing built resource bundle: ${resourceBundle}`);
+if (!existsSync(appIcon)) throw new Error(`missing app icon: ${appIcon}`);
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(resolve(output, 'Contents/MacOS'), { recursive: true });
 mkdirSync(resolve(output, 'Contents/Resources'), { recursive: true });
 cpSync(executable, resolve(output, 'Contents/MacOS/MarkLabApp'));
 cpSync(resourceBundle, resolve(output, 'Contents/Resources/MarkLabMacOS_MarkLabApp.bundle'), { recursive: true });
+cpSync(appIcon, resolve(output, 'Contents/Resources/MarkLab.icns'));
 
 const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -79,6 +82,8 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleName</key>
   <string>MarkLab</string>
   <key>CFBundleDisplayName</key>
+  <string>MarkLab</string>
+  <key>CFBundleIconFile</key>
   <string>MarkLab</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
@@ -115,6 +120,7 @@ console.log(JSON.stringify({
   app: output,
   executable: resolve(output, 'Contents/MacOS/MarkLabApp'),
   resourceBundle: resolve(output, 'Contents/Resources/MarkLabMacOS_MarkLabApp.bundle'),
+  icon: resolve(output, 'Contents/Resources/MarkLab.icns'),
   codeSignaturePresent: sign,
   signingMode: sign ? 'ad-hoc' : 'none',
   signingIdentity: sign ? '-' : null,

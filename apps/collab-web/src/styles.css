@@ -147,14 +147,34 @@ textarea {
   margin: 0;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgb(27 31 35 / 18%));
+}
+
 .collab-topbar h1 {
   font-size: 18px;
   font-weight: 650;
+  line-height: 1.2;
 }
 
 .collab-topbar p {
   color: #626960;
   font-size: 13px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .connection-pill {

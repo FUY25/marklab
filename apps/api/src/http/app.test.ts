@@ -63,6 +63,9 @@ async function createWebDist(label = 'MarkLab', asset = 'asset') {
   const distDir = await mkdtemp(join(tmpdir(), 'marklab-web-dist-'));
   await writeFile(join(distDir, 'index.html'), `<!doctype html><div id="root">${label}</div>`, 'utf8');
   await writeFile(join(distDir, 'asset.txt'), asset, 'utf8');
+  await writeFile(join(distDir, 'favicon.png'), 'fake png', 'utf8');
+  await writeFile(join(distDir, 'marklab-logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'utf8');
+  await writeFile(join(distDir, 'site.webmanifest'), '{"name":"MarkLab"}', 'utf8');
   return distDir;
 }
 
@@ -74,6 +77,13 @@ describe('http app hosted web serving', () => {
     });
 
     await expect(request(app).get('/collab-web/asset.txt').expect(200)).resolves.toMatchObject({ text: 'collab asset' });
+    const favicon = await request(app).get('/collab-web/favicon.png').expect(200);
+    expect(favicon.headers['content-type']).toContain('image/png');
+    expect(Buffer.isBuffer(favicon.body) ? favicon.body.toString() : favicon.text).toBe('fake png');
+    const logo = await request(app).get('/collab-web/marklab-logo.svg').expect(200);
+    expect(logo.headers['content-type']).toContain('image/svg+xml');
+    expect(Buffer.isBuffer(logo.body) ? logo.body.toString() : logo.text).toBe('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    await expect(request(app).get('/collab-web/site.webmanifest').expect(200)).resolves.toMatchObject({ text: '{"name":"MarkLab"}' });
     await expect(request(app).get('/collab?mode=edit&docId=doc_1&branchId=main').expect(200)).resolves.toMatchObject({
       text: expect.stringContaining('Collab Web'),
     });

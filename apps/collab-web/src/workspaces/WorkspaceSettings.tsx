@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { BrandLockup } from '../BrandLockup';
 import {
   createWorkspaceSettingsClient,
   type WorkspaceDocument,
@@ -114,10 +115,7 @@ export function WorkspaceSettings({ workspaceId, client: injectedClient }: Works
   return (
     <main className="settings-shell">
       <header className="collab-topbar">
-        <div>
-          <h1>Workspace Settings</h1>
-          <p>{workspaceId}</p>
-        </div>
+        <BrandLockup title="Workspace Settings" subtitle={workspaceId} />
       </header>
       <nav className="settings-tabs" aria-label="Workspace settings">
         <button
