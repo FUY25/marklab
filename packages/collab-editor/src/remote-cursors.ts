@@ -249,8 +249,8 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
   '.cm-marklab-remote-caret-label': {
     position: 'absolute',
     bottom: 'calc(100% + 3px)',
-    left: '0',
-    transform: 'translate(-4px, 2px)',
+    left: '-4px',
+    display: 'none',
     padding: '2px 6px',
     borderRadius: '4px',
     backgroundColor: 'inherit',
@@ -264,12 +264,9 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     boxShadow: '0 1px 3px rgba(15, 23, 42, 0.18)',
-    opacity: '0',
-    transition: 'opacity 120ms ease, transform 120ms ease',
   },
   '.cm-marklab-remote-caret-label-visible .cm-marklab-remote-caret-label': {
-    opacity: '1',
-    transform: 'translate(-4px, 0)',
+    display: 'inline-block',
   },
   '&.cm-marklab-remote-cursor-overlay-host': {
     position: 'relative',
