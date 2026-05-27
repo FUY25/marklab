@@ -45,6 +45,9 @@ interface RemoteCursorOptions {
   meta?: ReadonlyMap<number, AwarenessClientMeta> | undefined;
 }
 
+type RemoteCursorLabelMode = 'transient' | 'always';
+type RemoteCursorLabelRenderer = 'inline' | 'overlay';
+
 function awarenessRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -163,6 +166,7 @@ class RemoteCaretWidget extends WidgetType {
     private readonly name: string,
     private readonly showLabel: boolean,
     private readonly positionSignature: string,
+    private readonly renderInlineLabel: boolean,
   ) {
     super();
   }
@@ -177,10 +181,12 @@ class RemoteCaretWidget extends WidgetType {
     dot.className = 'cm-marklab-remote-caret-dot';
     caret.append(dot);
 
-    const label = view.dom.ownerDocument.createElement('span');
-    label.className = 'cm-marklab-remote-caret-label';
-    label.textContent = this.name;
-    caret.append(label);
+    if (this.renderInlineLabel) {
+      const label = view.dom.ownerDocument.createElement('span');
+      label.className = 'cm-marklab-remote-caret-label';
+      label.textContent = this.name;
+      caret.append(label);
+    }
 
     return caret;
   }
@@ -189,7 +195,8 @@ class RemoteCaretWidget extends WidgetType {
     return this.color === other.color
       && this.name === other.name
       && this.showLabel === other.showLabel
-      && this.positionSignature === other.positionSignature;
+      && this.positionSignature === other.positionSignature
+      && this.renderInlineLabel === other.renderInlineLabel;
   }
 
   ignoreEvent(): boolean {
@@ -252,12 +259,39 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
     opacity: '1',
     transform: 'translate(-4px, 0)',
   },
+  '&.cm-marklab-remote-cursor-overlay-host': {
+    position: 'relative',
+  },
+  '.cm-marklab-remote-cursor-label-layer': {
+    position: 'absolute',
+    inset: '0',
+    overflow: 'visible',
+    pointerEvents: 'none',
+    zIndex: '30',
+    contain: 'layout style',
+  },
+  '.cm-marklab-remote-cursor-label-overlay': {
+    position: 'absolute',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    color: '#ffffff',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    fontSize: '11px',
+    lineHeight: '14px',
+    whiteSpace: 'nowrap',
+    pointerEvents: 'none',
+    maxWidth: '120px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.18)',
+  },
 });
 
 function selectionRangesForRemoteCursor(
   view: EditorView,
   cursor: ResolvedRemoteCursorSelection,
   showLabel: boolean,
+  renderInlineLabel = true,
 ): Range<Decoration>[] {
   const docLength = view.state.doc.length;
   if (cursor.anchor > docLength || cursor.head > docLength) return [];
@@ -298,6 +332,7 @@ function selectionRangesForRemoteCursor(
       cursor.name,
       showLabel,
       [cursor.clientId, cursor.anchor, cursor.head].join('|'),
+      renderInlineLabel,
     ),
   }).range(cursor.head));
 
@@ -308,12 +343,14 @@ function buildRemoteCursorDecorationSet(
   view: EditorView,
   cursors: ResolvedRemoteCursorSelection[],
   isLabelVisible: ((cursor: ResolvedRemoteCursorSelection) => boolean) | undefined,
+  renderInlineLabel = true,
 ): DecorationSet {
   const ranges = cursors
     .flatMap((cursor) => selectionRangesForRemoteCursor(
       view,
       cursor,
-      isLabelVisible?.(cursor) ?? true,
+      renderInlineLabel && (isLabelVisible?.(cursor) ?? true),
+      renderInlineLabel,
     ))
     .sort((left, right) => left.from - right.from || left.to - right.to);
   return Decoration.set(ranges, true);
@@ -343,8 +380,12 @@ export function createRemoteCursorExtension(input: {
   awareness: Awareness;
   ytext: Y.Text;
   localClientId: number;
+  labelMode?: RemoteCursorLabelMode;
+  labelRenderer?: RemoteCursorLabelRenderer;
 }): Extension {
   const remoteCursorRefresh = Annotation.define<boolean>();
+  const labelMode = input.labelMode ?? 'transient';
+  const labelRenderer = input.labelRenderer ?? 'inline';
   const cursorSignature = (cursor: ResolvedRemoteCursorSelection): string => [
     cursor.anchor,
     cursor.head,
@@ -363,6 +404,7 @@ export function createRemoteCursorExtension(input: {
       private readonly cursorSignatures = new Map<number, string>();
       private readonly labelVisibleUntil = new Map<string, number>();
       private labelTimer: ReturnType<typeof setTimeout> | null = null;
+      private overlayLabelLayer: HTMLElement | null = null;
       private destroyed = false;
 
       constructor(private readonly view: EditorView) {
@@ -400,6 +442,7 @@ export function createRemoteCursorExtension(input: {
           clearTimeout(this.labelTimer);
           this.labelTimer = null;
         }
+        this.removeOverlayLabelLayer();
         input.awareness.off('change', this.onAwarenessChange);
       }
 
@@ -447,13 +490,67 @@ export function createRemoteCursorExtension(input: {
 
       private buildDecorations(view: EditorView): DecorationSet {
         const visibleLabelIdentityKeys = this.visibleLabelIdentityKeys();
+        const isLabelVisible = (cursor: ResolvedRemoteCursorSelection) => (
+          labelMode === 'always' || visibleLabelIdentityKeys.has(participantIdentityKey(cursor))
+        );
+        const cursors = this.resolveCursors();
         const decorations = buildRemoteCursorDecorationSet(
           view,
-          this.resolveCursors(),
-          (cursor) => visibleLabelIdentityKeys.has(participantIdentityKey(cursor)),
+          cursors,
+          isLabelVisible,
+          labelRenderer === 'inline',
         );
+        if (labelRenderer === 'overlay') {
+          this.syncOverlayLabels(view, cursors, isLabelVisible);
+        } else {
+          this.removeOverlayLabelLayer();
+        }
         this.scheduleLabelExpiry();
         return decorations;
+      }
+
+      private ensureOverlayLabelLayer(view: EditorView): HTMLElement {
+        if (this.overlayLabelLayer?.isConnected) return this.overlayLabelLayer;
+        view.dom.classList.add('cm-marklab-remote-cursor-overlay-host');
+        const layer = view.dom.ownerDocument.createElement('div');
+        layer.className = 'cm-marklab-remote-cursor-label-layer';
+        view.dom.append(layer);
+        this.overlayLabelLayer = layer;
+        return layer;
+      }
+
+      private removeOverlayLabelLayer(): void {
+        this.overlayLabelLayer?.remove();
+        this.overlayLabelLayer = null;
+        this.view?.dom.classList.remove('cm-marklab-remote-cursor-overlay-host');
+      }
+
+      private syncOverlayLabels(
+        view: EditorView,
+        cursors: ResolvedRemoteCursorSelection[],
+        isLabelVisible: (cursor: ResolvedRemoteCursorSelection) => boolean,
+      ): void {
+        const visibleCursors = cursors.filter(isLabelVisible);
+        if (visibleCursors.length === 0) {
+          if (this.overlayLabelLayer) this.overlayLabelLayer.replaceChildren();
+          return;
+        }
+
+        const layer = this.ensureOverlayLabelLayer(view);
+        const editorRect = view.dom.getBoundingClientRect();
+        const labels = visibleCursors.flatMap((cursor) => {
+          const side = cursor.head >= cursor.anchor ? -1 : 1;
+          const coords = view.coordsAtPos(cursor.head, side) ?? view.coordsAtPos(cursor.head);
+          if (!coords) return [];
+          const label = view.dom.ownerDocument.createElement('div');
+          label.className = 'cm-marklab-remote-cursor-label-overlay';
+          label.textContent = cursor.name;
+          label.style.backgroundColor = cursor.color;
+          label.style.left = `${Math.round(coords.left - editorRect.left - 4)}px`;
+          label.style.top = `${Math.round(coords.top - editorRect.top - 21)}px`;
+          return [label];
+        });
+        layer.replaceChildren(...labels);
       }
 
       private scheduleLabelExpiry(): void {

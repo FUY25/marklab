@@ -23,6 +23,7 @@ export interface NativeCursorDebugEntry {
   resolvedCursors?: unknown[];
   collaboratorSummaries?: unknown[];
   domCarets?: unknown[];
+  overlayLabels?: unknown[];
   localSelection?: unknown;
   details?: Record<string, unknown>;
 }

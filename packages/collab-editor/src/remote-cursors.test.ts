@@ -344,6 +344,79 @@ describe('remote cursor rendering', () => {
     }
   });
 
+  it('can render persistent remote cursor labels in an overlay layer', () => {
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({
+          awareness: localAwareness,
+          ytext,
+          localClientId: localDoc.clientID,
+          labelMode: 'always',
+          labelRenderer: 'overlay',
+        }),
+      ]);
+      vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 500,
+        bottom: 500,
+        width: 500,
+        height: 500,
+        toJSON: () => ({}),
+      });
+      vi.spyOn(view, 'coordsAtPos').mockReturnValue({
+        left: 120,
+        right: 122,
+        top: 80,
+        bottom: 99,
+      });
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(view.dom.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
+      const labels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
+      expect(labels).toHaveLength(1);
+      expect(labels[0]?.textContent).toBe('Remote');
+      expect((labels[0] as HTMLElement | undefined)?.style.left).toBe('116px');
+
+      vi.mocked(view.coordsAtPos).mockReturnValue({
+        left: 180,
+        right: 182,
+        top: 120,
+        bottom: 139,
+      });
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 11, head: 11 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      const movedLabels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
+      expect(movedLabels).toHaveLength(1);
+      expect((movedLabels[0] as HTMLElement | undefined)?.style.left).toBe('176px');
+    } finally {
+      localAwareness.destroy();
+      remoteAwareness.destroy();
+      localDoc.destroy();
+      remoteDoc.destroy();
+    }
+  });
+
   it('does not render a source-pane caret or pill for collaborators with no cursor', () => {
     const localDoc = new Y.Doc();
     const ytext = localDoc.getText('contents');

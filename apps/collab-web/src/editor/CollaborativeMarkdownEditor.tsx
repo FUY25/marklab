@@ -457,6 +457,18 @@ export function CollaborativeMarkdownEditor({
               height: Math.round(rect.height),
             };
           });
+          const overlayLabels = [...view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay')].map((node, index) => {
+            const element = node as HTMLElement;
+            const rect = element.getBoundingClientRect();
+            return {
+              index,
+              text: element.textContent ?? '',
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            };
+          });
           postNativeCursorDebug({
             event,
             at: new Date().toISOString(),
@@ -467,6 +479,7 @@ export function CollaborativeMarkdownEditor({
             resolvedCursors,
             collaboratorSummaries,
             domCarets,
+            overlayLabels,
             localSelection,
             details,
           });
@@ -509,7 +522,13 @@ export function CollaborativeMarkdownEditor({
               if ((unavailable || !nativeEditable) && transaction.docChanged && !transaction.annotation(ySyncAnnotation)) return [];
               return transaction;
             }),
-            createRemoteCursorExtension({ awareness, ytext, localClientId: ydoc.clientID }),
+            createRemoteCursorExtension({
+              awareness,
+              ytext,
+              localClientId: ydoc.clientID,
+              labelMode: nativeShell === 'markedit' ? 'always' : 'transient',
+              labelRenderer: nativeShell === 'markedit' ? 'overlay' : 'inline',
+            }),
             EditorView.updateListener.of((update) => {
               const hasLocalDocChange = update.transactions.some((transaction) => (
                 transaction.docChanged && !transaction.annotation(ySyncAnnotation)
