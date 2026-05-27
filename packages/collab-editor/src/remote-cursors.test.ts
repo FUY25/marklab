@@ -162,7 +162,7 @@ describe('remote cursor rendering', () => {
     }]);
   });
 
-  it('suppresses a stale same-name cursor when the fresher session has no cursor', () => {
+  it('keeps a same-name cursor visible when a fresher duplicate session has no cursor', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, 'Hello world');
@@ -179,7 +179,16 @@ describe('remote cursor rendering', () => {
       ]),
       1,
       { meta },
-    )).toEqual([]);
+    )).toEqual([{
+      clientId: 2,
+      name: 'Remote',
+      color: '#dc2626',
+      colorLight: '#fee2e2',
+      kind: 'human',
+      clientKind: 'browser',
+      anchor: 5,
+      head: 5,
+    }]);
   });
 
   it('keeps the freshest cursor when duplicate same-name sessions use different client kinds', () => {
@@ -293,6 +302,45 @@ describe('remote cursor rendering', () => {
       localDoc.destroy();
       remoteDoc.destroy();
       vi.useRealTimers();
+    }
+  });
+
+  it('recreates the remote caret DOM when a collaborator cursor moves', () => {
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({ awareness: localAwareness, ytext, localClientId: localDoc.clientID }),
+      ]);
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+      const firstCaret = view.dom.querySelector('.cm-marklab-remote-caret');
+      expect(firstCaret).not.toBeNull();
+
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 11, head: 11 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      const secondCaret = view.dom.querySelector('.cm-marklab-remote-caret');
+      expect(secondCaret).not.toBeNull();
+      expect(secondCaret).not.toBe(firstCaret);
+    } finally {
+      localAwareness.destroy();
+      remoteAwareness.destroy();
+      localDoc.destroy();
+      remoteDoc.destroy();
     }
   });
 

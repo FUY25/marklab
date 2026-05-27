@@ -41,11 +41,6 @@ export interface AwarenessClientMeta {
   lastUpdated: number;
 }
 
-interface RemoteParticipantCandidate extends RemoteCursorSummary {
-  anchor: number | null;
-  head: number | null;
-}
-
 interface RemoteCursorOptions {
   meta?: ReadonlyMap<number, AwarenessClientMeta> | undefined;
 }
@@ -140,13 +135,14 @@ export function resolveRemoteCursorSelections(
   localClientId: number,
   options: RemoteCursorOptions = {},
 ): ResolvedRemoteCursorSelection[] {
-  const candidates = [...states.entries()].flatMap<RemoteParticipantCandidate>(([clientId, state]) => {
+  const candidates = [...states.entries()].flatMap<ResolvedRemoteCursorSelection>(([clientId, state]) => {
     if (clientId === localClientId) return [];
     const record = awarenessRecord(state);
     if (!record) return [];
     const user = normalizeAwarenessUser(record.user);
     if (!user) return [];
     const cursor = resolveCursorAwareness(ytext, state);
+    if (!cursor) return [];
     return [{
       clientId,
       name: user.name,
@@ -154,16 +150,11 @@ export function resolveRemoteCursorSelections(
       colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
       kind: user.kind,
       ...(user.clientKind ? { clientKind: user.clientKind } : {}),
-      anchor: cursor?.anchor ?? null,
-      head: cursor?.head ?? null,
+      anchor: cursor.anchor,
+      head: cursor.head,
     }];
   });
-  return dedupeRemoteParticipants(candidates, options.meta)
-    .flatMap((candidate) => (
-      candidate.anchor === null || candidate.head === null
-        ? []
-        : [{ ...candidate, anchor: candidate.anchor, head: candidate.head }]
-    ));
+  return dedupeRemoteParticipants(candidates, options.meta);
 }
 
 class RemoteCaretWidget extends WidgetType {
@@ -171,6 +162,7 @@ class RemoteCaretWidget extends WidgetType {
     private readonly color: string,
     private readonly name: string,
     private readonly showLabel: boolean,
+    private readonly positionSignature: string,
   ) {
     super();
   }
@@ -194,7 +186,10 @@ class RemoteCaretWidget extends WidgetType {
   }
 
   eq(other: RemoteCaretWidget): boolean {
-    return this.color === other.color && this.name === other.name && this.showLabel === other.showLabel;
+    return this.color === other.color
+      && this.name === other.name
+      && this.showLabel === other.showLabel
+      && this.positionSignature === other.positionSignature;
   }
 
   ignoreEvent(): boolean {
@@ -298,7 +293,12 @@ function selectionRangesForRemoteCursor(
 
   ranges.push(Decoration.widget({
     side: cursor.head >= cursor.anchor ? -1 : 1,
-    widget: new RemoteCaretWidget(cursor.color, cursor.name, showLabel),
+    widget: new RemoteCaretWidget(
+      cursor.color,
+      cursor.name,
+      showLabel,
+      [cursor.clientId, cursor.anchor, cursor.head].join('|'),
+    ),
   }).range(cursor.head));
 
   return ranges;
