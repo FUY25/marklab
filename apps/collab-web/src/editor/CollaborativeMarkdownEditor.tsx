@@ -12,11 +12,14 @@ import {
   createCollabSessionClient,
   createCursorAwareness,
   createIndexedDbPersistenceKey,
+  normalizeAwarenessUser,
   createRemoteCursorExtension,
   createYTextCodeMirrorBinding,
   isTerminalProviderRefreshError,
   providerTokenRefreshDelayMs,
   providerTokenRefreshRetryDelayMs,
+  resolveCursorAwareness,
+  resolveRemoteCursorSelections,
   summarizeRemoteCursors,
   ySyncAnnotation,
   type ActiveEditSession,
@@ -45,6 +48,7 @@ import { renderMarkdownSnapshot } from './markdown-render';
 import {
   applyNativeDiskMarkdownToText,
   postNativeCollaborators,
+  postNativeCursorDebug,
   postNativeMarkdownSnapshot,
   postNativeSelectionStatus,
 } from './native-bridge';
@@ -205,6 +209,7 @@ export function CollaborativeMarkdownEditor({
     const providerTokenRef: { current: IssuedProviderToken | null } = { current: null };
     const activeSessionRef: { current: EditorSession | null } = { current: null };
     const storageKeyInput = { docId, branchId, token };
+    const cursorDebugEnabled = nativeShell === 'markedit';
     if (clientKind !== 'app') cleanupStalePersistedEditSessions();
 
     function reconfigureEditability() {
@@ -385,6 +390,7 @@ export function CollaborativeMarkdownEditor({
         clientKind,
       });
       awareness.setLocalStateField('user', localUser);
+      let emitCursorDebug: (event: string, details?: Record<string, unknown>) => void = () => {};
       const syncRemoteCursorSummaries = () => {
         if (!awareness) return;
         const summaries = summarizeRemoteCursors(
@@ -394,6 +400,7 @@ export function CollaborativeMarkdownEditor({
         );
         setRemoteCursors(summaries);
         postNativeCollaborators(summaries);
+        emitCursorDebug('awareness-change', { collaboratorSummaryCount: summaries.length });
       };
       awareness.on('change', syncRemoteCursorSummaries);
       syncRemoteCursorSummaries();
@@ -401,17 +408,84 @@ export function CollaborativeMarkdownEditor({
         createIndexedDbPersistenceKey(activeSession.providerDocId, activeSession.sessionId),
         ydoc,
       );
+      emitCursorDebug = (
+        event: string,
+        details: Record<string, unknown> = {},
+      ) => {
+        if (!cursorDebugEnabled || !awareness || !view) return;
+        const states = awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>;
+        const meta = awarenessClientMeta(awareness);
+        const rawStates = [...states.entries()].map(([stateClientId, state]) => {
+          const user = normalizeAwarenessUser((state as { user?: unknown }).user);
+          const cursor = resolveCursorAwareness(ytext, state);
+          const clientMeta = meta?.get(stateClientId);
+          return {
+            clientId: stateClientId,
+            isLocal: stateClientId === ydoc.clientID,
+            user,
+            hasCursorPayload: Boolean((state as { cursor?: unknown }).cursor),
+            resolvedAnchor: cursor?.anchor ?? null,
+            resolvedHead: cursor?.head ?? null,
+            meta: clientMeta ? { clock: clientMeta.clock, lastUpdated: clientMeta.lastUpdated } : null,
+          };
+        });
+        const resolvedCursors = resolveRemoteCursorSelections(
+          ytext,
+          states,
+          ydoc.clientID,
+          { meta },
+        );
+        const collaboratorSummaries = summarizeRemoteCursors(states, ydoc.clientID, { meta });
+        const localSelection = {
+          hasFocus: view.hasFocus,
+          anchor: view.state.selection.main.anchor,
+          head: view.state.selection.main.head,
+        };
+        const postSnapshot = () => {
+          if (disposed || !view) return;
+          const domCarets = [...view.dom.querySelectorAll('.cm-marklab-remote-caret')].map((node, index) => {
+            const element = node as HTMLElement;
+            const label = element.querySelector('.cm-marklab-remote-caret-label');
+            const rect = element.getBoundingClientRect();
+            return {
+              index,
+              text: label?.textContent ?? '',
+              visibleClass: element.classList.contains('cm-marklab-remote-caret-label-visible'),
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            };
+          });
+          postNativeCursorDebug({
+            event,
+            at: new Date().toISOString(),
+            localClientId: ydoc.clientID,
+            docLength: view.state.doc.length,
+            stateCount: states.size,
+            rawStates,
+            resolvedCursors,
+            collaboratorSummaries,
+            domCarets,
+            localSelection,
+            details,
+          });
+        };
+        window.requestAnimationFrame(postSnapshot);
+      };
       const publishLocalCursor = (options: { activate: boolean }) => {
         if (!awareness || !view) return;
         postNativeSelectionStatus(selectionStatus(view));
         if (!view.hasFocus) {
           hasExplicitLocalCursor = false;
           awareness.setLocalStateField('cursor', null);
+          emitCursorDebug('local-cursor-cleared', { reason: 'blur' });
           return;
         }
         if (options.activate) hasExplicitLocalCursor = true;
         if (!hasExplicitLocalCursor) {
           awareness.setLocalStateField('cursor', null);
+          emitCursorDebug('local-cursor-cleared', { reason: 'not-explicit', activate: options.activate });
           return;
         }
         const selection = view.state.selection.main;
@@ -421,6 +495,7 @@ export function CollaborativeMarkdownEditor({
           localUser,
         );
         awareness.setLocalStateField('cursor', nextAwareness.cursor);
+        emitCursorDebug('local-cursor-published', { activate: options.activate });
       };
       view = new EditorView({
         parent: editorHostRef.current,
@@ -451,6 +526,14 @@ export function CollaborativeMarkdownEditor({
               if (!update.docChanged && update.focusChanged && !update.view.hasFocus) {
                 publishLocalCursor({ activate: false });
               }
+              if (update.selectionSet || update.docChanged || update.focusChanged) {
+                emitCursorDebug('editor-update', {
+                  docChanged: update.docChanged,
+                  selectionSet: update.selectionSet,
+                  focusChanged: update.focusChanged,
+                  hasLocalDocChange,
+                });
+              }
             }),
           ],
         }),
@@ -480,6 +563,7 @@ export function CollaborativeMarkdownEditor({
       }
       const initialMarkdown = view.state.doc.toString();
       setMarkdownPreview(initialMarkdown);
+      emitCursorDebug('editor-mounted', { clientKind, nativeShell });
       if (activeSession.providerToken) {
         installProviderToken(activeSession, activeSession.providerToken, true);
       } else {

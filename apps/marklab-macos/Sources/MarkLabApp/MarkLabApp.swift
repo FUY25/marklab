@@ -302,6 +302,41 @@ struct NativeCollaboratorPresence: Identifiable, Equatable {
   }
 }
 
+enum NativeCursorDebugLog {
+  static var defaultLogURL: URL {
+    NativeAppSupportDirectory.url()
+      .appending(path: "debug", directoryHint: .isDirectory)
+      .appending(path: "cursor-debug.jsonl")
+  }
+
+  static func append(_ entry: Any, fileManager: FileManager = .default) {
+    let logURL = defaultLogURL
+    do {
+      try fileManager.createDirectory(
+        at: logURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      let payload: [String: Any] = [
+        "receivedAt": ISO8601DateFormatter().string(from: Date()),
+        "entry": entry,
+      ]
+      guard JSONSerialization.isValidJSONObject(payload) else { return }
+      var data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+      data.append(0x0A)
+      if fileManager.fileExists(atPath: logURL.path) {
+        let handle = try FileHandle(forWritingTo: logURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
+      } else {
+        try data.write(to: logURL, options: .atomic)
+      }
+    } catch {
+      print("MarkLab cursor debug log failed: \(error.localizedDescription)")
+    }
+  }
+}
+
 private final class NotificationObserverToken: @unchecked Sendable {
   private let token: NSObjectProtocol
 
@@ -2320,6 +2355,10 @@ struct HostedCollabWebView: NSViewRepresentable {
       }
       if type == "collaborators-change", let rawCollaborators = body["collaborators"] as? [[String: Any]] {
         onCollaboratorsChange(rawCollaborators.compactMap(NativeCollaboratorPresence.fromBridgePayload))
+        return
+      }
+      if type == "cursor-debug", let entry = body["entry"] {
+        NativeCursorDebugLog.append(entry)
       }
     }
 
