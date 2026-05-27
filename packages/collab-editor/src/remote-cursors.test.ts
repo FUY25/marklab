@@ -311,7 +311,7 @@ describe('remote cursor rendering', () => {
     }
   });
 
-  it('recreates the remote caret DOM when a collaborator cursor moves', () => {
+  it('moves the remote caret without recreating the widget DOM', () => {
     const localDoc = new Y.Doc();
     const ytext = localDoc.getText('contents');
     ytext.insert(0, 'Hello world');
@@ -341,7 +341,8 @@ describe('remote cursor rendering', () => {
 
       const secondCaret = view.dom.querySelector('.cm-marklab-remote-caret');
       expect(secondCaret).not.toBeNull();
-      expect(secondCaret).not.toBe(firstCaret);
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(secondCaret).toBe(firstCaret);
     } finally {
       localAwareness.destroy();
       remoteAwareness.destroy();

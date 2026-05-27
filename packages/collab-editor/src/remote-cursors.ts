@@ -165,7 +165,6 @@ class RemoteCaretWidget extends WidgetType {
     private readonly color: string,
     private readonly name: string,
     private readonly showLabel: boolean,
-    private readonly positionSignature: string,
     private readonly renderInlineLabel: boolean,
   ) {
     super();
@@ -201,8 +200,15 @@ class RemoteCaretWidget extends WidgetType {
     return this.color === other.color
       && this.name === other.name
       && this.showLabel === other.showLabel
-      && this.positionSignature === other.positionSignature
       && this.renderInlineLabel === other.renderInlineLabel;
+  }
+
+  updateDOM(): boolean {
+    return false;
+  }
+
+  get estimatedHeight(): number {
+    return -1;
   }
 
   ignoreEvent(): boolean {
@@ -364,7 +370,6 @@ function selectionRangesForRemoteCursor(
         cursor.color,
         cursor.name,
         showLabel,
-        [cursor.clientId, cursor.anchor, cursor.head].join('|'),
         renderInlineLabel,
       ),
     }).range(cursor.head));
