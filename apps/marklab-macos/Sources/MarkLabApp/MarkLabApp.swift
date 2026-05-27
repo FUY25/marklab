@@ -473,7 +473,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   var canStartSharing: Bool {
-    actionsEnabled && embeddedCollabURL == nil && !retainedCloudCopyAvailable
+    actionsEnabled && embeddedCollabURL == nil
   }
 
   var canCreateSharingLink: Bool {
@@ -625,7 +625,6 @@ final class MarkLabAppModel: ObservableObject {
       } else if sharedBinding != nil {
         clearConflictState()
         retainedCloudCopyAvailable = true
-        try? baselineStore.clearBaseline(fileURL: url)
         lastProjectedMarkdown = opened.markdownForSave()
         statusText = "Editing \(url.lastPathComponent). Cloud copy and online versions are retained."
       } else {
@@ -900,7 +899,9 @@ final class MarkLabAppModel: ObservableObject {
     currentDocument.replaceText(text)
     try currentDocument.save()
     document = currentDocument
-    try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
+    if !retainedCloudCopyAvailable {
+      try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
+    }
     statusText = "Saved \(currentDocument.fileURL.lastPathComponent)."
     return false
   }
@@ -992,7 +993,9 @@ final class MarkLabAppModel: ObservableObject {
     currentDocument.replaceText(text)
     try currentDocument.save()
     document = currentDocument
-    try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
+    if !retainedCloudCopyAvailable {
+      try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
+    }
     statusText = "Autosaved \(currentDocument.fileURL.lastPathComponent)."
     return true
   }
@@ -1021,6 +1024,14 @@ final class MarkLabAppModel: ObservableObject {
     guard let hostedShareController else { throw MarkLabNativeShareAutomationError.missingHostedShareController }
     guard let fileURL = document?.fileURL else { throw MarkLabNativeShareAutomationError.missingFile }
     try saveFile()
+    if retainedCloudCopyAvailable,
+       let binding = try? sharedDocumentBindingStore.loadBinding(fileURL: fileURL) {
+      return try resumeRetainedCloudCopyAndConnect(
+        fileURL: fileURL,
+        binding: binding,
+        hostedShareController: hostedShareController
+      )
+    }
     sessionManager.upsertSession(
       fileURL: fileURL,
       docId: "pending",
@@ -1063,6 +1074,51 @@ final class MarkLabAppModel: ObservableObject {
       sessionManager.removeSession(fileURL: fileURL)
       throw error
     }
+  }
+
+  @discardableResult
+  private func resumeRetainedCloudCopyAndConnect(
+    fileURL: URL,
+    binding: NativeSharedDocumentBinding,
+    hostedShareController: NativeHostedShareController
+  ) throws -> NativeHostedDocument {
+    let baselineMarkdown = (try? baselineStore.loadBaseline(fileURL: fileURL)?.lastProjectedMarkdown)
+      ?? lastProjectedMarkdown
+      ?? LocalMarkdownDocument.normalizeForSharedSave(text)
+    let localMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
+    hostedShareController.restoreSharedDocument(from: binding, suggestedFilename: fileURL.lastPathComponent)
+    let rawAppEditorURL = try hostedShareController.appEditorURL()
+    let appEditorURL = markEditNativeShellURLForCurrentAccount(rawAppEditorURL) ?? rawAppEditorURL
+    let resumed = NativeHostedDocument(
+      docId: binding.docId,
+      branchId: binding.branchId,
+      versionId: "",
+      hash: binding.baselineHash
+    )
+    try sharedDocumentBindingStore.saveBinding(binding.withSyncEnabled(true, appEditorURL: appEditorURL), fileURL: fileURL)
+    latestLink = nil
+    latestGrantId = nil
+    managedAccessLinks = []
+    activeCollaborators = []
+    clearVersionHistoryState()
+    retainedCloudCopyAvailable = false
+    embeddedCollabURL = appEditorURL
+    diskIngestionRevision += 1
+    pendingDiskIngestion = PendingDiskIngestion(
+      revision: diskIngestionRevision,
+      markdown: localMarkdown,
+      baselineMarkdown: baselineMarkdown,
+      conflictOnFailure: nil
+    )
+    registerSharedSession(
+      fileURL: fileURL,
+      docId: binding.docId,
+      branchId: binding.branchId,
+      status: .syncing,
+      lastSyncAt: nil
+    )
+    statusText = "Resumed sharing \(fileURL.lastPathComponent). Waiting to sync local file."
+    return resumed
   }
 
   func createLink(role: NativeLinkRole) {
@@ -1166,7 +1222,6 @@ final class MarkLabAppModel: ObservableObject {
       if let binding = try? sharedDocumentBindingStore.loadBinding(fileURL: fileURL) {
         try? sharedDocumentBindingStore.saveBinding(binding.withSyncEnabled(false), fileURL: fileURL)
       }
-      try? baselineStore.clearBaseline(fileURL: fileURL)
       sessionManager.removeSession(fileURL: fileURL)
       MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
       if let localDocument = try? LocalMarkdownDocument.open(fileURL: fileURL, shared: false) {

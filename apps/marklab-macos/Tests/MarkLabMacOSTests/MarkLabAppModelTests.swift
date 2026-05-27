@@ -1105,8 +1105,58 @@ struct MarkLabAppModelTests {
     #expect(try String(contentsOf: fileURL, encoding: .utf8) == "Shared before stop\n")
     #expect(model.retainedCloudCopyAvailable)
     #expect(try bindingStore.loadBinding(fileURL: fileURL)?.syncEnabled == false)
-    #expect(try baselineStore.loadBaseline(fileURL: fileURL) == nil)
+    #expect(try baselineStore.loadBaseline(fileURL: fileURL)?.lastProjectedMarkdown == "Shared before stop\n")
     #expect(model.statusText == "Stopped sharing joined.md. Cloud copy and online versions are retained.")
+  }
+
+  @MainActor
+  @Test("restarting sharing after stop resumes the retained cloud copy")
+  func restartSharingAfterStopResumesRetainedCloudCopy() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "resume.md")
+    try Data("Shared before stop\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_resume","branchId":"branch_main","versionId":"version_1","hash":"sha256:resume"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grants":[]}"#)
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      sessionManager: sessionManager,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    await model.stopSharingAndReturnToLocalEditing()
+    try Data("Local after stop\n".utf8).write(to: fileURL)
+    model.loadFile(fileURL)
+
+    #expect(model.retainedCloudCopyAvailable)
+    #expect(model.canStartSharing)
+    let resumed = try await model.startSharingAndConnectThrowing()
+
+    let pending = try #require(model.pendingDiskIngestion)
+    let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
+    #expect(resumed.docId == "doc_resume")
+    #expect(resumed.branchId == "branch_main")
+    #expect(model.embeddedCollabURL?.absoluteString == "https://app.example.test/collab?docId=doc_resume&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)")
+    #expect(pending.markdown == "Local after stop\n")
+    #expect(pending.baselineMarkdown == "Shared before stop\n")
+    #expect(try bindingStore.loadBinding(fileURL: fileURL)?.syncEnabled == true)
+    #expect(sessionManager.sessions.first?.status == .syncing)
+    #expect(model.statusText == "Resumed sharing resume.md. Waiting to sync local file.")
+    #expect(transport.requests.filter { $0.method == "POST" && $0.percentEncodedPath == "/api/docs/import" }.count == 1)
   }
 
   @MainActor

@@ -64,6 +64,7 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
 
   public func withSyncEnabled(
     _ enabled: Bool,
+    appEditorURL: URL? = nil,
     updatedAt: String = ISO8601DateFormatter().string(from: Date())
   ) -> NativeSharedDocumentBinding {
     NativeSharedDocumentBinding(
@@ -73,7 +74,7 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
       branchId: branchId,
       mode: mode,
       token: token,
-      appEditorURL: appEditorURL,
+      appEditorURL: appEditorURL ?? self.appEditorURL,
       localDocId: localDocId,
       baselineHash: baselineHash,
       syncEnabled: enabled,

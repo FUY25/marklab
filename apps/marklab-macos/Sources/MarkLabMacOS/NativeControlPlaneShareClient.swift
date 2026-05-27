@@ -10,6 +10,13 @@ public struct NativeHostedDocument: Decodable, Equatable, Sendable {
   public let branchId: String
   public let versionId: String
   public let hash: String
+
+  public init(docId: String, branchId: String, versionId: String, hash: String) {
+    self.docId = docId
+    self.branchId = branchId
+    self.versionId = versionId
+    self.hash = hash
+  }
 }
 
 public struct NativeHostedAccessGrant: Decodable, Equatable, Sendable {

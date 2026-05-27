@@ -154,7 +154,7 @@ struct MarkEditDocumentShellView: View {
   }
 
   private static func sharingToolbarIconName(hasSharedDocument: Bool) -> String {
-    hasSharedDocument ? "link.circle.fill" : "link"
+    "link"
   }
 
   @ObservedObject var model: MarkLabAppModel

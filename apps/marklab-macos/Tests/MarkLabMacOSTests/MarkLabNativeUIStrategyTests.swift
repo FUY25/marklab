@@ -281,7 +281,7 @@ struct MarkLabNativeUIStrategyTests {
     )
     #expect(MarkEditSharingVersionsInspectorMode.allCases.map(\.label) == ["Sharing", "Versions"])
     #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: false) == "link")
-    #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: true) == "link.circle.fill")
+    #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: true) == "link")
     #expect(!MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: false))
     #expect(MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: true))
     #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: false) == 0)
