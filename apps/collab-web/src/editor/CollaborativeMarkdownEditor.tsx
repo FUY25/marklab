@@ -443,7 +443,30 @@ export function CollaborativeMarkdownEditor({
         };
         const postSnapshot = () => {
           if (disposed || !view) return;
-          const domCarets = [...view.dom.querySelectorAll('.cm-marklab-remote-caret')].map((node, index) => {
+          const editorView = view;
+          const summarizeElement = (element: HTMLElement, index: number) => {
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return {
+              index,
+              tag: element.tagName.toLowerCase(),
+              className: element.className,
+              text: element.textContent ?? '',
+              connected: element.isConnected,
+              containedInEditor: editorView.dom.contains(element),
+              parentClassName: element.parentElement?.className ?? '',
+              display: style.display,
+              visibility: style.visibility,
+              opacity: style.opacity,
+              position: style.position,
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              html: element.outerHTML.slice(0, 240),
+            };
+          };
+          const domCarets = [...editorView.dom.querySelectorAll('.cm-marklab-remote-caret')].map((node, index) => {
             const element = node as HTMLElement;
             const label = element.querySelector('.cm-marklab-remote-caret-label');
             const rect = element.getBoundingClientRect();
@@ -457,7 +480,9 @@ export function CollaborativeMarkdownEditor({
               height: Math.round(rect.height),
             };
           });
-          const overlayLabels = [...view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay')].map((node, index) => {
+          const inlineLabels = [...editorView.dom.querySelectorAll('.cm-marklab-remote-caret-label')]
+            .map((node, index) => summarizeElement(node as HTMLElement, index));
+          const overlayLabels = [...editorView.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay')].map((node, index) => {
             const element = node as HTMLElement;
             const rect = element.getBoundingClientRect();
             return {
@@ -469,17 +494,41 @@ export function CollaborativeMarkdownEditor({
               height: Math.round(rect.height),
             };
           });
+          const bodyRemoteCarets = [...document.body.querySelectorAll('.cm-marklab-remote-caret')]
+            .map((node, index) => summarizeElement(node as HTMLElement, index));
+          const bodyRemoteLabels = [
+            ...document.body.querySelectorAll('.cm-marklab-remote-caret-label, .cm-marklab-remote-cursor-label-overlay'),
+          ].map((node, index) => summarizeElement(node as HTMLElement, index));
+          const bodyGuestElements = [...document.body.querySelectorAll('*')]
+            .filter((node): node is HTMLElement => node instanceof HTMLElement && node.textContent?.trim() === 'Guest')
+            .slice(0, 20)
+            .map((element, index) => summarizeElement(element, index));
+          const domCounts = {
+            viewRemoteCarets: editorView.dom.querySelectorAll('.cm-marklab-remote-caret').length,
+            viewInlineLabels: editorView.dom.querySelectorAll('.cm-marklab-remote-caret-label').length,
+            viewOverlayLabels: editorView.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay').length,
+            bodyRemoteCarets: document.body.querySelectorAll('.cm-marklab-remote-caret').length,
+            bodyRemoteLabels: document.body.querySelectorAll(
+              '.cm-marklab-remote-caret-label, .cm-marklab-remote-cursor-label-overlay',
+            ).length,
+            bodyGuestElements: bodyGuestElements.length,
+          };
           postNativeCursorDebug({
             event,
             at: new Date().toISOString(),
             localClientId: ydoc.clientID,
-            docLength: view.state.doc.length,
+            docLength: editorView.state.doc.length,
             stateCount: states.size,
             rawStates,
             resolvedCursors,
             collaboratorSummaries,
             domCarets,
+            inlineLabels,
             overlayLabels,
+            bodyRemoteCarets,
+            bodyRemoteLabels,
+            bodyGuestElements,
+            domCounts,
             localSelection,
             details,
           });
