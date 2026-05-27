@@ -53,6 +53,11 @@ export function evaluateStaticShellHtml(html, input) {
   if (extractStaticAssetPaths(html, input.assetPrefix).length === 0) {
     failures.push(`html.assetPrefix:${input.assetPrefix}`);
   }
+  for (const href of input.requiredHrefs ?? []) {
+    if (!html.includes(`href="${href}"`)) {
+      failures.push(`html.href:${href}`);
+    }
+  }
   return {
     ok: failures.length === 0,
     failures,
@@ -103,6 +108,11 @@ export async function runAlphaSmoke(input = {}) {
   const collabShell = evaluateStaticShellHtml(collabHtml, {
     requiredTitle: 'MarkLab Collaborator',
     assetPrefix: '/collab-web/assets/',
+    requiredHrefs: [
+      '/collab-web/favicon.png',
+      '/collab-web/apple-touch-icon.png',
+      '/collab-web/site.webmanifest',
+    ],
   });
   if (!collabShell.ok) throw new Error(`collab_route_unexpected_html:${collabShell.failures.join(',')}`);
   const collabAssets = extractStaticAssetPaths(collabHtml, '/collab-web/assets/');
@@ -115,6 +125,11 @@ export async function runAlphaSmoke(input = {}) {
   const settingsShell = evaluateStaticShellHtml(settingsHtml, {
     requiredTitle: 'MarkLab Collaborator',
     assetPrefix: '/collab-web/assets/',
+    requiredHrefs: [
+      '/collab-web/favicon.png',
+      '/collab-web/apple-touch-icon.png',
+      '/collab-web/site.webmanifest',
+    ],
   });
   if (!settingsShell.ok) throw new Error(`workspace_settings_route_unexpected_html:${settingsShell.failures.join(',')}`);
   results.push({ check: 'workspace_settings_route', ok: true });

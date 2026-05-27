@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MarkLabApp
@@ -44,6 +45,15 @@ struct MarkLabMenuBarTests {
   func rendersEmptyState() {
     let model = MarkLabMenuBarViewModel(openDocument: { _ in }, now: { Date() })
     #expect(model.emptyTitle(for: []) == "No Shared Documents")
+  }
+
+  @Test("menu bar status item uses a bundled template logo")
+  func loadsBundledTemplateLogo() {
+    #expect(MarkLabBrandAssets.statusTemplateURL() != nil)
+    let image = MarkLabBrandAssets.statusItemImage()
+    #expect(image.isTemplate)
+    #expect(image.size == NSSize(width: 18, height: 18))
+    #expect(image.accessibilityDescription == "MarkLab")
   }
 }
 

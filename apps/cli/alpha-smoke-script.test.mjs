@@ -34,6 +34,9 @@ describe('marklab alpha smoke helpers', () => {
       <html>
         <head>
           <title>MarkLab Collaborator</title>
+          <link rel="icon" href="/collab-web/favicon.png">
+          <link rel="apple-touch-icon" href="/collab-web/apple-touch-icon.png">
+          <link rel="manifest" href="/collab-web/site.webmanifest">
           <script type="module" src="/collab-web/assets/index-abc.js"></script>
           <link rel="stylesheet" href="/collab-web/assets/index-def.css">
         </head>
@@ -43,6 +46,11 @@ describe('marklab alpha smoke helpers', () => {
     expect(evaluateStaticShellHtml(collabHtml, {
       requiredTitle: 'MarkLab Collaborator',
       assetPrefix: '/collab-web/assets/',
+      requiredHrefs: [
+        '/collab-web/favicon.png',
+        '/collab-web/apple-touch-icon.png',
+        '/collab-web/site.webmanifest',
+      ],
     })).toEqual({ ok: true, failures: [] });
     expect(extractStaticAssetPaths(collabHtml, '/collab-web/assets/')).toEqual([
       '/collab-web/assets/index-abc.js',
@@ -52,12 +60,14 @@ describe('marklab alpha smoke helpers', () => {
     expect(evaluateStaticShellHtml('<div id="root"></div><script type="module" src="/assets/app.js"></script>', {
       requiredTitle: 'MarkLab Collaborator',
       assetPrefix: '/collab-web/assets/',
+      requiredHrefs: ['/collab-web/favicon.png'],
     })).toEqual({
       ok: false,
       failures: [
         'html.title:MarkLab Collaborator',
         'html.moduleAssetPrefix:/collab-web/assets/',
         'html.assetPrefix:/collab-web/assets/',
+        'html.href:/collab-web/favicon.png',
       ],
     });
 

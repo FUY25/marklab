@@ -2,6 +2,32 @@ import AppKit
 import Foundation
 import MarkLabMacOS
 
+enum MarkLabBrandAssets {
+  static let statusTemplateResourceName = "MarkLabStatusTemplate"
+
+  static func statusTemplateURL(bundle: Bundle = .module) -> URL? {
+    bundle.url(
+      forResource: statusTemplateResourceName,
+      withExtension: "png",
+      subdirectory: "Brand"
+    ) ?? bundle.url(
+      forResource: statusTemplateResourceName,
+      withExtension: "png"
+    )
+  }
+
+  static func statusItemImage(bundle: Bundle = .module) -> NSImage {
+    if let url = statusTemplateURL(bundle: bundle), let image = NSImage(contentsOf: url) {
+      image.isTemplate = true
+      image.size = NSSize(width: 18, height: 18)
+      image.accessibilityDescription = "MarkLab"
+      return image
+    }
+
+    return NSImage(systemSymbolName: "link", accessibilityDescription: "MarkLab") ?? NSImage()
+  }
+}
+
 struct MarkLabMenuBarDocumentRow: Equatable, Identifiable {
   let id: String
   let fileURL: URL
@@ -102,7 +128,7 @@ final class MarkLabMenuBarController: NSObject {
     })
     super.init()
     statusItem.button?.title = "MarkLab"
-    statusItem.button?.image = NSImage(systemSymbolName: "link", accessibilityDescription: "MarkLab")
+    statusItem.button?.image = MarkLabBrandAssets.statusItemImage()
     listenerId = sessionManager.addListener { [weak self] in
       self?.reloadMenu()
     }
