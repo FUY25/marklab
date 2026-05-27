@@ -64,6 +64,19 @@ struct MarkEditDocumentShellView: View {
   static let deleteCloudCopyConfirmationPrompt = "Type DELETE CLOUD COPY to confirm"
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
+  private static let sharingToolbarActiveBackgroundOpacity = 0.12
+
+  static func sharingToolbarIconNameForTesting(hasSharedDocument: Bool) -> String {
+    sharingToolbarIconName(hasSharedDocument: hasSharedDocument)
+  }
+
+  static func sharingToolbarUsesActiveTintForTesting(hasSharedDocument: Bool) -> Bool {
+    hasSharedDocument
+  }
+
+  static func sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: Bool) -> Double {
+    hasSharedDocument ? sharingToolbarActiveBackgroundOpacity : 0
+  }
 
   static func versionDisplayTitleForTesting(filePath: String?, createdAt: String, timeZone: TimeZone = .current) -> String {
     versionDisplayTitle(filePath: filePath, createdAt: createdAt, timeZone: timeZone)
@@ -138,6 +151,10 @@ struct MarkEditDocumentShellView: View {
 
   private static func versionMetadataLine(operation: NativeVersionOperation, versionNumber: Int) -> String {
     "\(versionOperationLabel(operation)) · #\(versionNumber)"
+  }
+
+  private static func sharingToolbarIconName(hasSharedDocument: Bool) -> String {
+    hasSharedDocument ? "link.circle.fill" : "link"
   }
 
   @ObservedObject var model: MarkLabAppModel
@@ -365,9 +382,26 @@ struct MarkEditDocumentShellView: View {
       }
       .disabled(!hasCollaborationInspectorContent)
     } label: {
-      Label(Self.sharingAndVersionsLabel, systemImage: "link")
+      collaborationToolbarLabel
     }
     .help(Self.sharingAndVersionsLabel)
+  }
+
+  private var collaborationToolbarLabel: some View {
+    Label {
+      Text(Self.sharingAndVersionsLabel)
+    } icon: {
+      Image(systemName: Self.sharingToolbarIconName(hasSharedDocument: model.hasSharedDocument))
+        .symbolRenderingMode(model.hasSharedDocument ? .hierarchical : .monochrome)
+    }
+    .foregroundStyle(model.hasSharedDocument ? Color(nsColor: .systemBlue) : Color.primary)
+    .padding(.horizontal, model.hasSharedDocument ? 6 : 0)
+    .padding(.vertical, model.hasSharedDocument ? 3 : 0)
+    .background(
+      Color(nsColor: .systemBlue)
+        .opacity(model.hasSharedDocument ? Self.sharingToolbarActiveBackgroundOpacity : 0),
+      in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+    )
   }
 
   private var localFormattingEnabled: Bool {

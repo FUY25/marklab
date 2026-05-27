@@ -6,6 +6,7 @@ import { Awareness } from 'y-protocols/awareness';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
 import {
+  awarenessClientMeta,
   createActiveEditSession,
   createAwarenessUser,
   createCollabSessionClient,
@@ -388,6 +389,7 @@ export function CollaborativeMarkdownEditor({
         const summaries = summarizeRemoteCursors(
           awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>,
           ydoc.clientID,
+          { meta: awarenessClientMeta(awareness) },
         );
         setRemoteCursors(summaries);
         postNativeCollaborators(summaries);

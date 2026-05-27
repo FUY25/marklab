@@ -280,6 +280,12 @@ struct MarkLabNativeUIStrategyTests {
         == "Cloud copy and online version history are kept after Stop Sharing."
     )
     #expect(MarkEditSharingVersionsInspectorMode.allCases.map(\.label) == ["Sharing", "Versions"])
+    #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: false) == "link")
+    #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: true) == "link.circle.fill")
+    #expect(!MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: false))
+    #expect(MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: true))
+    #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: false) == 0)
+    #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: true) == 0.12)
     #expect(
       MarkEditDocumentShellView.sharingVersionsInspectorAvailableForTesting(
         filePath: "/tmp/note.md",

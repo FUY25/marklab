@@ -13,6 +13,7 @@ import {
   resolveRemoteCursorSelections,
   safeAwarenessColor,
   summarizeRemoteCursors,
+  type AwarenessClientMeta,
 } from './remote-cursors';
 
 const remoteUser: MarkLabAwarenessUser = {
@@ -59,6 +60,27 @@ describe('remote cursor rendering', () => {
       name: 'Remote',
       color: '#dc2626',
       colorLight: '#fee2e2',
+      kind: 'human',
+      clientKind: 'browser',
+    }]);
+  });
+
+  it('collapses duplicate same-name collaborator summaries to the freshest session', () => {
+    const states = new Map([
+      [1, { user: { ...remoteUser, name: 'Local' } }],
+      [2, { user: { ...remoteUser, color: '#dc2626', colorLight: '#fee2e2' } }],
+      [3, { user: { ...remoteUser, color: '#0891b2', colorLight: '#cffafe' } }],
+    ]);
+    const meta = new Map<number, AwarenessClientMeta>([
+      [2, { clock: 8, lastUpdated: 1000 }],
+      [3, { clock: 1, lastUpdated: 2000 }],
+    ]);
+
+    expect(summarizeRemoteCursors(states, 1, { meta })).toEqual([{
+      clientId: 3,
+      name: 'Remote',
+      color: '#0891b2',
+      colorLight: '#cffafe',
       kind: 'human',
       clientKind: 'browser',
     }]);
@@ -111,6 +133,26 @@ describe('remote cursor rendering', () => {
       anchor: 13,
       head: 18,
     }]);
+  });
+
+  it('suppresses a stale same-name cursor when the fresher session has no cursor', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const meta = new Map<number, AwarenessClientMeta>([
+      [2, { clock: 8, lastUpdated: 1000 }],
+      [3, { clock: 1, lastUpdated: 2000 }],
+    ]);
+
+    expect(resolveRemoteCursorSelections(
+      ytext,
+      new Map([
+        [2, createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser)],
+        [3, { user: remoteUser }],
+      ]),
+      1,
+      { meta },
+    )).toEqual([]);
   });
 
   it('builds caret and selection decorations for remote source-pane cursors', () => {

@@ -36,9 +36,72 @@ export interface ResolvedRemoteCursorSelection extends RemoteCursorSummary {
 
 export const remoteCursorLabelVisibleMs = 1400;
 
+export interface AwarenessClientMeta {
+  clock: number;
+  lastUpdated: number;
+}
+
+interface RemoteParticipantCandidate extends RemoteCursorSummary {
+  anchor: number | null;
+  head: number | null;
+}
+
+interface RemoteCursorOptions {
+  meta?: ReadonlyMap<number, AwarenessClientMeta> | undefined;
+}
+
 function awarenessRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+export function awarenessClientMeta(input: Awareness): ReadonlyMap<number, AwarenessClientMeta> | undefined {
+  const meta = (input as unknown as { meta?: ReadonlyMap<number, AwarenessClientMeta> }).meta;
+  return meta instanceof Map ? meta : undefined;
+}
+
+function participantIdentityKey(participant: Pick<RemoteCursorSummary, 'name' | 'kind' | 'clientKind'>): string {
+  const normalizedName = participant.name.trim().toLocaleLowerCase();
+  return [
+    participant.kind,
+    participant.clientKind ?? 'unknown',
+    normalizedName || 'guest',
+  ].join('|');
+}
+
+function participantFreshnessScore(
+  clientId: number,
+  meta: ReadonlyMap<number, AwarenessClientMeta> | undefined,
+): readonly [number, number, number] {
+  const clientMeta = meta?.get(clientId);
+  return [clientMeta?.lastUpdated ?? 0, clientMeta?.clock ?? 0, clientId] as const;
+}
+
+function isFresherParticipant(
+  candidate: RemoteCursorSummary,
+  existing: RemoteCursorSummary,
+  meta: ReadonlyMap<number, AwarenessClientMeta> | undefined,
+): boolean {
+  const nextScore = participantFreshnessScore(candidate.clientId, meta);
+  const currentScore = participantFreshnessScore(existing.clientId, meta);
+  return nextScore[0] > currentScore[0]
+    || (nextScore[0] === currentScore[0] && nextScore[1] > currentScore[1])
+    || (nextScore[0] === currentScore[0] && nextScore[1] === currentScore[1] && nextScore[2] > currentScore[2]);
+}
+
+function dedupeRemoteParticipants<T extends RemoteCursorSummary>(
+  candidates: T[],
+  meta: ReadonlyMap<number, AwarenessClientMeta> | undefined,
+): T[] {
+  const byIdentity = new Map<string, T>();
+  for (const candidate of candidates) {
+    const key = participantIdentityKey(candidate);
+    const existing = byIdentity.get(key);
+    if (!existing || isFresherParticipant(candidate, existing, meta)) {
+      byIdentity.set(key, candidate);
+    }
+  }
+  return [...byIdentity.values()].sort((left, right) => left.clientId - right.clientId);
 }
 
 export function safeAwarenessColor(value: string | undefined, fallback: string): string {
@@ -48,8 +111,12 @@ export function safeAwarenessColor(value: string | undefined, fallback: string):
   return fallback;
 }
 
-export function summarizeRemoteCursors(states: ReadonlyMap<number, MarkLabAwarenessState>, localClientId: number): RemoteCursorSummary[] {
-  return [...states.entries()]
+export function summarizeRemoteCursors(
+  states: ReadonlyMap<number, MarkLabAwarenessState>,
+  localClientId: number,
+  options: RemoteCursorOptions = {},
+): RemoteCursorSummary[] {
+  const candidates = [...states.entries()]
     .flatMap(([clientId, state]) => {
       if (clientId === localClientId) return [];
       const record = awarenessRecord(state);
@@ -65,28 +132,39 @@ export function summarizeRemoteCursors(states: ReadonlyMap<number, MarkLabAwaren
         ...(user.clientKind ? { clientKind: user.clientKind } : {}),
       }];
     });
+  return dedupeRemoteParticipants(candidates, options.meta);
 }
 
 export function resolveRemoteCursorSelections(
   ytext: Y.Text,
   states: ReadonlyMap<number, MarkLabAwarenessState>,
   localClientId: number,
+  options: RemoteCursorOptions = {},
 ): ResolvedRemoteCursorSelection[] {
-  return [...states.entries()].flatMap(([clientId, state]) => {
+  const candidates = [...states.entries()].flatMap<RemoteParticipantCandidate>(([clientId, state]) => {
     if (clientId === localClientId) return [];
+    const record = awarenessRecord(state);
+    if (!record) return [];
+    const user = normalizeAwarenessUser(record.user);
+    if (!user) return [];
     const cursor = resolveCursorAwareness(ytext, state);
-    if (!cursor) return [];
     return [{
       clientId,
-      name: cursor.user.name,
-      color: safeAwarenessColor(cursor.user.color, '#2563eb'),
-      colorLight: safeAwarenessColor(cursor.user.colorLight, '#dbeafe'),
-      kind: cursor.user.kind,
-      ...(cursor.user.clientKind ? { clientKind: cursor.user.clientKind } : {}),
-      anchor: cursor.anchor,
-      head: cursor.head,
+      name: user.name,
+      color: safeAwarenessColor(user.color, '#2563eb'),
+      colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
+      kind: user.kind,
+      ...(user.clientKind ? { clientKind: user.clientKind } : {}),
+      anchor: cursor?.anchor ?? null,
+      head: cursor?.head ?? null,
     }];
   });
+  return dedupeRemoteParticipants(candidates, options.meta)
+    .flatMap((candidate) => (
+      candidate.anchor === null || candidate.head === null
+        ? []
+        : [{ ...candidate, anchor: candidate.anchor, head: candidate.head }]
+    ));
 }
 
 class RemoteCaretWidget extends WidgetType {
@@ -332,6 +410,7 @@ export function createRemoteCursorExtension(input: {
           input.ytext,
           input.awareness.getStates() as ReadonlyMap<number, MarkLabAwarenessState>,
           input.localClientId,
+          { meta: awarenessClientMeta(input.awareness) },
         );
       }
 
