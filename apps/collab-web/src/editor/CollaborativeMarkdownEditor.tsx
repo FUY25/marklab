@@ -527,7 +527,6 @@ export function CollaborativeMarkdownEditor({
               ytext,
               localClientId: ydoc.clientID,
               labelMode: nativeShell === 'markedit' ? 'always' : 'transient',
-              labelRenderer: nativeShell === 'markedit' ? 'overlay' : 'inline',
             }),
             EditorView.updateListener.of((update) => {
               const hasLocalDocChange = update.transactions.some((transaction) => (

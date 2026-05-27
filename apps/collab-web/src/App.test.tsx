@@ -3,15 +3,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
+import { createCursorAwareness, type MarkLabAwarenessUser } from '@marklab/collab-editor';
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
+import * as Y from 'yjs';
 import { App, collabClientKindFromParam, collabNativeShellFromParam } from './App';
 import { AuthCallbackPage, SignInPage } from './auth/AuthFlow';
 
 const providerMock = vi.hoisted(() => ({
-  capturedAwareness: null as {
-    clientID: number;
-    getLocalState(): { cursor?: unknown } | null;
-    on(eventName: 'update', handler: (event: { removed: number[] }) => void): void;
-  } | null,
+  capturedAwareness: null as Awareness | null,
   destroy: vi.fn(),
   off: vi.fn(),
   on: vi.fn(),
@@ -291,6 +290,50 @@ describe('App routing', () => {
     });
   });
 
+  it('renders native remote cursors through inline CodeMirror widgets', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeHostedEditSessionResponse()));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(providerMock.capturedAwareness).not.toBeNull();
+      expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
+    });
+
+    const localAwareness = providerMock.capturedAwareness!;
+    const ytext = localAwareness.doc.getText('contents');
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    const remoteUser: MarkLabAwarenessUser = {
+      id: 'session_browser',
+      name: 'Guest',
+      color: '#2563eb',
+      colorLight: '#dbeafe',
+      kind: 'human',
+      clientKind: 'browser',
+    };
+    try {
+      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 0, head: 0 }, remoteUser));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      await waitFor(() => {
+        expect(document.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      });
+      expect(document.querySelector('.cm-marklab-remote-caret-label')?.textContent).toBe('Guest');
+      expect(document.querySelector('.cm-marklab-remote-caret-label-visible')).toBeTruthy();
+      expect(document.querySelector('.cm-marklab-remote-cursor-overlay')).toBeNull();
+    } finally {
+      remoteAwareness.destroy();
+      remoteDoc.destroy();
+    }
+  });
+
   it('broadcasts local awareness removal before destroying the hosted provider', async () => {
     window.__marklabNativeApp = true;
     window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
@@ -307,7 +350,7 @@ describe('App routing', () => {
       expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
     });
     const awareness = providerMock.capturedAwareness!;
-    awareness.on('update', (event) => {
+    awareness.on('update', (event: { removed: number[] }) => {
       if (event.removed.includes(awareness.clientID)) {
         teardownOrder.push('awareness-cleared');
       }
