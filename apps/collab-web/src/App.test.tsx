@@ -7,7 +7,11 @@ import { App, collabClientKindFromParam, collabNativeShellFromParam } from './Ap
 import { AuthCallbackPage, SignInPage } from './auth/AuthFlow';
 
 const providerMock = vi.hoisted(() => ({
-  capturedAwareness: null as { clientID: number; on(eventName: 'update', handler: (event: { removed: number[] }) => void): void } | null,
+  capturedAwareness: null as {
+    clientID: number;
+    getLocalState(): { cursor?: unknown } | null;
+    on(eventName: 'update', handler: (event: { removed: number[] }) => void): void;
+  } | null,
   destroy: vi.fn(),
   off: vi.fn(),
   on: vi.fn(),
@@ -258,6 +262,32 @@ describe('App routing', () => {
           body: JSON.stringify({ mode: 'edit', clientKind: 'app', displayName: 'Alice OIDC' }),
         }),
       );
+    });
+  });
+
+  it('does not publish a source-pane cursor until the user explicitly places one', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeHostedEditSessionResponse()));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(providerMock.capturedAwareness).not.toBeNull();
+      expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
+    });
+    const awareness = providerMock.capturedAwareness!;
+    const view = (window as unknown as { __marklabEditorView?: { focus(): void; dispatch(input: { selection: { anchor: number } }): void } }).__marklabEditorView;
+    expect(view).toBeTruthy();
+    expect(awareness.getLocalState()?.cursor).toBeUndefined();
+
+    view!.focus();
+    await Promise.resolve();
+    expect(awareness.getLocalState()?.cursor).toBeUndefined();
+
+    view!.dispatch({ selection: { anchor: 0 } });
+    await waitFor(() => {
+      expect(awareness.getLocalState()?.cursor).toBeTruthy();
     });
   });
 

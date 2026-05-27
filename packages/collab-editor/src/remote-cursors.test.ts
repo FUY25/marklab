@@ -5,8 +5,9 @@ import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import { createCursorAwareness, type MarkLabAwarenessUser } from './awareness';
+import { createCursorAwareness, type MarkLabAwarenessState, type MarkLabAwarenessUser } from './awareness';
 import {
+  awarenessClientMeta,
   buildRemoteCursorDecorations,
   createRemoteCursorExtension,
   remoteCursorLabelVisibleMs,
@@ -24,6 +25,11 @@ const remoteUser: MarkLabAwarenessUser = {
   kind: 'human',
   clientKind: 'browser',
 };
+
+function remoteUserWithoutClientKind(): MarkLabAwarenessUser {
+  const { clientKind: _clientKind, ...user } = remoteUser;
+  return user;
+}
 
 let mountedViews: EditorView[] = [];
 
@@ -70,6 +76,27 @@ describe('remote cursor rendering', () => {
       [1, { user: { ...remoteUser, name: 'Local' } }],
       [2, { user: { ...remoteUser, color: '#dc2626', colorLight: '#fee2e2' } }],
       [3, { user: { ...remoteUser, color: '#0891b2', colorLight: '#cffafe' } }],
+    ]);
+    const meta = new Map<number, AwarenessClientMeta>([
+      [2, { clock: 8, lastUpdated: 1000 }],
+      [3, { clock: 1, lastUpdated: 2000 }],
+    ]);
+
+    expect(summarizeRemoteCursors(states, 1, { meta })).toEqual([{
+      clientId: 3,
+      name: 'Remote',
+      color: '#0891b2',
+      colorLight: '#cffafe',
+      kind: 'human',
+      clientKind: 'browser',
+    }]);
+  });
+
+  it('collapses duplicate same-name collaborators across client kinds', () => {
+    const currentUser: MarkLabAwarenessUser = { ...remoteUser, clientKind: 'browser', color: '#0891b2', colorLight: '#cffafe' };
+    const states = new Map<number, MarkLabAwarenessState>([
+      [2, { user: remoteUserWithoutClientKind() }],
+      [3, { user: currentUser }],
     ]);
     const meta = new Map<number, AwarenessClientMeta>([
       [2, { clock: 8, lastUpdated: 1000 }],
@@ -155,6 +182,37 @@ describe('remote cursor rendering', () => {
     )).toEqual([]);
   });
 
+  it('keeps the freshest cursor when duplicate same-name sessions use different client kinds', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const oldUser = remoteUserWithoutClientKind();
+    const currentUser: MarkLabAwarenessUser = { ...remoteUser, clientKind: 'browser' };
+    const meta = new Map<number, AwarenessClientMeta>([
+      [2, { clock: 8, lastUpdated: 1000 }],
+      [3, { clock: 1, lastUpdated: 2000 }],
+    ]);
+
+    expect(resolveRemoteCursorSelections(
+      ytext,
+      new Map([
+        [2, createCursorAwareness(ytext, { anchor: 2, head: 2 }, oldUser)],
+        [3, createCursorAwareness(ytext, { anchor: 9, head: 9 }, currentUser)],
+      ]),
+      1,
+      { meta },
+    )).toEqual([{
+      clientId: 3,
+      name: 'Remote',
+      color: '#dc2626',
+      colorLight: '#fee2e2',
+      kind: 'human',
+      clientKind: 'browser',
+      anchor: 9,
+      head: 9,
+    }]);
+  });
+
   it('builds caret and selection decorations for remote source-pane cursors', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
@@ -234,6 +292,97 @@ describe('remote cursor rendering', () => {
       remoteAwareness.destroy();
       localDoc.destroy();
       remoteDoc.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not render a source-pane caret or pill for collaborators with no cursor', () => {
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({ awareness: localAwareness, ytext, localClientId: localDoc.clientID }),
+      ]);
+
+      remoteAwareness.setLocalState({ user: remoteUser });
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelector('.cm-marklab-remote-caret')).toBeNull();
+      expect(view.dom.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
+    } finally {
+      localAwareness.destroy();
+      remoteAwareness.destroy();
+      localDoc.destroy();
+      remoteDoc.destroy();
+    }
+  });
+
+  it('renders one moving caret for duplicate same-name sessions across client kinds', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-27T12:00:00.000Z'));
+    const localDoc = new Y.Doc();
+    const ytext = localDoc.getText('contents');
+    ytext.insert(0, 'Hello world');
+    const localAwareness = new Awareness(localDoc);
+    const oldDoc = new Y.Doc();
+    const oldAwareness = new Awareness(oldDoc);
+    const currentDoc = new Y.Doc();
+    const currentAwareness = new Awareness(currentDoc);
+    try {
+      const view = createView(ytext.toString(), [
+        createRemoteCursorExtension({ awareness: localAwareness, ytext, localClientId: localDoc.clientID }),
+      ]);
+
+      oldAwareness.setLocalState(createCursorAwareness(
+        ytext,
+        { anchor: 2, head: 2 },
+        remoteUserWithoutClientKind(),
+      ));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(oldAwareness, [oldDoc.clientID]),
+        'test',
+      );
+      vi.setSystemTime(new Date('2026-05-27T12:00:01.000Z'));
+      currentAwareness.setLocalState(createCursorAwareness(
+        ytext,
+        { anchor: 8, head: 8 },
+        { ...remoteUser, clientKind: 'browser' },
+      ));
+      currentAwareness.setLocalState(createCursorAwareness(
+        ytext,
+        { anchor: 9, head: 9 },
+        { ...remoteUser, clientKind: 'browser' },
+      ));
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(currentAwareness, [currentDoc.clientID]),
+        'test',
+      );
+
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret-label-visible')).toHaveLength(1);
+      expect(resolveRemoteCursorSelections(
+        ytext,
+        localAwareness.getStates() as unknown as ReadonlyMap<number, MarkLabAwarenessState>,
+        localDoc.clientID,
+        { meta: awarenessClientMeta(localAwareness) },
+      )[0]?.head).toBe(9);
+    } finally {
+      localAwareness.destroy();
+      oldAwareness.destroy();
+      currentAwareness.destroy();
+      localDoc.destroy();
+      oldDoc.destroy();
+      currentDoc.destroy();
       vi.useRealTimers();
     }
   });

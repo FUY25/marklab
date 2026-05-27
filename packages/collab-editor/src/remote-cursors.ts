@@ -60,11 +60,10 @@ export function awarenessClientMeta(input: Awareness): ReadonlyMap<number, Aware
   return meta instanceof Map ? meta : undefined;
 }
 
-function participantIdentityKey(participant: Pick<RemoteCursorSummary, 'name' | 'kind' | 'clientKind'>): string {
+function participantIdentityKey(participant: Pick<RemoteCursorSummary, 'name' | 'kind'>): string {
   const normalizedName = participant.name.trim().toLocaleLowerCase();
   return [
     participant.kind,
-    participant.clientKind ?? 'unknown',
     normalizedName || 'guest',
   ].join('|');
 }
@@ -308,13 +307,13 @@ function selectionRangesForRemoteCursor(
 function buildRemoteCursorDecorationSet(
   view: EditorView,
   cursors: ResolvedRemoteCursorSelection[],
-  visibleLabelClientIds: ReadonlySet<number> | undefined,
+  isLabelVisible: ((cursor: ResolvedRemoteCursorSelection) => boolean) | undefined,
 ): DecorationSet {
   const ranges = cursors
     .flatMap((cursor) => selectionRangesForRemoteCursor(
       view,
       cursor,
-      visibleLabelClientIds?.has(cursor.clientId) ?? true,
+      isLabelVisible?.(cursor) ?? true,
     ))
     .sort((left, right) => left.from - right.from || left.to - right.to);
   return Decoration.set(ranges, true);
@@ -330,7 +329,7 @@ export function buildRemoteCursorDecorations(
   return buildRemoteCursorDecorationSet(
     view,
     resolveRemoteCursorSelections(ytext, states, localClientId),
-    visibleLabelClientIds,
+    visibleLabelClientIds ? (cursor) => visibleLabelClientIds.has(cursor.clientId) : undefined,
   );
 }
 
@@ -362,7 +361,7 @@ export function createRemoteCursorExtension(input: {
       decorations: DecorationSet;
       private readonly onAwarenessChange: (event: AwarenessChangeEvent) => void;
       private readonly cursorSignatures = new Map<number, string>();
-      private readonly labelVisibleUntil = new Map<number, number>();
+      private readonly labelVisibleUntil = new Map<string, number>();
       private labelTimer: ReturnType<typeof setTimeout> | null = null;
       private destroyed = false;
 
@@ -380,7 +379,6 @@ export function createRemoteCursorExtension(input: {
           if (changedClientIds.size === 0 && removedClientIds.length === 0) return;
           for (const clientId of removedClientIds) {
             this.cursorSignatures.delete(clientId);
-            this.labelVisibleUntil.delete(clientId);
           }
           this.markChangedCursorLabels(this.resolveCursors(), changedClientIds);
           this.view.dispatch({ annotations: remoteCursorRefresh.of(true) });
@@ -425,34 +423,34 @@ export function createRemoteCursorExtension(input: {
           const cursor = cursorByClientId.get(clientId);
           if (!cursor) {
             this.cursorSignatures.delete(clientId);
-            this.labelVisibleUntil.delete(clientId);
             continue;
           }
           const nextSignature = cursorSignature(cursor);
           if (this.cursorSignatures.get(clientId) === nextSignature) continue;
           this.cursorSignatures.set(clientId, nextSignature);
-          this.labelVisibleUntil.set(clientId, now + remoteCursorLabelVisibleMs);
+          this.labelVisibleUntil.set(participantIdentityKey(cursor), now + remoteCursorLabelVisibleMs);
         }
       }
 
-      private visibleLabelClientIds(): Set<number> {
+      private visibleLabelIdentityKeys(): Set<string> {
         const now = Date.now();
-        const visible = new Set<number>();
-        for (const [clientId, visibleUntil] of this.labelVisibleUntil) {
+        const visible = new Set<string>();
+        for (const [identityKey, visibleUntil] of this.labelVisibleUntil) {
           if (visibleUntil > now) {
-            visible.add(clientId);
+            visible.add(identityKey);
           } else {
-            this.labelVisibleUntil.delete(clientId);
+            this.labelVisibleUntil.delete(identityKey);
           }
         }
         return visible;
       }
 
       private buildDecorations(view: EditorView): DecorationSet {
+        const visibleLabelIdentityKeys = this.visibleLabelIdentityKeys();
         const decorations = buildRemoteCursorDecorationSet(
           view,
           this.resolveCursors(),
-          this.visibleLabelClientIds(),
+          (cursor) => visibleLabelIdentityKeys.has(participantIdentityKey(cursor)),
         );
         this.scheduleLabelExpiry();
         return decorations;

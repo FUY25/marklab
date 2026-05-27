@@ -2155,6 +2155,7 @@ struct HostedCollabWebView: NSViewRepresentable {
 
   func makeNSView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
     configuration.userContentController.addUserScript(WKUserScript(
       source: HostedCollabWebView.nativeMarkerUserScript(),
       injectionTime: .atDocumentStart,
@@ -2177,7 +2178,7 @@ struct HostedCollabWebView: NSViewRepresentable {
     context.coordinator.expectedURL = url
     context.coordinator.expectedOrigin = NativeHostedWebViewOrigin(url: url)
     if !HostedCollabWebView.sameNavigationURL(webView.url, url) {
-      webView.load(URLRequest(url: url))
+      webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
     if let diskIngestion,
        context.coordinator.lastAppliedDiskIngestionRevision != diskIngestion.revision {

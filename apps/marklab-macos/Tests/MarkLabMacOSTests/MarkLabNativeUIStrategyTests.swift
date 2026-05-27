@@ -284,8 +284,10 @@ struct MarkLabNativeUIStrategyTests {
     #expect(MarkEditDocumentShellView.sharingToolbarIconNameForTesting(hasSharedDocument: true) == "link")
     #expect(!MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: false))
     #expect(MarkEditDocumentShellView.sharingToolbarUsesActiveTintForTesting(hasSharedDocument: true))
+    #expect(MarkEditDocumentShellView.sharingToolbarIconTintForTesting(hasSharedDocument: false) == "primary")
+    #expect(MarkEditDocumentShellView.sharingToolbarIconTintForTesting(hasSharedDocument: true) == "systemBlue")
     #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: false) == 0)
-    #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: true) == 0.12)
+    #expect(MarkEditDocumentShellView.sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: true) == 0.16)
     #expect(
       MarkEditDocumentShellView.sharingVersionsInspectorAvailableForTesting(
         filePath: "/tmp/note.md",

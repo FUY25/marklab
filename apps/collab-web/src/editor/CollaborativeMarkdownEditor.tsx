@@ -195,6 +195,7 @@ export function CollaborativeMarkdownEditor({
     let persistence: IndexeddbPersistence | null = null;
     let awareness: Awareness | null = null;
     let awarenessCleared = false;
+    let hasExplicitLocalCursor = false;
     let unavailable = false;
     let nativeEditable = true;
     const ydoc = new Y.Doc();
@@ -400,10 +401,16 @@ export function CollaborativeMarkdownEditor({
         createIndexedDbPersistenceKey(activeSession.providerDocId, activeSession.sessionId),
         ydoc,
       );
-      const publishLocalCursor = () => {
+      const publishLocalCursor = (options: { activate: boolean }) => {
         if (!awareness || !view) return;
         postNativeSelectionStatus(selectionStatus(view));
         if (!view.hasFocus) {
+          hasExplicitLocalCursor = false;
+          awareness.setLocalStateField('cursor', null);
+          return;
+        }
+        if (options.activate) hasExplicitLocalCursor = true;
+        if (!hasExplicitLocalCursor) {
           awareness.setLocalStateField('cursor', null);
           return;
         }
@@ -429,15 +436,21 @@ export function CollaborativeMarkdownEditor({
             }),
             createRemoteCursorExtension({ awareness, ytext, localClientId: ydoc.clientID }),
             EditorView.updateListener.of((update) => {
+              const hasLocalDocChange = update.transactions.some((transaction) => (
+                transaction.docChanged && !transaction.annotation(ySyncAnnotation)
+              ));
               if (update.docChanged) {
                 const markdown = update.state.doc.toString();
                 setMarkdownPreview(markdown);
                 postNativeMarkdownSnapshot(markdown);
                 queueMicrotask(() => {
-                  if (!disposed) publishLocalCursor();
+                  if (!disposed) publishLocalCursor({ activate: hasLocalDocChange });
                 });
               }
-              if (!update.docChanged && (update.selectionSet || update.focusChanged)) publishLocalCursor();
+              if (!update.docChanged && update.selectionSet) publishLocalCursor({ activate: true });
+              if (!update.docChanged && update.focusChanged && !update.view.hasFocus) {
+                publishLocalCursor({ activate: false });
+              }
             }),
           ],
         }),

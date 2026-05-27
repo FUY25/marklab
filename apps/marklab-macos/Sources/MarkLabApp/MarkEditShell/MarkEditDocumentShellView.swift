@@ -64,7 +64,7 @@ struct MarkEditDocumentShellView: View {
   static let deleteCloudCopyConfirmationPrompt = "Type DELETE CLOUD COPY to confirm"
   static let cloudCopyRetentionSummary = "Cloud copy and online version history are kept after Stop Sharing."
   static let stopSharingHelpText = "Stops sync and revokes active links. Cloud copy and version history are kept."
-  private static let sharingToolbarActiveBackgroundOpacity = 0.12
+  private static let sharingToolbarActiveBackgroundOpacity = 0.16
 
   static func sharingToolbarIconNameForTesting(hasSharedDocument: Bool) -> String {
     sharingToolbarIconName(hasSharedDocument: hasSharedDocument)
@@ -76,6 +76,10 @@ struct MarkEditDocumentShellView: View {
 
   static func sharingToolbarBackgroundOpacityForTesting(hasSharedDocument: Bool) -> Double {
     hasSharedDocument ? sharingToolbarActiveBackgroundOpacity : 0
+  }
+
+  static func sharingToolbarIconTintForTesting(hasSharedDocument: Bool) -> String {
+    hasSharedDocument ? "systemBlue" : "primary"
   }
 
   static func versionDisplayTitleForTesting(filePath: String?, createdAt: String, timeZone: TimeZone = .current) -> String {
@@ -385,6 +389,7 @@ struct MarkEditDocumentShellView: View {
       collaborationToolbarLabel
     }
     .help(Self.sharingAndVersionsLabel)
+    .tint(model.hasSharedDocument ? Color(nsColor: .systemBlue) : Color.primary)
   }
 
   private var collaborationToolbarLabel: some View {
@@ -392,7 +397,9 @@ struct MarkEditDocumentShellView: View {
       Text(Self.sharingAndVersionsLabel)
     } icon: {
       Image(systemName: Self.sharingToolbarIconName(hasSharedDocument: model.hasSharedDocument))
-        .symbolRenderingMode(model.hasSharedDocument ? .hierarchical : .monochrome)
+        .renderingMode(.template)
+        .symbolRenderingMode(.monochrome)
+        .foregroundStyle(model.hasSharedDocument ? Color(nsColor: .systemBlue) : Color.primary)
     }
     .foregroundStyle(model.hasSharedDocument ? Color(nsColor: .systemBlue) : Color.primary)
     .padding(.horizontal, model.hasSharedDocument ? 6 : 0)
