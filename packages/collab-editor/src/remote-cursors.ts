@@ -177,9 +177,13 @@ class RemoteCaretWidget extends WidgetType {
     caret.style.borderColor = this.color;
     caret.style.backgroundColor = this.color;
 
+    caret.append(view.dom.ownerDocument.createTextNode('\u2060'));
+
     const dot = view.dom.ownerDocument.createElement('span');
     dot.className = 'cm-marklab-remote-caret-dot';
     caret.append(dot);
+
+    caret.append(view.dom.ownerDocument.createTextNode('\u2060'));
 
     if (this.renderInlineLabel) {
       const label = view.dom.ownerDocument.createElement('span');
@@ -187,6 +191,8 @@ class RemoteCaretWidget extends WidgetType {
       label.textContent = this.name;
       caret.append(label);
     }
+
+    caret.append(view.dom.ownerDocument.createTextNode('\u2060'));
 
     return caret;
   }
@@ -270,8 +276,33 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
     zIndex: '30',
     contain: 'layout style',
   },
+  '.cm-marklab-remote-cursor-overlay': {
+    position: 'absolute',
+    width: '0',
+    height: '1.35em',
+    pointerEvents: 'none',
+    zIndex: '30',
+  },
+  '.cm-marklab-remote-cursor-caret-overlay': {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    height: '1.35em',
+    borderLeft: '2px solid',
+    boxSizing: 'border-box',
+  },
+  '.cm-marklab-remote-cursor-dot-overlay': {
+    position: 'absolute',
+    top: '-2px',
+    left: '-4px',
+    width: '7px',
+    height: '7px',
+    borderRadius: '999px',
+  },
   '.cm-marklab-remote-cursor-label-overlay': {
     position: 'absolute',
+    top: '-21px',
+    left: '-4px',
     padding: '2px 6px',
     borderRadius: '4px',
     color: '#ffffff',
@@ -291,6 +322,7 @@ function selectionRangesForRemoteCursor(
   view: EditorView,
   cursor: ResolvedRemoteCursorSelection,
   showLabel: boolean,
+  renderInlineCaret = true,
   renderInlineLabel = true,
 ): Range<Decoration>[] {
   const docLength = view.state.doc.length;
@@ -325,16 +357,18 @@ function selectionRangesForRemoteCursor(
     }
   }
 
-  ranges.push(Decoration.widget({
-    side: cursor.head >= cursor.anchor ? -1 : 1,
-    widget: new RemoteCaretWidget(
-      cursor.color,
-      cursor.name,
-      showLabel,
-      [cursor.clientId, cursor.anchor, cursor.head].join('|'),
-      renderInlineLabel,
-    ),
-  }).range(cursor.head));
+  if (renderInlineCaret) {
+    ranges.push(Decoration.widget({
+      side: cursor.head >= cursor.anchor ? -1 : 1,
+      widget: new RemoteCaretWidget(
+        cursor.color,
+        cursor.name,
+        showLabel,
+        [cursor.clientId, cursor.anchor, cursor.head].join('|'),
+        renderInlineLabel,
+      ),
+    }).range(cursor.head));
+  }
 
   return ranges;
 }
@@ -343,6 +377,7 @@ function buildRemoteCursorDecorationSet(
   view: EditorView,
   cursors: ResolvedRemoteCursorSelection[],
   isLabelVisible: ((cursor: ResolvedRemoteCursorSelection) => boolean) | undefined,
+  renderInlineCaret = true,
   renderInlineLabel = true,
 ): DecorationSet {
   const ranges = cursors
@@ -350,6 +385,7 @@ function buildRemoteCursorDecorationSet(
       view,
       cursor,
       renderInlineLabel && (isLabelVisible?.(cursor) ?? true),
+      renderInlineCaret,
       renderInlineLabel,
     ))
     .sort((left, right) => left.from - right.from || left.to - right.to);
@@ -405,6 +441,8 @@ export function createRemoteCursorExtension(input: {
       private readonly labelVisibleUntil = new Map<string, number>();
       private labelTimer: ReturnType<typeof setTimeout> | null = null;
       private overlayLabelLayer: HTMLElement | null = null;
+      private overlayRenderTimer: ReturnType<typeof setTimeout> | null = null;
+      private pendingOverlayCursors: ResolvedRemoteCursorSelection[] = [];
       private destroyed = false;
 
       constructor(private readonly view: EditorView) {
@@ -442,6 +480,7 @@ export function createRemoteCursorExtension(input: {
           clearTimeout(this.labelTimer);
           this.labelTimer = null;
         }
+        this.cancelOverlayRender();
         this.removeOverlayLabelLayer();
         input.awareness.off('change', this.onAwarenessChange);
       }
@@ -494,15 +533,18 @@ export function createRemoteCursorExtension(input: {
           labelMode === 'always' || visibleLabelIdentityKeys.has(participantIdentityKey(cursor))
         );
         const cursors = this.resolveCursors();
+        const renderOverlay = labelRenderer === 'overlay';
         const decorations = buildRemoteCursorDecorationSet(
           view,
           cursors,
           isLabelVisible,
+          !renderOverlay,
           labelRenderer === 'inline',
         );
-        if (labelRenderer === 'overlay') {
-          this.syncOverlayLabels(view, cursors, isLabelVisible);
+        if (renderOverlay) {
+          this.scheduleOverlayCursors(cursors, isLabelVisible);
         } else {
+          this.cancelOverlayRender();
           this.removeOverlayLabelLayer();
         }
         this.scheduleLabelExpiry();
@@ -525,32 +567,68 @@ export function createRemoteCursorExtension(input: {
         this.view?.dom.classList.remove('cm-marklab-remote-cursor-overlay-host');
       }
 
-      private syncOverlayLabels(
-        view: EditorView,
+      private scheduleOverlayCursors(
         cursors: ResolvedRemoteCursorSelection[],
         isLabelVisible: (cursor: ResolvedRemoteCursorSelection) => boolean,
       ): void {
-        const visibleCursors = cursors.filter(isLabelVisible);
+        this.pendingOverlayCursors = cursors
+          .filter(isLabelVisible)
+          .map((cursor) => ({ ...cursor }));
+        if (this.overlayRenderTimer !== null) return;
+
+        this.overlayRenderTimer = setTimeout(() => {
+          this.overlayRenderTimer = null;
+          if (this.destroyed) return;
+          this.renderOverlayCursors(this.pendingOverlayCursors);
+        }, 0);
+      }
+
+      private cancelOverlayRender(): void {
+        if (this.overlayRenderTimer === null) return;
+        clearTimeout(this.overlayRenderTimer);
+        this.overlayRenderTimer = null;
+      }
+
+      private renderOverlayCursors(visibleCursors: ResolvedRemoteCursorSelection[]): void {
         if (visibleCursors.length === 0) {
           if (this.overlayLabelLayer) this.overlayLabelLayer.replaceChildren();
           return;
         }
 
-        const layer = this.ensureOverlayLabelLayer(view);
-        const editorRect = view.dom.getBoundingClientRect();
-        const labels = visibleCursors.flatMap((cursor) => {
+        const layer = this.ensureOverlayLabelLayer(this.view);
+        const editorRect = this.view.dom.getBoundingClientRect();
+        const markers = visibleCursors.flatMap((cursor) => {
+          if (cursor.head > this.view.state.doc.length) return [];
           const side = cursor.head >= cursor.anchor ? -1 : 1;
-          const coords = view.coordsAtPos(cursor.head, side) ?? view.coordsAtPos(cursor.head);
+          const coords = this.view.coordsAtPos(cursor.head, side) ?? this.view.coordsAtPos(cursor.head);
           if (!coords) return [];
-          const label = view.dom.ownerDocument.createElement('div');
+
+          const marker = this.view.dom.ownerDocument.createElement('div');
+          marker.className = 'cm-marklab-remote-cursor-overlay';
+          marker.dataset.clientId = String(cursor.clientId);
+          marker.style.left = `${Math.round(coords.left - editorRect.left)}px`;
+          marker.style.top = `${Math.round(coords.top - editorRect.top)}px`;
+
+          const caret = this.view.dom.ownerDocument.createElement('span');
+          caret.className = 'cm-marklab-remote-cursor-caret-overlay';
+          caret.style.borderColor = cursor.color;
+
+          const dot = this.view.dom.ownerDocument.createElement('span');
+          dot.className = 'cm-marklab-remote-cursor-dot-overlay';
+          dot.style.backgroundColor = cursor.color;
+
+          const label = this.view.dom.ownerDocument.createElement('span');
           label.className = 'cm-marklab-remote-cursor-label-overlay';
           label.textContent = cursor.name;
           label.style.backgroundColor = cursor.color;
-          label.style.left = `${Math.round(coords.left - editorRect.left - 4)}px`;
-          label.style.top = `${Math.round(coords.top - editorRect.top - 21)}px`;
-          return [label];
+
+          marker.append(caret, dot, label);
+          return [marker];
         });
-        layer.replaceChildren(...labels);
+
+        if (markers.length > 0 || layer.childElementCount === 0) {
+          layer.replaceChildren(...markers);
+        }
       }
 
       private scheduleLabelExpiry(): void {

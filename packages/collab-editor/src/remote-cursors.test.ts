@@ -48,6 +48,12 @@ function createView(doc: string, extensions: Extension[] = []): EditorView {
   return view;
 }
 
+function nextOverlayRender(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(), 0);
+  });
+}
+
 describe('remote cursor rendering', () => {
   it('sanitizes client-supplied awareness colors before using them as CSS', () => {
     expect(safeAwarenessColor('#2563eb', '#000000')).toBe('#2563eb');
@@ -344,7 +350,7 @@ describe('remote cursor rendering', () => {
     }
   });
 
-  it('can render persistent remote cursor labels in an overlay layer', () => {
+  it('can render persistent remote cursor labels in an overlay layer', async () => {
     const localDoc = new Y.Doc();
     const ytext = localDoc.getText('contents');
     ytext.insert(0, 'Hello world');
@@ -386,12 +392,18 @@ describe('remote cursor rendering', () => {
         'test',
       );
 
-      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(view.coordsAtPos).not.toHaveBeenCalled();
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(0);
       expect(view.dom.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
+      await nextOverlayRender();
+
+      const markers = view.dom.querySelectorAll('.cm-marklab-remote-cursor-overlay');
+      expect(markers).toHaveLength(1);
+      expect((markers[0] as HTMLElement | undefined)?.style.left).toBe('120px');
       const labels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
       expect(labels).toHaveLength(1);
       expect(labels[0]?.textContent).toBe('Remote');
-      expect((labels[0] as HTMLElement | undefined)?.style.left).toBe('116px');
+      expect(view.dom.querySelectorAll('.cm-marklab-remote-cursor-caret-overlay')).toHaveLength(1);
 
       vi.mocked(view.coordsAtPos).mockReturnValue({
         left: 180,
@@ -406,9 +418,11 @@ describe('remote cursor rendering', () => {
         'test',
       );
 
+      await nextOverlayRender();
       const movedLabels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
       expect(movedLabels).toHaveLength(1);
-      expect((movedLabels[0] as HTMLElement | undefined)?.style.left).toBe('176px');
+      const movedMarkers = view.dom.querySelectorAll('.cm-marklab-remote-cursor-overlay');
+      expect((movedMarkers[0] as HTMLElement | undefined)?.style.left).toBe('180px');
     } finally {
       localAwareness.destroy();
       remoteAwareness.destroy();

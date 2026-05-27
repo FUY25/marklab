@@ -16,6 +16,15 @@ import { beforeEach } from 'vitest';
 // and provide WeakMap-backed methods on `Storage.prototype` that work
 // even when called on a plain instance.
 
+function tryDefineProperty(target: object, prop: string, descriptor: PropertyDescriptor): void {
+  try {
+    Object.defineProperty(target, prop, descriptor);
+  } catch {
+    // Host-provided DOM shims may expose non-configurable properties.
+    // When that happens, leave the existing implementation in place.
+  }
+}
+
 function isBrokenStorage(value: unknown): boolean {
   if (!value || typeof value !== 'object') return true;
   const storage = value as Partial<Storage>;
@@ -64,18 +73,7 @@ function installStorageShim(): void {
     return store;
   };
 
-  const tryDefine = (target: object, prop: string, descriptor: PropertyDescriptor): void => {
-    try {
-      Object.defineProperty(target, prop, descriptor);
-    } catch {
-      // Some host environments (Node 22 built-in Storage) mark members as
-      // non-configurable. Leave them as-is; the per-instance methods we
-      // install will still take precedence because `window.localStorage`
-      // gets replaced wholesale below.
-    }
-  };
-
-  tryDefine(StorageConstructor.prototype, 'getItem', {
+  tryDefineProperty(StorageConstructor.prototype, 'getItem', {
     configurable: true,
     writable: true,
     value: function getItem(this: Storage, key: string): string | null {
@@ -83,35 +81,35 @@ function installStorageShim(): void {
       return store.has(String(key)) ? store.get(String(key))! : null;
     },
   });
-  tryDefine(StorageConstructor.prototype, 'setItem', {
+  tryDefineProperty(StorageConstructor.prototype, 'setItem', {
     configurable: true,
     writable: true,
     value: function setItem(this: Storage, key: string, value: string): void {
       backingStore(this).set(String(key), String(value));
     },
   });
-  tryDefine(StorageConstructor.prototype, 'removeItem', {
+  tryDefineProperty(StorageConstructor.prototype, 'removeItem', {
     configurable: true,
     writable: true,
     value: function removeItem(this: Storage, key: string): void {
       backingStore(this).delete(String(key));
     },
   });
-  tryDefine(StorageConstructor.prototype, 'clear', {
+  tryDefineProperty(StorageConstructor.prototype, 'clear', {
     configurable: true,
     writable: true,
     value: function clear(this: Storage): void {
       backingStore(this).clear();
     },
   });
-  tryDefine(StorageConstructor.prototype, 'key', {
+  tryDefineProperty(StorageConstructor.prototype, 'key', {
     configurable: true,
     writable: true,
     value: function key(this: Storage, index: number): string | null {
       return Array.from(backingStore(this).keys())[index] ?? null;
     },
   });
-  tryDefine(StorageConstructor.prototype, 'length', {
+  tryDefineProperty(StorageConstructor.prototype, 'length', {
     configurable: true,
     get(this: Storage) {
       return backingStore(this).size;
@@ -120,14 +118,14 @@ function installStorageShim(): void {
 
   const installWindowStorage = (propName: 'localStorage' | 'sessionStorage'): void => {
     const instance = Object.create(StorageConstructor.prototype) as Storage;
-    tryDefine(window, propName, {
+    tryDefineProperty(window, propName, {
       configurable: true,
       get() {
         return instance;
       },
     });
     if (globalThis !== window) {
-      tryDefine(globalThis, propName, {
+      tryDefineProperty(globalThis, propName, {
         configurable: true,
         get() {
           return instance;
@@ -140,7 +138,44 @@ function installStorageShim(): void {
   installWindowStorage('sessionStorage');
 }
 
+function installRangeGeometryShim(): void {
+  if (typeof window === 'undefined') return;
+
+  const RangeConstructor = window.Range
+    ?? (globalThis as { Range?: typeof Range }).Range;
+  if (!RangeConstructor) return;
+
+  const prototype = RangeConstructor.prototype as Range & {
+    getClientRects?: () => DOMRectList;
+    getBoundingClientRect?: () => DOMRect;
+  };
+  if (typeof prototype.getClientRects !== 'function') {
+    tryDefineProperty(prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [] as unknown as DOMRectList,
+    });
+  }
+  if (typeof prototype.getBoundingClientRect !== 'function') {
+    tryDefineProperty(prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      }) as DOMRect,
+    });
+  }
+}
+
 installStorageShim();
+installRangeGeometryShim();
 beforeEach(() => {
   installStorageShim();
+  installRangeGeometryShim();
 });
