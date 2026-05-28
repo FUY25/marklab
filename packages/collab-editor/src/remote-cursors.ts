@@ -46,7 +46,7 @@ interface RemoteCursorOptions {
 }
 
 type RemoteCursorLabelMode = 'transient' | 'always';
-type RemoteCursorLabelRenderer = 'inline' | 'overlay';
+type RemoteCursorLabelRenderer = 'inline' | 'overlay' | 'none';
 
 function awarenessRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
