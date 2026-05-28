@@ -187,16 +187,16 @@ async function requireGrantManagementAccess(
     `select d.owner_id,
             d.workspace_id,
             m.role as member_role
-	       from documents d
-	       left join document_branches b
-	         on b.doc_id = d.id
-	        and b.id = $2
-	        and b.is_archived = false
+       from documents d
+       left join document_branches b
+         on b.doc_id = d.id
+        and b.id = $2::uuid
+        and b.is_archived = false
        left join workspace_members m
          on m.workspace_id = d.workspace_id
         and m.user_id = $3
-	      where d.id = $1
-	        and ($2 is null or b.id is not null)`,
+      where d.id = $1
+        and ($2::uuid is null or b.id is not null)`,
     [docId, branchId, user.userId],
   );
   const row = result.rows[0];
@@ -289,7 +289,7 @@ async function closeRuntimeAccessForRevokedTarget(
        left join document_branch_states s
          on s.branch_id = b.id
       where b.doc_id = $1
-        and ($2 is null or b.id = $2)
+        and ($2::uuid is null or b.id = $2::uuid)
         and b.is_archived = false`,
     [target.docId, target.branchId],
   );
@@ -304,7 +304,7 @@ async function closeRuntimeAccessForRevokedTarget(
               expires_at = least(coalesce(expires_at, now()), now()),
               last_seen_at = now()
         where doc_id = $1
-          and ($2 is null or branch_id = $2)
+          and ($2::uuid is null or branch_id = $2::uuid)
           and actor_grant_id = $3
           and status = 'active'`,
       [target.docId, target.branchId, target.grantId],
@@ -314,7 +314,7 @@ async function closeRuntimeAccessForRevokedTarget(
           set status = 'revoked',
               provider_error = $4
         where doc_id = $1
-          and ($2 is null or branch_id = $2)
+          and ($2::uuid is null or branch_id = $2::uuid)
           and actor_grant_id = $3
           and status in ('pending', 'issued')`,
       [target.docId, target.branchId, target.grantId, target.providerError],
@@ -326,7 +326,7 @@ async function closeRuntimeAccessForRevokedTarget(
               expires_at = least(coalesce(expires_at, now()), now()),
               last_seen_at = now()
         where doc_id = $1
-          and ($2 is null or branch_id = $2)
+          and ($2::uuid is null or branch_id = $2::uuid)
           and actor_type = 'agent'
           and actor_id = 'agent:' || $3
           and status = 'active'`,
@@ -337,7 +337,7 @@ async function closeRuntimeAccessForRevokedTarget(
           set status = 'revoked',
               provider_error = $4
         where doc_id = $1
-          and ($2 is null or branch_id = $2)
+          and ($2::uuid is null or branch_id = $2::uuid)
           and actor_type = 'agent'
           and actor_id = 'agent:' || $3
           and status in ('pending', 'issued')`,

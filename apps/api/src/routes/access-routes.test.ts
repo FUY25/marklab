@@ -84,6 +84,10 @@ function createAccessRoutePool() {
   ): Promise<DbQueryResult<Row>> => {
 	    queries.push(params === undefined ? { sql } : { sql, params });
 
+	    if (/\(\$[0-9]+ is null or/u.test(sql)) {
+	      throw new Error('postgres_nullable_parameter_requires_explicit_type');
+	    }
+
 	    if (sql.includes('update user_sessions') && sql.includes('from users')) {
 	      const tokenHash = String(params?.[0]);
 	      if (tokenHash === hashToken('owner-token')) {
