@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const appPath = resolve(process.argv[2] ?? 'dist/MarkLab.app');
 const executable = resolve(appPath, 'Contents/MacOS/MarkLabApp');
@@ -34,6 +35,33 @@ function signingModeFor(signature) {
   if (signature === 'adhoc') return 'ad-hoc';
   if (signature) return 'certificate';
   return 'unknown';
+}
+
+function hasAlpha(imagePath) {
+  const result = spawnSync('sips', ['-g', 'hasAlpha', imagePath], {
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) fail(`failed to inspect icon alpha: ${combinedOutput(result)}`);
+  return /\bhasAlpha:\s+yes\b/u.test(result.stdout);
+}
+
+function verifyIconAlpha(iconPath) {
+  const tempDir = mkdtempSync(join(tmpdir(), 'marklab-icon-'));
+  const iconsetDir = resolve(tempDir, 'MarkLab.iconset');
+  try {
+    const result = spawnSync('iconutil', ['-c', 'iconset', iconPath, '-o', iconsetDir], {
+      encoding: 'utf8',
+    });
+    if (result.status !== 0) fail(`failed to inspect app iconset: ${combinedOutput(result)}`);
+    const iconFiles = readdirSync(iconsetDir).filter((file) => file.endsWith('.png'));
+    if (iconFiles.length === 0) fail('app iconset has no PNG representations');
+    for (const iconFile of iconFiles) {
+      const iconPng = resolve(iconsetDir, iconFile);
+      if (!hasAlpha(iconPng)) fail(`app icon representation is missing alpha: ${iconFile}`);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 if (!existsSync(appPath)) fail(`missing app bundle: ${appPath}`);
@@ -80,6 +108,7 @@ const fileType = execFileSync('file', [executable], { encoding: 'utf8' }).trim()
 if (!fileType.includes('Mach-O')) fail(`unexpected executable type: ${fileType}`);
 const iconType = execFileSync('file', [appIcon], { encoding: 'utf8' }).trim();
 if (!iconType.includes('Mac OS X icon')) fail(`unexpected app icon type: ${iconType}`);
+verifyIconAlpha(appIcon);
 
 console.log(JSON.stringify({
   ok: true,
@@ -89,6 +118,7 @@ console.log(JSON.stringify({
   executable,
   icon: appIcon,
   codeSignaturePresent: true,
+  iconAlphaVerified: true,
   signingMode: signingModeFor(signature),
   signature,
   teamIdentifier,
