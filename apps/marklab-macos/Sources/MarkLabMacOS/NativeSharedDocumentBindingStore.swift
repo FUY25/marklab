@@ -145,6 +145,7 @@ public struct NativeSharedDocumentBinding: Codable, Equatable, Sendable {
 
 public protocol NativeSharedDocumentBindingStore: AnyObject {
   func loadBinding(fileURL: URL) throws -> NativeSharedDocumentBinding?
+  func loadAllBindings() throws -> [NativeSharedDocumentBinding]
   func saveBinding(_ binding: NativeSharedDocumentBinding, fileURL: URL) throws
   func clearBinding(fileURL: URL) throws
 }
@@ -156,6 +157,10 @@ public final class InMemoryNativeSharedDocumentBindingStore: NativeSharedDocumen
 
   public func loadBinding(fileURL: URL) throws -> NativeSharedDocumentBinding? {
     bindings[NativeLocalDocumentIdentity.canonicalPath(fileURL: fileURL)]
+  }
+
+  public func loadAllBindings() throws -> [NativeSharedDocumentBinding] {
+    bindings.values.sorted { $0.filePath.localizedCaseInsensitiveCompare($1.filePath) == .orderedAscending }
   }
 
   public func saveBinding(_ binding: NativeSharedDocumentBinding, fileURL: URL) throws {
@@ -191,6 +196,12 @@ public final class FileNativeSharedDocumentBindingStore: NativeSharedDocumentBin
 
   public func loadBinding(fileURL documentURL: URL) throws -> NativeSharedDocumentBinding? {
     try loadStore().bindings[NativeLocalDocumentIdentity.canonicalPath(fileURL: documentURL)]
+  }
+
+  public func loadAllBindings() throws -> [NativeSharedDocumentBinding] {
+    try loadStore().bindings.values.sorted {
+      $0.filePath.localizedCaseInsensitiveCompare($1.filePath) == .orderedAscending
+    }
   }
 
   public func saveBinding(_ binding: NativeSharedDocumentBinding, fileURL documentURL: URL) throws {

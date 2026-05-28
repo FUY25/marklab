@@ -110,6 +110,10 @@ public final class NativeSharedDocumentSessionManager {
     sessions.removeAll { canonicalKey($0.fileURL) == key }
   }
 
+  public func removeAllSessions() {
+    sessions.removeAll()
+  }
+
   private func update(fileURL: URL, mutate: (inout NativeSharedDocumentSession) -> Void) {
     let key = canonicalKey(fileURL)
     guard let index = sessions.firstIndex(where: { canonicalKey($0.fileURL) == key }) else { return }

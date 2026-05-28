@@ -119,18 +119,22 @@ struct MarkLabAppModelTests {
   @MainActor
   @Test("native shared-link open requires owner sign-in")
   func sharedLinkOpenRequiresOwnerSignIn() {
+    var prompted: [(URL, NativeSignInPromptReason)] = []
     let model = MarkLabAppModel(
       hostedShareController: nil,
       baselineStore: InMemoryNativeProjectionBaselineStore(),
       conflictStore: NativeConflictStore(directoryURL: URL(fileURLWithPath: NSTemporaryDirectory())),
       sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
-      nativeBearerToken: nil
+      nativeBearerToken: nil,
+      signInPrompt: { prompted.append(($0, $1)) }
     )
 
     model.handleOpenURL(URL(string: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit")!)
 
     #expect(model.filePath == nil)
     #expect(model.statusText == "Sign in before opening shared documents in MarkLab.app.")
+    #expect(prompted.count == 1)
+    #expect(prompted.first?.1 == .openSharedDocument)
     #expect(throws: NativeSharedDocumentLinkError.signInRequired) {
       try model.joinSharedDocument(
         linkString: "https://app.example.test/collab?docId=doc_join&branchId=branch_main&token=ml_access_edit&mode=edit",
@@ -140,9 +144,43 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("start sharing prompts sign-in when a local document is open but no account exists")
+  func startSharingPromptsSignInWhenUnsigned() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "unsigned.md")
+    try Data("Unsigned local\n".utf8).write(to: fileURL)
+    var prompted: [(URL, NativeSignInPromptReason)] = []
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: nil,
+      hostedDefaults: NativeHostedDefaults(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!
+      ),
+      signInPrompt: { prompted.append(($0, $1)) }
+    )
+
+    model.loadFile(fileURL)
+    #expect(model.canStartSharing)
+
+    await model.startSharingAndConnect()
+
+    #expect(model.hasSharedDocument == false)
+    #expect(model.statusText == "Sign in before sharing from MarkLab.app.")
+    #expect(prompted.count == 1)
+    #expect(prompted.first?.0.absoluteString.starts(with: "https://app.example.test/signin?native=1&appState=") == true)
+    #expect(prompted.first?.1 == .startSharing)
+  }
+
+  @MainActor
   @Test("sign out revokes the server session and clears local account state")
   func signOutRevokesServerSessionAndClearsLocalAccountState() async throws {
     let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "signed-out.md")
+    try Data("Shared while signed in\n".utf8).write(to: fileURL)
     let accountStore = NativeAccountStore(directoryURL: directory.url.appending(path: "account", directoryHint: .isDirectory))
     try accountStore.save(NativeStoredAccount(
       apiBaseURL: URL(string: "https://api.example.test")!,
@@ -156,14 +194,24 @@ struct MarkLabAppModelTests {
     ))
     let transport = RecordingHTTPTransport()
     transport.enqueue(data: Data(), statusCode: 204)
+    let sessionManager = NativeSharedDocumentSessionManager()
     let model = MarkLabAppModel(
       hostedShareController: nil,
       baselineStore: InMemoryNativeProjectionBaselineStore(),
       conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
       sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: sessionManager,
       nativeBearerToken: nil,
       accountStore: accountStore,
       accountTransport: transport
+    )
+    model.loadFile(fileURL)
+    sessionManager.upsertSession(
+      fileURL: fileURL,
+      docId: "doc_signed_out",
+      branchId: "branch_main",
+      status: .synced,
+      lastSyncAt: Date()
     )
 
     model.signOut()
@@ -173,9 +221,74 @@ struct MarkLabAppModelTests {
     #expect(model.nativeBearerToken == nil)
     #expect(model.hasHostedShareController == false)
     #expect(try accountStore.load() == nil)
+    #expect(sessionManager.sessions.isEmpty)
     #expect(transport.requests.first?.method == "POST")
     #expect(transport.requests.first?.percentEncodedPath == "/api/auth/logout")
     #expect(transport.requests.first?.authorization == "Bearer ml_user_session")
+  }
+
+  @MainActor
+  @Test("restores active shared document sessions from persisted bindings on app launch")
+  func restoresActiveSharedDocumentSessionsFromPersistedBindingsOnLaunch() throws {
+    let directory = try TemporaryDirectory()
+    let activeFileURL = directory.url.appending(path: "active.md")
+    let stoppedFileURL = directory.url.appending(path: "stopped.md")
+    let missingFileURL = directory.url.appending(path: "missing.md")
+    try Data("Active\n".utf8).write(to: activeFileURL)
+    try Data("Stopped\n".utf8).write(to: stoppedFileURL)
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let activeLink = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_active&branchId=branch_main&token=ml_access_active&mode=edit")
+    let stoppedLink = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_stopped&branchId=branch_main&token=ml_access_stopped&mode=edit")
+    let missingLink = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_missing&branchId=branch_main&token=ml_access_missing&mode=edit")
+
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: activeFileURL,
+        link: activeLink,
+        appEditorURL: activeLink.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: activeFileURL)),
+        baselineMarkdown: "Active\n"
+      ),
+      fileURL: activeFileURL
+    )
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: stoppedFileURL,
+        link: stoppedLink,
+        appEditorURL: stoppedLink.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: stoppedFileURL)),
+        baselineMarkdown: "Stopped\n"
+      ).withSyncEnabled(false),
+      fileURL: stoppedFileURL
+    )
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: missingFileURL,
+        link: missingLink,
+        appEditorURL: missingLink.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: missingFileURL)),
+        baselineMarkdown: "Missing\n"
+      ),
+      fileURL: missingFileURL
+    )
+    try baselineStore.saveBaseline(
+      NativeProjectionBaselineRecord(
+        markdown: "Active\n",
+        providerStateFingerprint: NativeProjectionBaselineRecord.providerYTextFingerprint("Active\n"),
+        updatedAt: "2026-05-28T12:00:00Z"
+      ),
+      fileURL: activeFileURL
+    )
+
+    MarkLabSharedSessionRestorer.restoreActiveSessions(
+      bindingStore: bindingStore,
+      baselineStore: baselineStore,
+      sessionManager: sessionManager
+    )
+
+    #expect(sessionManager.sessions.map(\.docId) == ["doc_active"])
+    #expect(sessionManager.sessions.first?.status == .synced)
+    #expect(sessionManager.sessions.first?.hasOpenWindow == false)
+    #expect(sessionManager.sessions.first?.lastSyncAt != nil)
   }
 
   @MainActor
@@ -1157,6 +1270,20 @@ struct MarkLabAppModelTests {
     #expect(sessionManager.sessions.first?.status == .syncing)
     #expect(model.statusText == "Resumed sharing resume.md. Waiting to sync local file.")
     #expect(transport.requests.filter { $0.method == "POST" && $0.percentEncodedPath == "/api/docs/import" }.count == 1)
+
+    model.handleDiskIngestionBridgeResult(DiskIngestionBridgeResult(
+      revision: pending.revision,
+      ok: false,
+      markdown: "Local after stop\n",
+      baselineMarkdown: "Shared before stop\n",
+      providerMarkdown: "Local after stop\n",
+      reason: "provider_changed"
+    ))
+
+    #expect(model.conflict == nil)
+    #expect(model.pendingDiskIngestion == nil)
+    #expect(sessionManager.sessions.first?.status == .synced)
+    #expect(model.statusText == "Shared editor already matches local file.")
   }
 
   @MainActor

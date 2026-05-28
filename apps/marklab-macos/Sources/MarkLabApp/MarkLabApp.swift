@@ -68,6 +68,7 @@ final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     menuBarController = MarkLabMenuBarController()
+    MarkLabSharedSessionRestorer.restoreActiveSessions()
     let cliRequestId = MarkLabCLIRequestLaunch.requestId(from: CommandLine.arguments)
     let cliStore = FileNativeCLIShareRequestStore(appSupportDirectory: NativeAppSupportDirectory.url())
     let cliProcessor = NativeCLIShareRequestProcessor(
@@ -182,6 +183,11 @@ struct DiskIngestionBridgeResult: Equatable {
   let baselineMarkdown: String
   let providerMarkdown: String?
   let reason: String?
+}
+
+enum NativeSignInPromptReason: Equatable {
+  case startSharing
+  case openSharedDocument
 }
 
 enum SharedProjectionResult: Equatable {
@@ -384,6 +390,7 @@ final class MarkLabAppModel: ObservableObject {
   private let accountTransport: NativeHTTPTransport
   private let hostedDefaults: NativeHostedDefaults
   private let beforeDiskIngestionReplace: (() -> Void)?
+  private let signInPrompt: @MainActor (URL, NativeSignInPromptReason) -> Void
   private let settingsDefaults: UserDefaults
   private var lastProjectedMarkdown: String?
   private var pendingSharedMarkdown: String?
@@ -409,6 +416,7 @@ final class MarkLabAppModel: ObservableObject {
     accountTransport: NativeHTTPTransport = URLSessionNativeHTTPTransport(),
     hostedDefaults: NativeHostedDefaults = .fromEnvironment(),
     beforeDiskIngestionReplace: (() -> Void)? = nil,
+    signInPrompt: @escaping @MainActor (URL, NativeSignInPromptReason) -> Void = MarkLabAppModel.defaultSignInPrompt,
     opensSelectedFilesInNewDocumentWindow: Bool = false,
     localAutosaveEnabled: Bool? = nil,
     settingsDefaults: UserDefaults = .standard
@@ -427,6 +435,7 @@ final class MarkLabAppModel: ObservableObject {
     self.hostedDefaults = hostedDefaults
     self.activeAccount = storedAccount
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
+    self.signInPrompt = signInPrompt
     self.settingsDefaults = settingsDefaults
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
     self.localAutosaveEnabled = localAutosaveEnabled ?? Self.defaultLocalAutosaveEnabled(defaults: settingsDefaults)
@@ -492,6 +501,10 @@ final class MarkLabAppModel: ObservableObject {
     hostedShareController != nil && document != nil && conflict == nil
   }
 
+  var documentReadyForSharing: Bool {
+    document != nil && conflict == nil
+  }
+
   var isSignedIn: Bool {
     nativeBearerToken?.isEmpty == false
   }
@@ -508,7 +521,7 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   var canStartSharing: Bool {
-    actionsEnabled && embeddedCollabURL == nil
+    documentReadyForSharing && embeddedCollabURL == nil
   }
 
   var canCreateSharingLink: Bool {
@@ -712,11 +725,42 @@ final class MarkLabAppModel: ObservableObject {
       completeSignIn(from: callback)
       return
     }
+    if url.scheme == "marklab", url.host == "auth", url.path == "/callback" {
+      statusText = "Sign-in failed. Try again from Settings."
+      return
+    }
     openSharedLink(from: url)
   }
 
   func openSignInPage() {
     NSWorkspace.shared.open(signInURL)
+  }
+
+  static func defaultSignInPrompt(url: URL, reason: NativeSignInPromptReason) {
+    let alert = NSAlert()
+    alert.messageText = "Sign In Required"
+    alert.informativeText = switch reason {
+    case .startSharing:
+      "Sign in with Google before sharing Markdown files from MarkLab.app."
+    case .openSharedDocument:
+      "Sign in with Google before opening shared documents in MarkLab.app."
+    }
+    alert.addButton(withTitle: "Continue with Google")
+    alert.addButton(withTitle: "Cancel")
+    if alert.runModal() == .alertFirstButtonReturn {
+      NSWorkspace.shared.open(url)
+    }
+  }
+
+  private func promptSignIn(reason: NativeSignInPromptReason) {
+    let url = signInURL
+    statusText = switch reason {
+    case .startSharing:
+      "Sign in before sharing from MarkLab.app."
+    case .openSharedDocument:
+      "Sign in before opening shared documents in MarkLab.app."
+    }
+    signInPrompt(url, reason)
   }
 
   func signOut() {
@@ -749,6 +793,15 @@ final class MarkLabAppModel: ObservableObject {
     pendingSharedMarkdown = nil
     projectionTask?.cancel()
     projectionTask = nil
+    if clearStore {
+      sessionManager.removeAllSessions()
+    }
+    if let fileURL = document?.fileURL {
+      if !clearStore {
+        sessionManager.removeSession(fileURL: fileURL)
+      }
+      MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
+    }
     statusText = status
     if broadcast {
       var userInfo: [String: String] = [:]
@@ -768,7 +821,7 @@ final class MarkLabAppModel: ObservableObject {
 
   private func requireSignedInForNativeSharedDocumentOpen() -> Bool {
     guard isSignedIn else {
-      statusText = "Sign in before opening shared documents in MarkLab.app."
+      promptSignIn(reason: .openSharedDocument)
       return false
     }
     return true
@@ -1042,6 +1095,18 @@ final class MarkLabAppModel: ObservableObject {
   }
 
   func startSharingAndConnect() async {
+    guard conflict == nil else {
+      statusText = "Resolve the conflict before sharing."
+      return
+    }
+    guard document != nil else {
+      statusText = "Open a Markdown file before sharing."
+      return
+    }
+    guard hostedShareController != nil else {
+      promptSignIn(reason: .startSharing)
+      return
+    }
     do {
       _ = try await startSharingAndConnectThrowing()
       await refreshManagedAccessLinksFromServer()
@@ -1782,17 +1847,23 @@ final class MarkLabAppModel: ObservableObject {
 
   func handleDiskIngestionBridgeResult(_ result: DiskIngestionBridgeResult) {
     guard let pending = pendingDiskIngestion, pending.revision == result.revision else { return }
-    if result.ok {
+    let providerAlreadyMatchesLocal = result.reason == "provider_changed"
+      && result.providerMarkdown.map {
+        LocalMarkdownDocument.normalizeForSharedSave($0)
+          == LocalMarkdownDocument.normalizeForSharedSave(result.markdown)
+      } == true
+    let acceptedMarkdown = providerAlreadyMatchesLocal ? (result.providerMarkdown ?? result.markdown) : result.markdown
+    if result.ok || providerAlreadyMatchesLocal {
       if let fileURL = document?.fileURL {
         do {
           if let conflictOnFailure = pending.conflictOnFailure,
-             !refreshConflictIfDiskChanged(conflictOnFailure, sharedMarkdown: result.markdown) {
+             !refreshConflictIfDiskChanged(conflictOnFailure, sharedMarkdown: acceptedMarkdown) {
             pendingDiskIngestion = nil
             return
           }
           if var currentDocument = document {
             let expectedDiskMarkdown = pending.conflictOnFailure?.localMarkdown ?? result.markdown
-            currentDocument.replaceText(result.markdown)
+            currentDocument.replaceText(acceptedMarkdown)
             let saved = try currentDocument.saveIfCurrentMarkdownMatches(
               expectedDiskMarkdown,
               beforeReplace: beforeDiskIngestionReplace
@@ -1804,8 +1875,8 @@ final class MarkLabAppModel: ObservableObject {
             }
             document = currentDocument
           }
-          text = result.markdown
-          try updateProjectionBaseline(result.markdown, fileURL: fileURL)
+          text = acceptedMarkdown
+          try updateProjectionBaseline(acceptedMarkdown, fileURL: fileURL)
         } catch {
           if let conflictOnFailure = pending.conflictOnFailure {
             setConflict(conflictOnFailure, status: "Unable to persist local disk change.")
@@ -1814,12 +1885,14 @@ final class MarkLabAppModel: ObservableObject {
           return
         }
       } else {
-        text = result.markdown
-        lastProjectedMarkdown = result.markdown
+        text = acceptedMarkdown
+        lastProjectedMarkdown = acceptedMarkdown
       }
       pendingDiskIngestion = nil
       clearConflictState()
-      statusText = "Ingested local disk change into the shared editor."
+      statusText = providerAlreadyMatchesLocal
+        ? "Shared editor already matches local file."
+        : "Ingested local disk change into the shared editor."
       return
     }
     if result.reason == "provider_changed", let providerMarkdown = result.providerMarkdown {
