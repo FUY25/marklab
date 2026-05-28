@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { EVENT_CONNECTION_STATUS, STATUS_CONNECTED, STATUS_CONNECTING, STATUS_ERROR, STATUS_OFFLINE } from '@y-sweet/client';
@@ -166,6 +166,28 @@ function validateProviderTokenForSession(session: Pick<EditorSession, 'sessionId
     return 'invalid_provider_token_refresh';
   }
   return null;
+}
+
+function CollaboratorPresence({ collaborators, native = false }: {
+  collaborators: RemoteCursorSummary[];
+  native?: boolean;
+}) {
+  if (collaborators.length === 0) return null;
+
+  return (
+    <div className={`presence-strip${native ? ' native-presence-strip' : ''}`} aria-label="Collaborators">
+      {collaborators.map((collaborator) => (
+        <span
+          className="presence-chip"
+          key={collaborator.clientId}
+          style={{ '--presence-color': collaborator.color } as CSSProperties}
+        >
+          <span className="presence-dot" aria-hidden="true" />
+          <span className="presence-name">{collaborator.name}</span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function CollaborativeMarkdownEditor({
@@ -688,20 +710,13 @@ export function CollaborativeMarkdownEditor({
           aria-label="Markdown source"
           data-doc-id={docId}
           data-branch-id={branchId}
-          ref={editorHostRef}
         >
+          <CollaboratorPresence collaborators={remoteCursors} native={usesMarkEditNativeShell} />
+          <div className="codemirror-editor-host" ref={editorHostRef} />
         </div>
         {!usesMarkEditNativeShell ? (
           <aside className="preview-pane" aria-label="Live preview">
-            {remoteCursors.length > 0 ? (
-              <div className="presence-strip" aria-label="Collaborators">
-                {remoteCursors.map((cursor) => (
-                  <span key={cursor.clientId} style={{ borderColor: cursor.color }}>
-                    {cursor.name}
-                  </span>
-                ))}
-              </div>
-            ) : null}
+            <CollaboratorPresence collaborators={remoteCursors} />
             <div className="markdown-rendered-view">{renderMarkdownSnapshot(markdownPreview)}</div>
           </aside>
         ) : null}

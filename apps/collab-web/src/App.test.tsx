@@ -325,9 +325,53 @@ describe('App routing', () => {
       await waitFor(() => {
         expect(document.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
       });
+      await waitFor(() => {
+        expect(document.querySelector('.native-presence-strip')?.textContent).toContain('Guest');
+      });
       expect(document.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
       expect(document.querySelector('.cm-marklab-remote-caret-label-visible')).toBeNull();
       expect(document.querySelector('.cm-marklab-remote-cursor-overlay')).toBeNull();
+    } finally {
+      remoteAwareness.destroy();
+      remoteDoc.destroy();
+    }
+  });
+
+  it('shows native collaborators in the main editor view even before they place a cursor', async () => {
+    window.__marklabNativeApp = true;
+    window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
+    vi.stubGlobal('fetch', vi.fn(async () => nativeHostedEditSessionResponse()));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(providerMock.capturedAwareness).not.toBeNull();
+      expect(document.querySelectorAll('.markedit-native-shell .cm-editor')).toHaveLength(1);
+    });
+
+    const localAwareness = providerMock.capturedAwareness!;
+    const remoteDoc = new Y.Doc();
+    const remoteAwareness = new Awareness(remoteDoc);
+    const remoteUser: MarkLabAwarenessUser = {
+      id: 'session_browser',
+      name: 'Guest',
+      color: '#16a34a',
+      colorLight: '#dcfce7',
+      kind: 'human',
+      clientKind: 'browser',
+    };
+    try {
+      remoteAwareness.setLocalState({ user: remoteUser });
+      applyAwarenessUpdate(
+        localAwareness,
+        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
+        'test',
+      );
+
+      await waitFor(() => {
+        expect(document.querySelector('.native-presence-strip')?.textContent).toContain('Guest');
+      });
+      expect(document.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(0);
     } finally {
       remoteAwareness.destroy();
       remoteDoc.destroy();
