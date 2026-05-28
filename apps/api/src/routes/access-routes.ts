@@ -346,10 +346,18 @@ async function closeRuntimeAccessForRevokedTarget(
   }
 
   for (const row of branches.rows) {
-    options.closeCollabDocumentConnections?.(toRoomName(target.docId, row.branch_id));
+    try {
+      options.closeCollabDocumentConnections?.(toRoomName(target.docId, row.branch_id));
+    } catch {
+      // DB revocation is authoritative; connection cleanup is best effort.
+    }
   }
   if (target.closeProviderDocs && providerDocIds.length > 0) {
-    options.closeProviderDocConnections?.(providerDocIds);
+    try {
+      options.closeProviderDocConnections?.(providerDocIds);
+    } catch {
+      // DB revocation is authoritative; connection cleanup is best effort.
+    }
   }
 }
 

@@ -721,6 +721,30 @@ describe('access routes', () => {
     await request(app).delete('/api/access-grants/missing').set(admin).expect(404, { error: 'access_grant_not_found' });
   });
 
+  it('keeps access grant revocation successful when runtime socket cleanup fails', async () => {
+    requireAuth('admin-secret');
+    const { pool, queries, accessGrants } = createAccessRoutePool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      closeProviderDocConnections() {
+        throw new Error('provider_socket_close_failed');
+      },
+    });
+    const admin = { Authorization: 'Bearer admin-secret' };
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/access-grants')
+      .set(admin)
+      .send({ role: 'edit' })
+      .expect(201);
+
+    await request(app).delete('/api/access-grants/agr_1').set(admin).expect(204);
+    expect(accessGrants[0]?.revoked_at).toBeTruthy();
+    expect(queries.some((query) => (
+      query.sql.includes('update provider_token_issuances')
+      && query.params?.[3] === 'access_grant_revoked'
+    ))).toBe(true);
+  });
+
   it('keeps share links and access grants isolated even though both use document grant rows', async () => {
     requireAuth('admin-secret');
     const { pool } = createAccessRoutePool();
