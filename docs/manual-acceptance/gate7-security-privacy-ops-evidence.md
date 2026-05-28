@@ -92,6 +92,21 @@ Results:
   - deleted the local legacy `~/Library/Application Support/MarkLab/debug/cursor-debug.jsonl` file.
 - Updated alpha user-guide billing-check wording so support does not ask users to paste raw tokens.
 
+## Hosted Alpha Deploy
+
+Commit `0ec173fd1edc1f65dd244749c8b4f78bdc570c39` was deployed to Fly release `v30` with image `registry.fly.io/marklab-relay-alpha:deployment-01KSPWYRP29R85TTEHKZD3RM26`.
+
+Post-deploy checks:
+
+- `/healthz`: `ok: true`, `schema.missing: []`, `provider.ready: true`, `provider.storeReady: true`.
+- Read-only alpha smoke: passed.
+- Authenticated alpha smoke: passed with manual billing `planId: dev`, `memberSeats: 1000`, `concurrentGuestEdits: 1000`.
+- `fly status` reported machine `0803d9dc665328`, version `30`, started, with `1 total, 1 passing` check.
+- `fly checks list` reported `servicecheck-00-http-3001` passing.
+- `fly ips list` reported IPv6 `2a09:8280:1::10f:9226:0` and IPv4 `66.241.124.14`.
+
+The Fly deploy command printed a transient startup listener warning before the machine reached a good state, and a DNS AAAA warning even though `fly ips list` reported the IPv6 ingress. Subsequent health, checks, status, and smokes passed.
+
 ## Remaining Before Gate 7 Can Pass
 
 - Run a live Fly log audit for raw tokens/local paths/content, or record a deliberately bounded deferral if the small pilot accepts source-level evidence only.
