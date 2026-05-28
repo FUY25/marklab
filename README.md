@@ -13,7 +13,8 @@ The current pilot is the hosted control-plane/Y-Sweet native path. The old local
 - Browser collaborator route: `/collab?docId=...&branchId=...&token=...&mode=edit|view`
 - Control plane: `/api/auth/*`, `/api/workspaces/*`, `/api/docs/*`, access grants, and collab sessions
 - Provider: Y-Sweet routes proxied at the API root, for example `/d/<providerDocId>/ws/<providerDocId>`
-As of May 18, 2026, `marklab-relay-alpha.fly.dev` is deployed with the new API/control-plane/Y-Sweet stack on Fly.io, backed by Neon and a Fly volume for provider data. Public health should include `ok: true`, `schema.ready: true`, `provider.ready: true`, and `provider.storeReady: true`.
+
+`marklab-relay-alpha.fly.dev` is deployed with the API/control-plane/Y-Sweet stack on Fly.io, backed by Neon and a Fly volume for provider data. Public health should include `ok: true`, `schema.ready: true`, `provider.ready: true`, and `provider.storeReady: true`.
 
 ## Pilot Workflow
 
@@ -66,16 +67,14 @@ Browser collaborator:
 
 App collaborator:
 
-1. Open the same edit link with MarkLab.app, or run:
+1. Open the same edit link with MarkLab.app.
+2. Sign in if the app prompts for an owner account.
+3. MarkLab.app validates the link.
+4. Choose the destination folder.
+5. The local file uses the shared document name.
+6. The app binds that file to the shared document and coedits through the same `/collab` provider path.
 
-```sh
-npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
-```
-
-2. MarkLab.app validates the link.
-3. Choose the destination folder.
-4. The local file uses the shared document name.
-5. The app binds that file to the shared document and coedits through the same `/collab` provider path.
+CLI join exists for developer/agent automation, but normal pilot users should use the installed app.
 
 View links are browser-only and must not mount an editable editor.
 
@@ -92,7 +91,7 @@ Shared editing has two flows:
 
 If the local disk file and the provider state both diverge, MarkLab pauses the write and opens conflict review instead of silently overwriting either side.
 
-Realtime sync is not the same thing as version control. The API has version endpoints for manual saves, autosaves, listing, and restore, but the new native relay UI does not yet expose a complete hosted Versions panel. For important pilot files, keep Git, Time Machine, or another external backup/version history until the native hosted Versions UI is finished.
+Realtime sync is not the same thing as version control. The native `Sharing & Versions` inspector exposes hosted checkpoints for shared documents, including manual checkpoints, autosave checkpoints, preview, restore, and Delete Cloud Copy. Browser collaborators participate through provider writes and autosave checkpoints, but the browser surface does not expose version controls yet. For important pilot files, keep Git, Time Machine, or another external backup/version history in addition to MarkLab's online checkpoints.
 
 ## Local Development
 
@@ -207,7 +206,7 @@ marklab conflict README.md --json
 - [App Design Doc](docs/appdesigndoc.md)
 - [Alpha User Guide](docs/product/marklab-alpha-user-guide.md)
 - [Local-First User Journeys](docs/product/local-first-user-journeys.md)
-- [Local URL vs Relay URL](docs/product/local-url-vs-relay-url.md)
+- [Local URL vs Shared URL](docs/product/local-url-vs-relay-url.md)
 - [Privacy And Storage](docs/production/privacy-and-storage.md)
 - [Hosted Relay Operations](docs/production/relay-ops.md)
 - [Alpha Launch Runbook](docs/production/alpha-launch-runbook.md)
@@ -215,4 +214,4 @@ marklab conflict README.md --json
 
 ## Archived Plans
 
-Files under `docs/Archive/` are historical planning and design material. They are useful reference, but `docs/appdesigndoc.md`, the Plan 6 packaging doc, and the manual acceptance runbook describe the current relay/native pilot.
+Files under `docs/Archive/` are historical planning and design material. They are useful reference, but `docs/appdesigndoc.md`, the Plan 6 packaging doc, and the manual acceptance runbook describe the current hosted native/Y-Sweet pilot.

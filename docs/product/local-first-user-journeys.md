@@ -1,6 +1,6 @@
 # Local-First User Journeys
 
-These journeys describe the current relay/native pilot.
+These journeys describe the current hosted native/Y-Sweet pilot.
 
 ## Local Editing
 
@@ -10,7 +10,7 @@ These journeys describe the current relay/native pilot.
 4. User saves with `Cmd+S` or the standard save command.
 5. The file remains a normal Markdown file on disk.
 
-No sharing controls appear except `Start Sharing`.
+Before sharing, the editor stays local. The `Sharing & Versions` inspector can still show local sharing readiness and retained-cloud-copy state when applicable.
 
 ## Start Sharing
 
@@ -18,7 +18,7 @@ No sharing controls appear except `Start Sharing`.
 2. MarkLab imports or creates the shared document through the hosted control plane.
 3. MarkLab opens an app-kind `/collab` session for the same document branch.
 4. The local editor keeps the same visual layer and gains collaboration behavior.
-5. Sharing controls appear: create edit link, create view link, show collaboration, and stop sharing.
+5. Sharing controls appear: create edit link, create view link, Show Sharing & Versions, and Stop Sharing.
 
 ## Browser Collaborator
 
@@ -66,8 +66,8 @@ Agents do not appear in the collaborator list.
 
 1. User clicks `Stop Sharing`.
 2. MarkLab flushes pending shared projection to disk.
-3. MarkLab revokes active links known to the current app session.
+3. MarkLab refreshes active branch grants from the server and revokes the active links it can manage.
 4. MarkLab clears active collaborator state and shared binding.
 5. The window returns to local-only editing.
 
-Stopping sharing does not delete local files.
+Stopping sharing does not delete local files, the retained cloud copy, or online version history. `Delete Cloud Copy` is the separate destructive hosted-content action.

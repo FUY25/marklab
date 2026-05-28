@@ -8,6 +8,7 @@ Current product and architecture direction lives in:
 
 Archived material:
 
+- `local-daemon-distribution.md`: archived compatibility note for the removed local daemon distribution path.
 - `local-first-plans/`: previous local-first implementation plans.
 - `cloud-first-reference/`: previous cloud-first plan sequence.
 - `root-cloud-first-reference/`: older root-level cloud-first design documents.

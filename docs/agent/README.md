@@ -1,6 +1,6 @@
 # MarkLab Agent Docs
 
-This directory is the operating manual for local coding agents that work with the current MarkLab relay/native pilot.
+This directory is the operating manual for local coding agents that work with the current hosted native/Y-Sweet pilot.
 
 - [Agent guide](marklab-agent-guide.md)
 - [Codex instructions](marklab-codex-instructions.md)

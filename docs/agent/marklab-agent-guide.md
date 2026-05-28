@@ -19,7 +19,7 @@ Use the local Markdown file as the only content write surface.
 
 Ask the user which file is active if it is not obvious. If the file is in a shared MarkLab.app session, keep edits focused and avoid repeated rewrite loops.
 
-For broad rewrites, ask the user to create a safety checkpoint first. The native hosted Versions UI is not complete yet, so Git, Time Machine, or another external backup is the reliable pilot checkpoint.
+For broad rewrites, ask the user to create a safety checkpoint first. Native hosted version history covers shared online checkpoints, but Git, Time Machine, or another external backup is still the reliable pilot checkpoint for agent-driven rewrites.
 
 ## During Editing
 
@@ -29,7 +29,7 @@ If MarkLab.app reports a paused sync state or conflict, stop changing that watch
 
 ## After Editing
 
-Tell the user which file changed and use the native relay CLI status surface when available:
+Tell the user which file changed and use the native app CLI status surface when available:
 
 ```bash
 marklab status <file.md> --json

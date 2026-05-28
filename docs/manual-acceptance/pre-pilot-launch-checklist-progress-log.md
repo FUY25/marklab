@@ -46,7 +46,7 @@ Do not launch paid or broader public distribution until Gate 10.5 proves the app
 | 5 | Clean install and distribution | Passed | TBD | Passed for the controlled technical pilot scope using the documented per-app Gatekeeper workaround. Repo-outside zip install, package verification, unpacked app launch, hosted edit/view link creation, app-to-app join, and quit/reopen binding restoration passed from commit `a378a26ae6d5712e84c16650d63ff0ebb2ebd8e1`; the current reviewed RC was rebuilt and package-verified after Gate 5/6 fixes. No-warning public/non-technical distribution remains blocked on Developer ID signing/notarization. |
 | 6 | Login, onboarding, workspace UI | Passed | TBD | Passed for the small controlled pilot. Hosted Google/OIDC owner login, native callback handling, workspace select/create, account settings sign-in/sign-out, app sign-in prompts, guest browser links, shared-state restore across app relaunch, and restart-sharing conflict suppression were verified on the installed app at commit `a44f19d8a7857e3d4806e4fc1ffb2fa8fa89d966`. Token-refresh/session-expiry hardening belongs to Gate 7; quota/provider-unavailable polish remains non-blocking for this pilot. |
 | 7 | Security, privacy, and ops gate | Passed | TBD | Passed for the small controlled pilot. Evidence is recorded in [`gate7-security-privacy-ops-evidence.md`](./gate7-security-privacy-ops-evidence.md): API security/lifecycle tests, hosted health, authenticated alpha smoke, native support-file permission check, Gate 6 cursor debug log removal, live Fly log leak audit, live Fly machine restart persistence smoke, access revocation denial, and disposable cleanup all passed on Fly release `v32` at commit `e7c1c3b23ff54bd972c63fc5801f7f8d1c3baf95`. Full Neon PITR/Fly volume restore drill remains deferred to the final launch gate. |
-| 8 | Public docs cleanup and old approach archive | Not started | TBD | |
+| 8 | Public docs cleanup and old approach archive | Passed | TBD | Passed for the small controlled pilot. Current public/operator docs now describe the hosted native/Y-Sweet path, old local-daemon distribution docs are archived, and evidence is recorded in [`gate8-public-docs-cleanup.md`](./gate8-public-docs-cleanup.md). |
 | 9 | Small external pilot | Not started | TBD | |
 | 9.5 | Post-pilot active-code simplification | Deferred | TBD | Wait for real pilot findings. |
 | 10 | Brand, website, and video | Not started | TBD | |
@@ -564,35 +564,36 @@ Exit criteria:
 
 ## Gate 8 - Public Docs Cleanup And Old Approach Archive
 
-Goal: make public-facing docs describe only the current native relay/Y-Sweet path.
+Goal: make public-facing docs describe only the current hosted native/Y-Sweet path.
 
 Checklist:
 
-- [ ] Audit `README.md`.
-- [ ] Audit `docs/product/*`.
-- [ ] Audit `docs/agent/*`.
-- [ ] Audit `docs/production/*`.
-- [ ] Keep archived local-daemon docs clearly marked as historical.
-- [ ] Remove or archive stale quickstarts that route users to old `/relay`, `/local`, host-gated, or daemon-first paths.
-- [ ] Reflect Gate 2.5 decisions in public docs:
-  - [ ] deleted old paths are not mentioned as usable;
-  - [ ] archived old paths are clearly historical;
-  - [ ] temporarily kept compatibility paths are not advertised as pilot setup.
-- [ ] Confirm current docs explain:
-  - [ ] install/open;
-  - [ ] login/session;
-  - [ ] Start Sharing;
-  - [ ] edit/view links;
-  - [ ] app collaborator join;
-  - [ ] Stop Sharing;
-  - [ ] known limitations.
-- [ ] Decide whether any remaining compatibility code should move from `Keep temporarily` to `Delete now` after pilot.
+- [x] Audit `README.md`.
+- [x] Audit `docs/product/*`.
+- [x] Audit `docs/agent/*`.
+- [x] Audit `docs/production/*`.
+- [x] Keep archived local-daemon docs clearly marked as historical.
+- [x] Remove or archive stale quickstarts that route users to old `/relay`, `/local`, host-gated, or daemon-first paths.
+- [x] Reflect Gate 2.5 decisions in public docs:
+  - [x] deleted old paths are not mentioned as usable;
+  - [x] archived old paths are clearly historical;
+  - [x] temporarily kept compatibility paths are not advertised as pilot setup.
+- [x] Confirm current docs explain:
+  - [x] install/open;
+  - [x] login/session;
+  - [x] Start Sharing;
+  - [x] edit/view links;
+  - [x] app collaborator join;
+  - [x] Stop Sharing;
+  - [x] known limitations.
+- [x] Decide whether any remaining compatibility code should move from `Keep temporarily` to `Delete now` after pilot.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
-| 2026-05-21 | Gate created. Public docs already point mostly to native relay path, but a final stale scan is still required. | Existing README and docs. | Run stale wording scan after login/onboarding copy is final. |
+| 2026-05-21 | Gate created. Public docs already point mostly to the hosted native path, but a final stale scan is still required. | Existing README and docs. | Run stale wording scan after login/onboarding copy is final. |
+| 2026-05-28 | Gate 8 passed for the small controlled pilot. README, product docs, agent docs, and production docs were audited and updated to the current hosted native/Y-Sweet path. The stale local-daemon distribution doc moved from production docs to `docs/Archive/`. Normal users are routed to installed MarkLab.app plus hosted OIDC owner/app sign-in, browser guest links, Start Sharing, Show Sharing & Versions, Stop Sharing, and Delete Cloud Copy semantics. | [`gate8-public-docs-cleanup.md`](./gate8-public-docs-cleanup.md); stale-path scan found no current public instructions to old `/relay`, `/local`, host-gated, daemon-first, `apps/web`, or normal-user CLI-join paths. Remaining hits are historical archive notes or explicit known limitations. | Start Gate 9 small external pilot planning. |
 
 Exit criteria:
 
@@ -857,6 +858,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-Start Gate 8 public docs cleanup and old approach archive audit.
+Start Gate 9 small external pilot planning.
 
-Next acceptance row: audit `README.md`, `docs/product/*`, `docs/agent/*`, and `docs/production/*` so public-facing docs describe only the current native hosted Y-Sweet/OIDC path, with old daemon/local-relay material either removed or clearly archived.
+Next acceptance row: pick the first 3-10 pilot users, confirm install/login/support readiness for each, define the small-pilot success metric, and collect first pilot bugs plus usage/cost data.

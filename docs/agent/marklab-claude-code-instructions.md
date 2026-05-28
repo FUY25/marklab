@@ -1,6 +1,6 @@
 # Claude Code: MarkLab Local Agent Rules
 
-MarkLab watches local Markdown files and syncs them through the native relay app. Treat the `.md` file as the content surface.
+MarkLab watches local Markdown files and syncs them through MarkLab.app's hosted sync path. Treat the `.md` file as the content surface.
 
 - Edit Markdown through normal local file edits.
 - Use only the CLI commands below for sharing and sync coordination.

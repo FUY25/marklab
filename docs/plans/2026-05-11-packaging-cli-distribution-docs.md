@@ -73,7 +73,7 @@ This plan does not build billing or the full production launch gate. It does inc
 - Modify native URL/deep-link handling files if the package registers a `marklab://` join/open URL scheme.
 - Modify `README.md`
 - Modify `docs/product/marklab-alpha-user-guide.md`
-- Modify `docs/production/local-daemon-distribution.md`
+- Modify `docs/Archive/local-daemon-distribution.md`
 - Modify `docs/agent/marklab-agent-guide.md`
 - Modify downstream plan files listed in the final task.
 
@@ -149,7 +149,7 @@ The CLI is not the home for the agent edit `begin/end` protocol described in the
 
 - [x] Update `README.md` with alpha install path and hosted-default behavior.
 - [x] Update `docs/product/marklab-alpha-user-guide.md` with host and collaborator flows.
-- [x] Update `docs/production/local-daemon-distribution.md` as archived compatibility documentation and move normal users to the new relay/native join flow.
+- [x] Update `docs/Archive/local-daemon-distribution.md` as archived compatibility documentation and move normal users to the new relay/native join flow.
 - [x] Update troubleshooting/runbook for host offline, internal error, token expired, revoked link, conflict required, and sync timeout.
 - [x] Document the hosted login/workspace requirement for `share`: normal users create or select a workspace, then the app creates a workspace-owned document and edit/view links.
 - [x] Document the app-to-app flow: one edit link can be opened in the browser or in MarkLab.app; MarkLab.app asks where to create the local `.md`.

@@ -28,6 +28,22 @@ Normal browser collaborators do not need Node, pnpm, Postgres, Docker, or Git.
 
 Browser edit and view links are guest links. Guests do not sign in when they open a browser link. MarkLab.app users do sign in, including app collaborators who open an edit link in the native app.
 
+## Install And Open
+
+Pilot owners should use the MarkLab.app artifact provided by the operator.
+
+1. Unzip the controlled pilot package.
+2. Move `MarkLab.app` to `/Applications`.
+3. Open `MarkLab.app`.
+4. If macOS blocks the current controlled-pilot artifact, use the scoped per-app Gatekeeper workaround only if the operator asks you to:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MarkLab.app
+open /Applications/MarkLab.app
+```
+
+No-warning public distribution still requires Developer ID signing and notarization, which is tracked for a later gate and is not part of the small controlled pilot.
+
 ## Sign In And Workspace
 
 MarkLab.app no longer requires a developer to export `MARKLAB_USER_TOKEN` and `MARKLAB_WORKSPACE_ID` for the normal pilot path.
@@ -107,13 +123,7 @@ Through the app:
 3. Choose where the local Markdown file should live.
 4. MarkLab joins the shared document and starts projecting provider changes to that local file.
 
-From the CLI:
-
-```sh
-npx -y @marklab/cli join 'https://<host>/collab?docId=...&branchId=...&token=...&mode=edit'
-```
-
-Or open the same link through the app's shared-link entry point.
+Developer/agent automation can route the same hosted edit link through `marklab join`, but normal pilot collaborators should use the installed app and its shared-link entry point.
 
 Expected behavior:
 
@@ -177,6 +187,14 @@ Revoking a link removes that grant. It does not delete local files.
 If the local `.md` file is deleted or moved while the app is open, MarkLab should pause projection and show local sync state instead of recreating the file silently.
 
 If the local disk file and shared provider state both changed independently, MarkLab should show conflict review before writing either side over the other.
+
+## Known Pilot Limitations
+
+- The current app artifact is for a controlled pilot. It may require the scoped Gatekeeper workaround above until signed/notarized distribution is completed.
+- Browser collaborators can edit or view through `/collab`, but browser version-control UI is not exposed yet. Their edits still participate in hosted checkpoints through provider writes and autosave.
+- Realtime sync and hosted checkpoints are not a public backup/SLA. Keep important files in Git, Time Machine, or another external backup.
+- Paid Stripe checkout, payment portal, webhooks, and public pricing are intentionally disabled for the private alpha.
+- Workspace/account hard delete and `Clear Local MarkLab Data` are later support/settings actions, not pilot self-serve flows.
 
 ## Manual Acceptance
 

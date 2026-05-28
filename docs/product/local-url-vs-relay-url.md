@@ -4,7 +4,7 @@ MarkLab has two different URL concepts. They must stay separate.
 
 ## Local App State
 
-In the current relay/native pilot, local app state lives inside MarkLab.app and the local Markdown file. Normal users should not receive or share private localhost editor URLs.
+In the current hosted native/Y-Sweet pilot, local app state lives inside MarkLab.app and the local Markdown file. Normal users should not receive or share private localhost editor URLs.
 
 Local app state includes:
 
