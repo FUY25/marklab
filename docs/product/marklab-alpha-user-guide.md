@@ -152,10 +152,13 @@ The private alpha runs in manual/free mode. Stripe checkout, payment portal, web
 
 Workspace settings includes a `Plan & Billing` tab so owners and members can inspect the current plan, member-seat usage, and concurrent guest-edit usage. The tab is read-only for the private alpha. The control plane still enforces member-seat and guest-edit limits before issuing collaborator access or provider tokens.
 
-Operators can check the same state through:
+Operators should use the UI first and should not ask pilot users to paste owner/session tokens into support chats. If an operator needs to check the same state through the API, run it from the ignored local operator environment and avoid echoing the token:
 
 ```sh
-curl -H "Authorization: Bearer <ml_user_...>" \
+set -a
+source ./.env.marklab-pilot
+set +a
+curl -fsS -H "Authorization: Bearer $MARKLAB_USER_TOKEN" \
   https://marklab-relay-alpha.fly.dev/api/workspaces/<workspace-id>/billing
 ```
 

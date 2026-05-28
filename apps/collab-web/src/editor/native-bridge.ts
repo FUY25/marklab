@@ -1,8 +1,7 @@
 export type NativeBridgeMessage =
   | { type: 'markdown-snapshot'; markdown: string }
   | { type: 'selection-change'; status: string }
-  | { type: 'collaborators-change'; collaborators: NativeCollaboratorSummary[] }
-  | { type: 'cursor-debug'; entry: NativeCursorDebugEntry };
+  | { type: 'collaborators-change'; collaborators: NativeCollaboratorSummary[] };
 
 export interface NativeCollaboratorSummary {
   clientId: number;
@@ -11,26 +10,6 @@ export interface NativeCollaboratorSummary {
   colorLight: string;
   kind: 'human' | 'agent';
   clientKind?: 'browser' | 'app' | 'agent' | 'guest' | 'api' | undefined;
-}
-
-export interface NativeCursorDebugEntry {
-  event: string;
-  at: string;
-  localClientId?: number;
-  docLength?: number;
-  stateCount?: number;
-  rawStates?: unknown[];
-  resolvedCursors?: unknown[];
-  collaboratorSummaries?: unknown[];
-  domCarets?: unknown[];
-  inlineLabels?: unknown[];
-  overlayLabels?: unknown[];
-  bodyRemoteCarets?: unknown[];
-  bodyRemoteLabels?: unknown[];
-  bodyGuestElements?: unknown[];
-  domCounts?: unknown;
-  localSelection?: unknown;
-  details?: Record<string, unknown>;
 }
 
 export type NativeDiskMarkdownApplyResult =
@@ -83,13 +62,6 @@ export function postNativeCollaborators(collaborators: NativeCollaboratorSummary
   const handler = window.webkit?.messageHandlers?.marklabNative;
   if (!handler) return false;
   handler.postMessage({ type: 'collaborators-change', collaborators });
-  return true;
-}
-
-export function postNativeCursorDebug(entry: NativeCursorDebugEntry): boolean {
-  const handler = window.webkit?.messageHandlers?.marklabNative;
-  if (!handler) return false;
-  handler.postMessage({ type: 'cursor-debug', entry });
   return true;
 }
 

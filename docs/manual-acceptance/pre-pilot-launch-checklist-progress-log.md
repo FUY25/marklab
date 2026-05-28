@@ -45,7 +45,7 @@ Do not launch paid or broader public distribution until Gate 10.5 proves the app
 | 4 | Cost instrumentation and unit economics | Passed | TBD | Passed for the small free pilot scope. Usage reporter was added and run against deployed Fly alpha; public Fly/Neon/Stripe rate-card scenarios and temporary pilot cost guardrails are documented in [`gate4-cost-instrumentation-unit-economics.md`](./gate4-cost-instrumentation-unit-economics.md). Actual Fly/Neon billing snapshots, final Free plan packaging, and paid no-loss pricing are deferred to Gate 11. |
 | 5 | Clean install and distribution | Passed | TBD | Passed for the controlled technical pilot scope using the documented per-app Gatekeeper workaround. Repo-outside zip install, package verification, unpacked app launch, hosted edit/view link creation, app-to-app join, and quit/reopen binding restoration passed from commit `a378a26ae6d5712e84c16650d63ff0ebb2ebd8e1`; the current reviewed RC was rebuilt and package-verified after Gate 5/6 fixes. No-warning public/non-technical distribution remains blocked on Developer ID signing/notarization. |
 | 6 | Login, onboarding, workspace UI | Passed | TBD | Passed for the small controlled pilot. Hosted Google/OIDC owner login, native callback handling, workspace select/create, account settings sign-in/sign-out, app sign-in prompts, guest browser links, shared-state restore across app relaunch, and restart-sharing conflict suppression were verified on the installed app at commit `a44f19d8a7857e3d4806e4fc1ffb2fa8fa89d966`. Token-refresh/session-expiry hardening belongs to Gate 7; quota/provider-unavailable polish remains non-blocking for this pilot. |
-| 7 | Security, privacy, and ops gate | Not started | TBD | |
+| 7 | Security, privacy, and ops gate | In progress | TBD | Non-disruptive evidence pass started in [`gate7-security-privacy-ops-evidence.md`](./gate7-security-privacy-ops-evidence.md). API security/lifecycle tests, hosted health, read-only/authenticated alpha smoke, local provider restart persistence smoke, native support-file permission check, and removal of the Gate 6 cursor debug log are recorded. Live Fly log audit and live Fly machine restart persistence smoke remain open before pass. |
 | 8 | Public docs cleanup and old approach archive | Not started | TBD | |
 | 9 | Small external pilot | Not started | TBD | |
 | 9.5 | Post-pilot active-code simplification | Deferred | TBD | Wait for real pilot findings. |
@@ -535,23 +535,24 @@ Goal: reduce the main launch risks: permission leaks, raw token leaks, silent da
 
 Checklist:
 
-- [ ] Verify view links do not mount editable provider sessions.
-- [ ] Verify revoked edit links stop provider-token refresh and editing.
+- [x] Verify view links do not mount editable provider sessions.
+- [x] Verify revoked edit links stop provider-token refresh and editing.
 - [ ] Verify raw access/share/provider/session tokens are not logged.
-- [ ] Verify CORS/origin rules match production origin.
-- [ ] Verify public browser traffic cannot spoof native `clientKind=app`.
-- [ ] Verify local file paths are treated as local/private context.
-- [ ] Verify `/healthz` includes database, schema, provider, and provider store readiness.
-- [ ] Verify Fly rollback command.
-- [ ] Verify Neon schema migration command.
+- [x] Verify CORS/origin rules match production origin.
+- [x] Verify public browser traffic cannot spoof native `clientKind=app`.
+- [x] Verify local file paths are treated as local/private context.
+- [x] Verify `/healthz` includes database, schema, provider, and provider store readiness.
+- [x] Verify Fly rollback command.
+- [x] Verify Neon schema migration command.
 - [ ] Verify provider persistence restart smoke.
-- [ ] Verify support/debug instructions do not ask users to paste raw tokens.
+- [x] Verify support/debug instructions do not ask users to paste raw tokens.
 
 Progress log:
 
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-21 | Gate created. Several items have automated coverage, but this gate still needs a launch-specific evidence pass. | Existing bug log and tests. | Build security/ops evidence list from current tests. |
+| 2026-05-28 | Gate 7 non-disruptive evidence pass started. Hosted health, read-only alpha smoke, authenticated alpha smoke, API security/lifecycle suite, web native bridge/app suite, Swift app-model suite, TypeScript typecheck, full root Vitest, full SwiftPM native suite, local provider restart persistence smoke, local app-support permission check, and token-support wording review passed. The Gate 6 native cursor debug log feature was removed entirely and the local legacy debug log file was deleted. | [`gate7-security-privacy-ops-evidence.md`](./gate7-security-privacy-ops-evidence.md); API security/lifecycle focused suite returned 144 passed; web bridge/app focused suite returned 24 passed; `swift test --package-path apps/marklab-macos --filter MarkLabAppModelTests` returned 38 passed; `npx -y pnpm@10.0.0 typecheck` passed; `npx -y pnpm@10.0.0 test` returned 529 passed and 1 skipped; `swift test --package-path apps/marklab-macos` returned 101 passed; `/healthz` and both alpha smokes passed; local provider smoke returned `ok: true`. | Run live Fly log audit for raw token/path/content leakage and schedule the live Fly machine restart persistence smoke when no active user is editing. |
 
 Exit criteria:
 

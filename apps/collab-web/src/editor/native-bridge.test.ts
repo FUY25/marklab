@@ -5,7 +5,6 @@ import * as Y from 'yjs';
 import {
   applyNativeDiskMarkdownToText,
   postNativeCollaborators,
-  postNativeCursorDebug,
   postNativeMarkdownSnapshot,
   postNativeSelectionStatus,
 } from './native-bridge';
@@ -59,39 +58,10 @@ describe('native webview bridge', () => {
     });
   });
 
-  it('posts cursor diagnostics to MarkLab.app when native cursor debug is enabled', () => {
-    const postMessage = vi.fn();
-    window.webkit = { messageHandlers: { marklabNative: { postMessage } } };
-
-    expect(postNativeCursorDebug({
-      event: 'awareness-change',
-      at: '2026-05-27T10:00:00.000Z',
-      localClientId: 1,
-      stateCount: 2,
-      rawStates: [],
-      resolvedCursors: [],
-      domCarets: [],
-    })).toBe(true);
-
-    expect(postMessage).toHaveBeenCalledWith({
-      type: 'cursor-debug',
-      entry: {
-        event: 'awareness-change',
-        at: '2026-05-27T10:00:00.000Z',
-        localClientId: 1,
-        stateCount: 2,
-        rawStates: [],
-        resolvedCursors: [],
-        domCarets: [],
-      },
-    });
-  });
-
   it('is a no-op in normal browser sessions', () => {
     expect(postNativeMarkdownSnapshot('# Browser\n')).toBe(false);
     expect(postNativeSelectionStatus('Ln 1, Col 1')).toBe(false);
     expect(postNativeCollaborators([])).toBe(false);
-    expect(postNativeCursorDebug({ event: 'browser', at: '2026-05-27T10:00:00.000Z' })).toBe(false);
   });
 
   it('applies native disk markdown only when provider text still matches the baseline', () => {
