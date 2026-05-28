@@ -875,7 +875,7 @@ describe('version routes', () => {
   });
 
   it('restores a rollback version back into the live provider snapshot', async () => {
-    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string; expectedCurrentHash?: string }> = [];
     const { pool } = createRestorePool();
     const liveWriter = createRestoreLiveWriter();
     const app = createHttpApp(pool, liveWriter, {
@@ -902,7 +902,8 @@ describe('version routes', () => {
   });
 
   it('checkpoints the live provider snapshot before applying a rollback to the provider', async () => {
-    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string; expectedCurrentHash?: string }> = [];
+    const appliedRooms: Array<{ roomName: string; yjsState: Uint8Array; expectedCurrentHash: string | undefined }> = [];
     const liveMarkdown = '# Unsaved provider edits\n';
     const liveHash = sha256Hex(liveMarkdown);
     const liveYjsState = createValidYjsState();
@@ -930,6 +931,9 @@ describe('version routes', () => {
           providerApplies.push(input);
         },
       },
+      async applyCollabDocumentState(roomName, yjsState, options) {
+        appliedRooms.push({ roomName, yjsState, expectedCurrentHash: options?.expectedCurrentHash });
+      },
     });
 
     await request(app)
@@ -954,7 +958,53 @@ describe('version routes', () => {
       docId: 'doc_001',
       branchId: 'br_main',
       markdown: '# Source snapshot\n',
+      expectedCurrentHash: liveHash,
     }]);
+    expect(appliedRooms).toEqual([{
+      roomName: toRoomName('doc_001', 'br_main'),
+      yjsState: liveWriter.yjsState,
+      expectedCurrentHash: liveHash,
+    }]);
+  });
+
+  it('rejects restore when the live provider changes after checkpoint but before rollback apply', async () => {
+    const liveMarkdown = '# Unsaved provider edits\n';
+    const liveHash = sha256Hex(liveMarkdown);
+    const { pool, queries } = createRestorePool({
+      currentMarkdown: '# Stale DB mirror\n',
+      currentHash: 'sha256:stale',
+      headVersionId: 'ver_head',
+      headHash: 'sha256:stale',
+    });
+    const liveWriter = createRestoreLiveWriter(liveMarkdown, liveHash);
+    const app = createHttpApp(pool, liveWriter, {
+      collabSnapshotService: {
+        async readCurrentMarkdownSnapshot() {
+          return {
+            docId: 'doc_001',
+            branchId: 'br_main',
+            versionId: null,
+            versionNumber: null,
+            markdown: liveMarkdown,
+            hash: liveHash,
+            yjsState: createValidYjsState(),
+          };
+        },
+        async applyMarkdownSnapshot(input) {
+          expect(input.expectedCurrentHash).toBe(liveHash);
+          throw new Error('live_provider_snapshot_changed');
+        },
+      },
+    });
+
+    await request(app)
+      .post('/api/docs/doc_001/branches/br_main/restore')
+      .send({ versionId: 'ver_source' })
+      .expect(409, { error: 'live_provider_snapshot_changed' });
+
+    expect(liveWriter.transactions).toEqual([]);
+    const versionInserts = queries.filter((query) => query.sql.includes('insert into document_versions'));
+    expect(versionInserts.map((query) => query.params?.[8])).toEqual(['manual_save']);
   });
 
   it('does not move branch state when provider rollback application fails', async () => {
@@ -1002,7 +1052,7 @@ describe('version routes', () => {
   });
 
   it('compensates the provider snapshot when database rollback restore fails after provider apply', async () => {
-    const providerApplies: Array<{ docId: string; branchId: string; markdown: string }> = [];
+    const providerApplies: Array<{ docId: string; branchId: string; markdown: string; expectedCurrentHash?: string }> = [];
     const { pool, queries } = createRestorePool({
       currentMarkdown: '# Stale DB mirror\n',
       currentHash: 'sha256:stale',
@@ -1043,6 +1093,7 @@ describe('version routes', () => {
         docId: 'doc_001',
         branchId: 'br_main',
         markdown: '# Source snapshot\n',
+        expectedCurrentHash: sha256Hex('# Provider draft\n'),
       },
       {
         docId: 'doc_001',

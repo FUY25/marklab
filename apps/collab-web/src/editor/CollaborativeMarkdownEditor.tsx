@@ -44,6 +44,8 @@ import { createMarkLabYjsProvider, type MarkLabYjsProvider } from '../provider/y
 import { renderMarkdownSnapshot } from './markdown-render';
 import {
   applyNativeDiskMarkdownToText,
+  createNativeMarkdownSnapshotScheduler,
+  type NativeMarkdownSnapshotScheduler,
   postNativeCollaborators,
   postNativeMarkdownSnapshot,
   postNativeSelectionStatus,
@@ -212,6 +214,7 @@ export function CollaborativeMarkdownEditor({
     let disposed = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let view: EditorView | null = null;
+    let nativeMarkdownSnapshotScheduler: NativeMarkdownSnapshotScheduler | null = null;
     let binding: YTextCodeMirrorBinding | null = null;
     let provider: MarkLabYjsProvider | null = null;
     let persistence: IndexeddbPersistence | null = null;
@@ -468,9 +471,13 @@ export function CollaborativeMarkdownEditor({
                 transaction.docChanged && !transaction.annotation(ySyncAnnotation)
               ));
               if (update.docChanged) {
-                const markdown = update.state.doc.toString();
-                setMarkdownPreview(markdown);
-                postNativeMarkdownSnapshot(markdown);
+                if (nativeMarkdownSnapshotScheduler) {
+                  nativeMarkdownSnapshotScheduler.schedule();
+                } else {
+                  const markdown = update.state.doc.toString();
+                  setMarkdownPreview(markdown);
+                  postNativeMarkdownSnapshot(markdown);
+                }
                 queueMicrotask(() => {
                   if (!disposed) publishLocalCursor({ activate: hasLocalDocChange });
                 });
@@ -483,6 +490,11 @@ export function CollaborativeMarkdownEditor({
           ],
         }),
       });
+      nativeMarkdownSnapshotScheduler = nativeShell === 'markedit'
+        ? createNativeMarkdownSnapshotScheduler({
+          readMarkdown: () => view?.state.doc.toString() ?? '',
+        })
+        : null;
       postNativeSelectionStatus(selectionStatus(view));
       binding = createYTextCodeMirrorBinding({ view, ytext, preferInitial: 'ytext' });
       window.__marklabNativeApplyDiskMarkdown = (markdown: string, baseline: string) => (
@@ -530,6 +542,7 @@ export function CollaborativeMarkdownEditor({
       if (window.__marklabSetNativeEditable) {
         delete window.__marklabSetNativeEditable;
       }
+      nativeMarkdownSnapshotScheduler?.cancel();
       binding?.destroy();
       view?.destroy();
       if (import.meta.env.DEV) {
@@ -541,7 +554,7 @@ export function CollaborativeMarkdownEditor({
       awareness?.destroy();
       ydoc.destroy();
     };
-  }, [branchId, client, displayName, docId, token]);
+  }, [branchId, client, clientKind, displayName, docId, nativeShell, token]);
 
   const usesMarkEditNativeShell = nativeShell === 'markedit';
 

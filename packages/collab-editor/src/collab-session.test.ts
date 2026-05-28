@@ -5,8 +5,8 @@ import {
   isTerminalProviderRefreshError,
   providerTokenRefreshDelayMs,
   providerTokenRefreshRetryDelayMs,
-  type IssuedProviderToken,
 } from './collab-session';
+import { providerTokenWireFixture } from './wire-fixtures';
 import {
   PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS,
   PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS,
@@ -20,29 +20,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function createProviderToken(input: Partial<IssuedProviderToken> = {}): IssuedProviderToken {
-  return {
-    providerDocId: 'ml_doc_1',
-    sessionId: 'session_1',
-    authorization: 'full',
-    validForSeconds: PROVIDER_TOKEN_TTL_SECONDS,
-    issuedAt: '2026-05-15T12:00:00.000Z',
-    expiresAt: '2026-05-15T12:10:00.000Z',
-    clientToken: {
-      docId: 'ml_doc_1',
-      url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
-      baseUrl: 'https://api.example.test/d/ml_doc_1',
-      token: 'ysweet_token',
-      authorization: 'full',
-    },
-    ...input,
-  };
-}
-
 describe('shared collaboration session client', () => {
   it('creates native app edit sessions with clientKind app and refreshes with only the session refresh token', async () => {
-    const initialToken = createProviderToken();
-    const refreshedToken = createProviderToken({
+    const initialToken = providerTokenWireFixture();
+    const refreshedToken = providerTokenWireFixture({
       clientToken: {
         docId: 'ml_doc_1',
         url: 'ws://api.example.test/d/ml_doc_1/ws/ml_doc_1',
@@ -104,7 +85,7 @@ describe('shared collaboration session client', () => {
     const fetcher = vi.fn(async () => jsonResponse({
       mode: 'view',
       session: { sessionId: 'session_view', clientKind: 'app', displayName: 'Reader' },
-      providerToken: createProviderToken(),
+      providerToken: providerTokenWireFixture(),
       document: {
         docId: 'doc_1',
         branchId: 'main',
@@ -130,7 +111,7 @@ describe('shared collaboration session client', () => {
 
   it('uses the shared token policy for refresh timing and retry classification', async () => {
     expect(providerTokenRefreshDelayMs(
-      createProviderToken(),
+      providerTokenWireFixture(),
       Date.parse('2026-05-15T12:00:00.000Z'),
     )).toBe((PROVIDER_TOKEN_TTL_SECONDS - PROVIDER_TOKEN_REFRESH_MARGIN_SECONDS) * 1000);
     expect(providerTokenRefreshRetryDelayMs()).toBe(PROVIDER_TOKEN_REFRESH_CHECK_INTERVAL_SECONDS * 1000);

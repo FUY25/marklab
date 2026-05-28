@@ -1,39 +1,70 @@
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import type { DbQueryResult } from '../db/client';
 import {
   countOtherActiveGuestEditSessions,
   ensureProviderDocId,
   findActiveProviderTokenSession,
   LEGACY_DOCUMENT_QUOTA_KEY_PREFIX,
+  markProviderDocContentsEnsured,
   markProviderDocSeeded,
   markProviderTokenIssuanceIssuedIfSessionActive,
   markProviderTokenRefreshIssued,
+  providerDocNeedsContentsEnsure,
   providerTokenIssuanceCanIssue,
   recordProviderTokenIssuanceWithPolicy,
 } from './provider-doc-service';
 import { readConcurrentGuestEditQuota } from './seat-limit-service';
 
-function createProviderDocPool(existingProviderDocId: string | null = null, seededAt: string | null = '2026-05-11T00:00:00.000Z') {
+function createProviderDocPool(
+  existingProviderDocId: string | null = null,
+  seededAt: string | null = '2026-05-11T00:00:00.000Z',
+  contentsEnsuredAt: string | null = '2026-05-11T00:00:00.000Z',
+) {
   const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const yjsState = new Uint8Array([1, 2, 3]);
   return {
     calls,
     async query<Row = unknown>(sql: string, params: readonly unknown[] = []): Promise<DbQueryResult<Row>> {
       calls.push({ sql, params });
+      if (/select s\.provider_doc_contents_ensured_at/u.test(sql)) {
+        return {
+          rows: [{ provider_doc_contents_ensured_at: contentsEnsuredAt } as Row],
+          rowCount: 1,
+        };
+      }
       if (/select .*provider_doc_id/us.test(sql)) {
         return {
           rows: (existingProviderDocId
-            ? [{ provider_doc_id: existingProviderDocId, provider_doc_seeded_at: seededAt, yjs_state: yjsState }]
-            : [{ provider_doc_id: null, provider_doc_seeded_at: null, yjs_state: yjsState }]) as Row[],
+            ? [{
+              provider_doc_id: existingProviderDocId,
+              provider_doc_seeded_at: seededAt,
+              provider_doc_contents_ensured_at: contentsEnsuredAt,
+              yjs_state: yjsState,
+            }]
+            : [{
+              provider_doc_id: null,
+              provider_doc_seeded_at: null,
+              provider_doc_contents_ensured_at: null,
+              yjs_state: yjsState,
+            }]) as Row[],
         };
       }
       if (/update document_branch_states[\s\S]+provider_doc_seeded_at = now/u.test(sql)) {
         return { rows: [], rowCount: 1 };
       }
+      if (/update document_branch_states[\s\S]+provider_doc_contents_ensured_at = now/u.test(sql)) {
+        return { rows: [], rowCount: 1 };
+      }
       if (/update document_branch_states/u.test(sql)) {
-        return { rows: [{ provider_doc_id: params[2], provider_doc_seeded_at: null, yjs_state: yjsState }] as Row[] };
+        return {
+          rows: [{
+            provider_doc_id: params[2],
+            provider_doc_seeded_at: null,
+            provider_doc_contents_ensured_at: null,
+            yjs_state: yjsState,
+          }] as Row[],
+        };
       }
       throw new Error(`unexpected_query:${sql}`);
     },
@@ -47,6 +78,7 @@ describe('ensureProviderDocId', () => {
       providerDocId: 'ml_doc_existing',
       created: false,
       needsSeed: false,
+      needsContentsEnsure: false,
     });
     expect(pool.calls[0]?.params).toEqual(['branch_1', 'doc_1']);
     expect(pool.calls[0]?.sql).toContain('join document_branches');
@@ -60,6 +92,21 @@ describe('ensureProviderDocId', () => {
       created: false,
       needsSeed: true,
     });
+  });
+
+  it('requires a one-time provider contents ensure when the refresh marker is missing', async () => {
+    const pool = createProviderDocPool('ml_doc_existing', '2026-05-11T00:00:00.000Z', null);
+
+    await expect(ensureProviderDocId(pool, { docId: 'doc_1', branchId: 'branch_1' })).resolves.toMatchObject({
+      providerDocId: 'ml_doc_existing',
+      needsSeed: false,
+      needsContentsEnsure: true,
+    });
+    await expect(providerDocNeedsContentsEnsure(pool, {
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      providerDocId: 'ml_doc_existing',
+    })).resolves.toBe(true);
   });
 
   it('creates an opaque provider document id when the branch state has none', async () => {
@@ -85,8 +132,23 @@ describe('ensureProviderDocId', () => {
 
     expect(pool.calls[0]?.params).toEqual(['branch_1', 'doc_1', 'ml_doc_existing', Buffer.from([1, 2, 3])]);
     expect(pool.calls[0]?.sql).toContain('provider_doc_seeded_at = now()');
+    expect(pool.calls[0]?.sql).toContain('provider_doc_contents_ensured_at = now()');
     expect(pool.calls[0]?.sql).toContain('s.provider_doc_id = $3');
     expect(pool.calls[0]?.sql).toContain('s.yjs_state = $4');
+  });
+
+  it('marks provider contents ensured after the one-time refresh normalization succeeds', async () => {
+    const pool = createProviderDocPool('ml_doc_existing', '2026-05-11T00:00:00.000Z', null);
+
+    await markProviderDocContentsEnsured(pool, {
+      docId: 'doc_1',
+      branchId: 'branch_1',
+      providerDocId: 'ml_doc_existing',
+    });
+
+    expect(pool.calls[0]?.params).toEqual(['branch_1', 'doc_1', 'ml_doc_existing']);
+    expect(pool.calls[0]?.sql).toContain('provider_doc_contents_ensured_at = now()');
+    expect(pool.calls[0]?.sql).toContain('s.provider_doc_id = $3');
   });
 
   it('does not mark a provider document seeded after the branch state changed', async () => {
@@ -107,7 +169,7 @@ describe('ensureProviderDocId', () => {
 
 describe('findActiveProviderTokenSession', () => {
   it('stores actor grant identifiers as text so non-uuid auth adapters do not break token minting', async () => {
-    const schema = await readFile(resolve('apps/api/src/db/schema.sql'), 'utf8');
+    const schema = await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8');
 
     expect(schema).toContain('actor_grant_id text');
     expect(schema).toContain('alter column actor_grant_id type text using actor_grant_id::text');

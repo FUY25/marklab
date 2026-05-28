@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   applyNativeDiskMarkdownToText,
+  createNativeMarkdownSnapshotScheduler,
   postNativeCollaborators,
   postNativeMarkdownSnapshot,
   postNativeSelectionStatus,
@@ -62,6 +63,83 @@ describe('native webview bridge', () => {
     expect(postNativeMarkdownSnapshot('# Browser\n')).toBe(false);
     expect(postNativeSelectionStatus('Ln 1, Col 1')).toBe(false);
     expect(postNativeCollaborators([])).toBe(false);
+  });
+
+  it('coalesces native markdown snapshots and reads the full document on the next frame', () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    const readMarkdown = vi.fn(() => '# Latest\n');
+    const postSnapshot = vi.fn(() => true);
+    const scheduler = createNativeMarkdownSnapshotScheduler({
+      readMarkdown,
+      postSnapshot,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+    });
+
+    scheduler.schedule();
+    scheduler.schedule();
+    scheduler.schedule();
+
+    expect(readMarkdown).not.toHaveBeenCalled();
+    expect(postSnapshot).not.toHaveBeenCalled();
+    expect(frameCallbacks).toHaveLength(1);
+
+    frameCallbacks[0]!(0);
+
+    expect(readMarkdown).toHaveBeenCalledTimes(1);
+    expect(postSnapshot).toHaveBeenCalledWith('# Latest\n');
+  });
+
+  it('coalesces repeated native snapshots for a large document into one full read', () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    const largeMarkdown = `${'# Large\n'}${'x'.repeat(1024 * 1024)}`;
+    const readMarkdown = vi.fn(() => largeMarkdown);
+    const postSnapshot = vi.fn(() => true);
+    const scheduler = createNativeMarkdownSnapshotScheduler({
+      readMarkdown,
+      postSnapshot,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+    });
+
+    for (let i = 0; i < 250; i += 1) {
+      scheduler.schedule();
+    }
+
+    expect(frameCallbacks).toHaveLength(1);
+    expect(readMarkdown).not.toHaveBeenCalled();
+    expect(postSnapshot).not.toHaveBeenCalled();
+
+    frameCallbacks[0]!(0);
+
+    expect(readMarkdown).toHaveBeenCalledTimes(1);
+    expect(postSnapshot).toHaveBeenCalledTimes(1);
+    expect(postSnapshot).toHaveBeenCalledWith(largeMarkdown);
+  });
+
+  it('cancels pending native markdown snapshots when the editor is disposed', () => {
+    const readMarkdown = vi.fn(() => '# Disposed\n');
+    const postSnapshot = vi.fn(() => true);
+    const cancelFrame = vi.fn();
+    const scheduler = createNativeMarkdownSnapshotScheduler({
+      readMarkdown,
+      postSnapshot,
+      requestFrame: () => 42,
+      cancelFrame,
+    });
+
+    scheduler.schedule();
+    scheduler.cancel();
+
+    expect(cancelFrame).toHaveBeenCalledWith(42);
+    expect(readMarkdown).not.toHaveBeenCalled();
+    expect(postSnapshot).not.toHaveBeenCalled();
   });
 
   it('applies native disk markdown only when provider text still matches the baseline', () => {

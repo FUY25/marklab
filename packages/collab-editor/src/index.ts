@@ -2,4 +2,5 @@ export * from './awareness';
 export * from './collab-session';
 export * from './markdown-commands';
 export * from './remote-cursors';
+export * from './wire-fixtures';
 export * from './ytext-codemirror';

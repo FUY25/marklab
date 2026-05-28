@@ -87,8 +87,15 @@ public struct NativeProjectionBaselineRecord: Codable, Equatable, Sendable {
 
 public protocol NativeProjectionBaselineStore: AnyObject {
   func loadBaseline(fileURL: URL) throws -> NativeProjectionBaselineRecord?
+  func loadAllBaselines() throws -> [String: NativeProjectionBaselineRecord]
   func saveBaseline(_ baseline: NativeProjectionBaselineRecord, fileURL: URL) throws
   func clearBaseline(fileURL: URL) throws
+}
+
+public extension NativeProjectionBaselineStore {
+  func loadAllBaselines() throws -> [String: NativeProjectionBaselineRecord] {
+    [:]
+  }
 }
 
 public final class InMemoryNativeProjectionBaselineStore: NativeProjectionBaselineStore {
@@ -98,6 +105,10 @@ public final class InMemoryNativeProjectionBaselineStore: NativeProjectionBaseli
 
   public func loadBaseline(fileURL: URL) throws -> NativeProjectionBaselineRecord? {
     baselines[fileURL.path]
+  }
+
+  public func loadAllBaselines() throws -> [String: NativeProjectionBaselineRecord] {
+    baselines
   }
 
   public func saveBaseline(_ baseline: NativeProjectionBaselineRecord, fileURL: URL) throws {
@@ -133,6 +144,10 @@ public final class FileNativeProjectionBaselineStore: NativeProjectionBaselineSt
 
   public func loadBaseline(fileURL documentURL: URL) throws -> NativeProjectionBaselineRecord? {
     try loadStore().baselines[documentURL.path]
+  }
+
+  public func loadAllBaselines() throws -> [String: NativeProjectionBaselineRecord] {
+    try loadStore().baselines
   }
 
   public func saveBaseline(_ baseline: NativeProjectionBaselineRecord, fileURL documentURL: URL) throws {
@@ -289,7 +304,11 @@ public final class NativeCollaborationRuntime {
 
     var currentDocument = diskDocument
     currentDocument.replaceText(markdown)
-    try currentDocument.save()
+    let saved = try currentDocument.saveIfCurrentMarkdownMatches(diskMarkdown)
+    guard saved else {
+      connectionState = .conflict
+      return .conflict
+    }
     document = currentDocument
     let projectedMarkdown = currentDocument.markdownForSave()
     try baselineStore.saveBaseline(

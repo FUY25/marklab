@@ -22,6 +22,7 @@ import {
 
 export interface RemoteCursorSummary {
   clientId: number;
+  userId: string;
   name: string;
   color: string;
   colorLight: string;
@@ -46,7 +47,7 @@ interface RemoteCursorOptions {
 }
 
 type RemoteCursorLabelMode = 'transient' | 'always';
-type RemoteCursorLabelRenderer = 'inline' | 'overlay' | 'none';
+type RemoteCursorLabelRenderer = 'inline' | 'none';
 
 function awarenessRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -58,11 +59,12 @@ export function awarenessClientMeta(input: Awareness): ReadonlyMap<number, Aware
   return meta instanceof Map ? meta : undefined;
 }
 
-function participantIdentityKey(participant: Pick<RemoteCursorSummary, 'name' | 'kind'>): string {
+function participantIdentityKey(participant: Pick<RemoteCursorSummary, 'userId' | 'name' | 'kind'>): string {
+  const normalizedUserId = participant.userId.trim().toLocaleLowerCase();
   const normalizedName = participant.name.trim().toLocaleLowerCase();
   return [
     participant.kind,
-    normalizedName || 'guest',
+    normalizedUserId || normalizedName || 'guest',
   ].join('|');
 }
 
@@ -122,6 +124,7 @@ export function summarizeRemoteCursors(
       if (!user) return [];
       return [{
         clientId,
+        userId: user.id,
         name: user.name,
         color: safeAwarenessColor(user.color, '#2563eb'),
         colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
@@ -148,6 +151,7 @@ export function resolveRemoteCursorSelections(
     if (!cursor) return [];
     return [{
       clientId,
+      userId: user.id,
       name: user.name,
       color: safeAwarenessColor(user.color, '#2563eb'),
       colorLight: safeAwarenessColor(user.colorLight, '#dbeafe'),
@@ -267,57 +271,6 @@ export const markLabRemoteCursorTheme = EditorView.baseTheme({
   },
   '.cm-marklab-remote-caret-label-visible .cm-marklab-remote-caret-label': {
     display: 'inline-block',
-  },
-  '&.cm-marklab-remote-cursor-overlay-host': {
-    position: 'relative',
-  },
-  '.cm-marklab-remote-cursor-label-layer': {
-    position: 'absolute',
-    inset: '0',
-    overflow: 'visible',
-    pointerEvents: 'none',
-    zIndex: '30',
-    contain: 'layout style',
-  },
-  '.cm-marklab-remote-cursor-overlay': {
-    position: 'absolute',
-    width: '0',
-    height: '1.35em',
-    pointerEvents: 'none',
-    zIndex: '30',
-  },
-  '.cm-marklab-remote-cursor-caret-overlay': {
-    position: 'absolute',
-    top: '0',
-    left: '0',
-    height: '1.35em',
-    borderLeft: '2px solid',
-    boxSizing: 'border-box',
-  },
-  '.cm-marklab-remote-cursor-dot-overlay': {
-    position: 'absolute',
-    top: '-2px',
-    left: '-4px',
-    width: '7px',
-    height: '7px',
-    borderRadius: '999px',
-  },
-  '.cm-marklab-remote-cursor-label-overlay': {
-    position: 'absolute',
-    top: '-21px',
-    left: '-4px',
-    padding: '2px 6px',
-    borderRadius: '4px',
-    color: '#ffffff',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    fontSize: '11px',
-    lineHeight: '14px',
-    whiteSpace: 'nowrap',
-    pointerEvents: 'none',
-    maxWidth: '120px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.18)',
   },
 });
 
@@ -442,9 +395,6 @@ export function createRemoteCursorExtension(input: {
       private readonly cursorSignatures = new Map<number, string>();
       private readonly labelVisibleUntil = new Map<string, number>();
       private labelTimer: ReturnType<typeof setTimeout> | null = null;
-      private overlayLabelLayer: HTMLElement | null = null;
-      private overlayRenderTimer: ReturnType<typeof setTimeout> | null = null;
-      private pendingOverlayCursors: ResolvedRemoteCursorSelection[] = [];
       private destroyed = false;
 
       constructor(private readonly view: EditorView) {
@@ -482,8 +432,6 @@ export function createRemoteCursorExtension(input: {
           clearTimeout(this.labelTimer);
           this.labelTimer = null;
         }
-        this.cancelOverlayRender();
-        this.removeOverlayLabelLayer();
         input.awareness.off('change', this.onAwarenessChange);
       }
 
@@ -535,102 +483,15 @@ export function createRemoteCursorExtension(input: {
           labelMode === 'always' || visibleLabelIdentityKeys.has(participantIdentityKey(cursor))
         );
         const cursors = this.resolveCursors();
-        const renderOverlay = labelRenderer === 'overlay';
         const decorations = buildRemoteCursorDecorationSet(
           view,
           cursors,
           isLabelVisible,
-          !renderOverlay,
+          true,
           labelRenderer === 'inline',
         );
-        if (renderOverlay) {
-          this.scheduleOverlayCursors(cursors, isLabelVisible);
-        } else {
-          this.cancelOverlayRender();
-          this.removeOverlayLabelLayer();
-        }
         this.scheduleLabelExpiry();
         return decorations;
-      }
-
-      private ensureOverlayLabelLayer(view: EditorView): HTMLElement {
-        if (this.overlayLabelLayer?.isConnected) return this.overlayLabelLayer;
-        view.dom.classList.add('cm-marklab-remote-cursor-overlay-host');
-        const layer = view.dom.ownerDocument.createElement('div');
-        layer.className = 'cm-marklab-remote-cursor-label-layer';
-        view.dom.append(layer);
-        this.overlayLabelLayer = layer;
-        return layer;
-      }
-
-      private removeOverlayLabelLayer(): void {
-        this.overlayLabelLayer?.remove();
-        this.overlayLabelLayer = null;
-        this.view?.dom.classList.remove('cm-marklab-remote-cursor-overlay-host');
-      }
-
-      private scheduleOverlayCursors(
-        cursors: ResolvedRemoteCursorSelection[],
-        isLabelVisible: (cursor: ResolvedRemoteCursorSelection) => boolean,
-      ): void {
-        this.pendingOverlayCursors = cursors
-          .filter(isLabelVisible)
-          .map((cursor) => ({ ...cursor }));
-        if (this.overlayRenderTimer !== null) return;
-
-        this.overlayRenderTimer = setTimeout(() => {
-          this.overlayRenderTimer = null;
-          if (this.destroyed) return;
-          this.renderOverlayCursors(this.pendingOverlayCursors);
-        }, 0);
-      }
-
-      private cancelOverlayRender(): void {
-        if (this.overlayRenderTimer === null) return;
-        clearTimeout(this.overlayRenderTimer);
-        this.overlayRenderTimer = null;
-      }
-
-      private renderOverlayCursors(visibleCursors: ResolvedRemoteCursorSelection[]): void {
-        if (visibleCursors.length === 0) {
-          if (this.overlayLabelLayer) this.overlayLabelLayer.replaceChildren();
-          return;
-        }
-
-        const layer = this.ensureOverlayLabelLayer(this.view);
-        const editorRect = this.view.dom.getBoundingClientRect();
-        const markers = visibleCursors.flatMap((cursor) => {
-          if (cursor.head > this.view.state.doc.length) return [];
-          const side = cursor.head >= cursor.anchor ? -1 : 1;
-          const coords = this.view.coordsAtPos(cursor.head, side) ?? this.view.coordsAtPos(cursor.head);
-          if (!coords) return [];
-
-          const marker = this.view.dom.ownerDocument.createElement('div');
-          marker.className = 'cm-marklab-remote-cursor-overlay';
-          marker.dataset.clientId = String(cursor.clientId);
-          marker.style.left = `${Math.round(coords.left - editorRect.left)}px`;
-          marker.style.top = `${Math.round(coords.top - editorRect.top)}px`;
-
-          const caret = this.view.dom.ownerDocument.createElement('span');
-          caret.className = 'cm-marklab-remote-cursor-caret-overlay';
-          caret.style.borderColor = cursor.color;
-
-          const dot = this.view.dom.ownerDocument.createElement('span');
-          dot.className = 'cm-marklab-remote-cursor-dot-overlay';
-          dot.style.backgroundColor = cursor.color;
-
-          const label = this.view.dom.ownerDocument.createElement('span');
-          label.className = 'cm-marklab-remote-cursor-label-overlay';
-          label.textContent = cursor.name;
-          label.style.backgroundColor = cursor.color;
-
-          marker.append(caret, dot, label);
-          return [marker];
-        });
-
-        if (markers.length > 0 || layer.childElementCount === 0) {
-          layer.replaceChildren(...markers);
-        }
       }
 
       private scheduleLabelExpiry(): void {

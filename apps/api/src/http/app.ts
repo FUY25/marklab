@@ -8,7 +8,6 @@ import { createAuthRoutes } from '../routes/auth-routes';
 import { createBillingRoutes } from '../routes/billing-routes';
 import { createCloudCopyRoutes } from '../routes/cloud-copy-routes';
 import { createCollabSessionRoutes } from '../routes/collab-session-routes';
-import { createDocAiRoutes } from '../routes/doc-ai-routes';
 import { createImportExportRoutes } from '../routes/import-export-routes';
 import { createVersionRoutes } from '../routes/version-routes';
 import { createWorkspaceRoutes } from '../routes/workspace-routes';
@@ -42,7 +41,6 @@ export interface HttpAppOptions {
   allowedOrigins?: readonly string[];
   enforceAllowedOrigins?: boolean;
   health?: HttpHealthOptions;
-  enableLegacyDocAiRoutes?: boolean;
   staticCollabWeb?: StaticWebOptions;
   authEnvironment?: Partial<HttpAuthEnvironment>;
   oidcExchange?: OidcExchange;
@@ -54,7 +52,6 @@ export interface HttpAuthEnvironment {
   devAuth: boolean;
   adminTokenHash: string | undefined;
   nodeEnv: string | undefined;
-  legacyHostedDocAi: boolean;
   oidc: OidcAuthConfig | undefined;
 }
 
@@ -90,7 +87,7 @@ export interface CollabMarkdownSnapshot {
 
 export interface CollabSnapshotService {
   readCurrentMarkdownSnapshot(input: { docId: string; branchId: string }): Promise<CollabMarkdownSnapshot | null>;
-  applyMarkdownSnapshot?(input: { docId: string; branchId: string; markdown: string }): Promise<void>;
+  applyMarkdownSnapshot?(input: { docId: string; branchId: string; markdown: string; expectedCurrentHash?: string }): Promise<void>;
 }
 
 export interface HttpRequestAuth {
@@ -303,7 +300,6 @@ function readAuthEnvironment(input: Partial<HttpAuthEnvironment> = {}): HttpAuth
     devAuth: nodeEnv === 'production' ? false : requestedDevAuth,
     adminTokenHash: input.adminTokenHash ?? process.env.MARKLAB_ADMIN_TOKEN_HASH,
     nodeEnv,
-    legacyHostedDocAi: input.legacyHostedDocAi ?? process.env.MARKLAB_ENABLE_LEGACY_DOC_AI === 'true',
     oidc,
   };
 }
@@ -504,6 +500,11 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
+  if (error instanceof Error && error.message === 'live_provider_snapshot_changed') {
+    res.status(409).json({ error: 'live_provider_snapshot_changed' });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'milkdown_transformer_not_configured') {
     res.status(503).json({ error: 'milkdown_transformer_not_configured' });
     return;
@@ -637,14 +638,15 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   app.use('/api', createAuthRoutes(pool, {
     devAuthEnabled: authEnvironment.devAuth,
     cookieSecure: authEnvironment.nodeEnv === 'production',
+    closeCollabDocumentConnections: routeOptions.closeCollabDocumentConnections,
+    closeProviderDocConnections: routeOptions.closeProviderDocConnections,
     ...(authEnvironment.oidc ? { oidcConfig: authEnvironment.oidc } : {}),
     ...(options.oidcExchange ? { oidcExchange: options.oidcExchange } : {}),
   }));
-  app.use('/api', createWorkspaceRoutes(pool));
+  app.use('/api', createWorkspaceRoutes(pool, routeOptions));
   app.use('/api', createBillingRoutes(pool));
   app.use('/api', createAccessRoutes(pool, routeOptions));
   app.use('/api', createCloudCopyRoutes(pool, routeOptions));
-  if (options.enableLegacyDocAiRoutes ?? authEnvironment.legacyHostedDocAi) app.use('/api', createDocAiRoutes(pool, liveWriter, routeOptions));
   app.use('/api', createImportExportRoutes(pool, routeOptions));
   app.use('/api', createCollabSessionRoutes(pool, routeOptions));
   app.use('/api', createVersionRoutes(pool, liveWriter, routeOptions));

@@ -243,6 +243,18 @@ function createWorkspacePool() {
       return { rows: [], rowCount: 1 };
     }
 
+    if (sql.includes('select distinct s.doc_id') && sql.includes('from collab_sessions s')) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (sql.includes('update collab_sessions')) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (sql.includes('update provider_token_issuances')) {
+      return { rows: [], rowCount: 0 };
+    }
+
     if (sql.includes('from documents d') && sql.includes('left join document_access_grants')) {
       expect(sql).toContain('(g.expires_at is null or g.expires_at > now())');
       const active = (grant: typeof grants[number]) => !grant.revoked_at && (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now());
@@ -363,6 +375,30 @@ describe('workspace routes', () => {
       .expect(204);
     expect(members.some((member) => member.user_id === 'user_reader')).toBe(false);
     expect(advisoryLocks).toContain('workspace_members:ws_existing');
+  });
+
+  it('closes direct-user edit runtime access when a workspace member is downgraded to Reader', async () => {
+    const { pool, calls, members } = createWorkspacePool();
+    members.push({ workspace_id: 'ws_existing', user_id: 'user_member', role: 'Member' });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    await request(app)
+      .patch('/api/workspaces/ws_existing/members/user_member')
+      .set({ Authorization: 'Bearer owner-token' })
+      .send({ role: 'Reader' })
+      .expect(200);
+
+    expect(calls.some((call) =>
+      call.sql.includes('update collab_sessions')
+      && call.params?.[0] === 'user_member'
+      && call.params?.[1] === 'ws_existing',
+    )).toBe(true);
+    expect(calls.some((call) =>
+      call.sql.includes('update provider_token_issuances')
+      && call.params?.[0] === 'user_member'
+      && call.params?.[1] === 'ws_existing'
+      && call.params?.[2] === 'workspace_member_role_revoked',
+    )).toBe(true);
   });
 
   it('returns a bad request instead of internal_error for invalid workspace ids', async () => {

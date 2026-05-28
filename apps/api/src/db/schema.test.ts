@@ -1,9 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 async function schemaSql(): Promise<string> {
-  return await readFile(resolve('apps/api/src/db/schema.sql'), 'utf8');
+  return await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
 }
 
 function compact(sql: string): string {
@@ -128,11 +127,17 @@ describe('control-plane schema contract', () => {
     expect(normalized).toContain('alter table provider_token_issuances add column if not exists actor_type text');
     expect(normalized).toContain('add column if not exists workspace_id uuid');
     expect(normalized).toContain('add column if not exists folder_id uuid');
+    expect(normalized).toContain('add column if not exists provider_doc_contents_ensured_at timestamptz');
     expect(normalized).toContain('foreign key (session_id) references collab_sessions(id)');
     expect(normalized).not.toContain('constraint provider_token_issuances_session_fk foreign key (session_id) references collab_sessions(id) on delete cascade');
     expect(normalized).toContain('constraint provider_token_refreshes_session_id_fkey foreign key (session_id) references collab_sessions(id) on delete restrict not valid');
     expect(normalized).not.toContain('session_id text not null references collab_sessions(id) on delete cascade');
     expect(normalized).toContain('constraint provider_token_issuances_session_fk');
+    expect(normalized).toContain('create index if not exists provider_token_issuances_full_session_idx');
+    expect(normalized).toContain('create index if not exists provider_token_issuances_full_grant_idx');
+    expect(normalized).toContain('create index if not exists collab_sessions_active_guest_doc_idx');
+    expect(normalized).toContain('create index if not exists collab_sessions_active_direct_user_idx');
+    expect(normalized).toContain('create index if not exists document_branch_states_provider_autosave_idx');
     expect(normalized).not.toContain('references document_access_sessions(id)');
   });
 

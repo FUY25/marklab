@@ -5,173 +5,6 @@ import UniformTypeIdentifiers
 import WebKit
 import MarkLabMacOS
 
-@main
-struct MarkLabApp: App {
-  @NSApplicationDelegateAdaptor(MarkLabAppDelegate.self) private var appDelegate
-  private let launchFileURL = MarkLabLaunchFile.url(from: CommandLine.arguments)
-  private let updaterController = MarkLabSparkleUpdater.makeControllerIfConfigured()
-
-  var body: some Scene {
-    WindowGroup("MarkLab") {
-      MarkLabRootView(
-        model: MarkLabAppModel(
-          accountStore: NativeAccountStore.defaultStore(),
-          opensSelectedFilesInNewDocumentWindow: true
-        ),
-        launchFileURL: launchFileURL
-      )
-    }
-    .defaultSize(
-      width: MarkEditShellDescriptor.current.defaultWindowMetrics.width,
-      height: MarkEditShellDescriptor.current.defaultWindowMetrics.height
-    )
-    .commands {
-      MarkLabFileCommands()
-      MarkLabUpdateCommands(updater: updaterController?.updater)
-    }
-
-    Settings {
-      MarkLabSettingsView()
-    }
-  }
-}
-
-struct MarkLabFileCommands: Commands {
-  @FocusedValue(\.markEditShellActions) private var shellActions
-
-  var body: some Commands {
-    CommandGroup(replacing: .newItem) {
-      Button("Open...") {
-        shellActions?.open()
-      }
-      .keyboardShortcut("o", modifiers: .command)
-      .disabled(shellActions == nil)
-
-      Button("Open Shared Link...") {
-        shellActions?.openSharedLink()
-      }
-      .disabled(shellActions == nil)
-    }
-
-    CommandGroup(replacing: .saveItem) {
-      Button("Save") {
-        shellActions?.save()
-      }
-      .keyboardShortcut("s", modifiers: .command)
-      .disabled(shellActions?.canSave != true)
-    }
-  }
-}
-
-@MainActor
-final class MarkLabAppDelegate: NSObject, NSApplicationDelegate {
-  private var menuBarController: MarkLabMenuBarController?
-  private var cliRequestPump: NativeCLIShareRequestPump?
-  private var cliRequestTimer: Timer?
-
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    menuBarController = MarkLabMenuBarController()
-    MarkLabSharedSessionRestorer.restoreActiveSessions()
-    let cliRequestId = MarkLabCLIRequestLaunch.requestId(from: CommandLine.arguments)
-    let cliStore = FileNativeCLIShareRequestStore(appSupportDirectory: NativeAppSupportDirectory.url())
-    let cliProcessor = NativeCLIShareRequestProcessor(
-      store: cliStore,
-      shareService: NativeCLIShareAppService(
-        backgroundHost: .shared,
-        makeHostedShareController: MarkLabAppModel.makeHostedShareController(from:)
-      ) { hostedShareController, nativeBearerToken in
-        MarkLabAppModel(
-          hostedShareController: hostedShareController,
-          nativeBearerToken: nativeBearerToken,
-          accountStore: NativeAccountStore.defaultStore(),
-          opensSelectedFilesInNewDocumentWindow: false
-        )
-      }
-    )
-    cliRequestPump = NativeCLIShareRequestPump(store: cliStore, processor: cliProcessor)
-    startNativeCLIRequestPolling()
-    NSApp.setActivationPolicy(.regular)
-    if cliRequestId == nil {
-      NSApp.activate(ignoringOtherApps: true)
-    }
-
-    if cliRequestId != nil {
-      Task { @MainActor in
-        try? await cliRequestPump?.processPendingRequests()
-      }
-    }
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-      guard let launchFileURL = MarkLabLaunchFile.url(from: CommandLine.arguments) else { return }
-      guard !MarkLabLaunchFileCoordinator.isClaimed(launchFileURL) else { return }
-      if case .opened = MarkEditDocumentWindowCoordinator.shared.openDocumentWindow(fileURL: launchFileURL) {
-        _ = MarkLabLaunchFileCoordinator.claim(launchFileURL)
-      }
-    }
-  }
-
-  @MainActor
-  private func startNativeCLIRequestPolling() {
-    cliRequestTimer?.invalidate()
-    cliRequestTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-      Task { @MainActor in
-        do {
-          try await self?.cliRequestPump?.processPendingRequests()
-        } catch {
-          // Keep polling; individual failures are written as CLI response files by the processor.
-        }
-      }
-    }
-    cliRequestTimer?.tolerance = 0.25
-    Task { @MainActor in
-      try? await cliRequestPump?.processPendingRequests()
-    }
-  }
-
-}
-
-enum MarkLabLaunchFile {
-  private static let supportedMarkdownExtensions = Set(["md", "markdown", "mdown", "mkd"])
-
-  static func url(from arguments: [String]) -> URL? {
-    arguments.dropFirst().lazy.compactMap { argument -> URL? in
-      guard !argument.hasPrefix("-") else { return nil }
-      let url = URL(fileURLWithPath: argument)
-      guard supportedMarkdownExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-      return url
-    }.first
-  }
-}
-
-enum MarkLabCLIRequestLaunch {
-  static func requestId(from arguments: [String]) -> String? {
-    guard let flagIndex = arguments.firstIndex(of: "--marklab-cli-request") else { return nil }
-    let valueIndex = arguments.index(after: flagIndex)
-    guard valueIndex < arguments.endIndex else { return nil }
-    let value = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-    return value.isEmpty ? nil : value
-  }
-}
-
-@MainActor
-enum MarkLabLaunchFileCoordinator {
-  private static var claimedPath: String?
-
-  static func claim(_ url: URL) -> Bool {
-    guard claimedPath != url.path else { return false }
-    claimedPath = url.path
-    return true
-  }
-
-  static func isClaimed(_ url: URL) -> Bool {
-    claimedPath == url.path
-  }
-
-  static func resetForTesting() {
-    claimedPath = nil
-  }
-}
-
 struct PendingDiskIngestion: Equatable {
   let revision: Int
   let markdown: String
@@ -364,6 +197,7 @@ final class MarkLabAppModel: ObservableObject {
   private let accountTransport: NativeHTTPTransport
   private let hostedDefaults: NativeHostedDefaults
   private let beforeDiskIngestionReplace: (() -> Void)?
+  private let beforeSharedProjectionReplace: (() -> Void)?
   private let signInPrompt: @MainActor (URL, NativeSignInPromptReason) -> Void
   private let settingsDefaults: UserDefaults
   private var lastProjectedMarkdown: String?
@@ -390,6 +224,7 @@ final class MarkLabAppModel: ObservableObject {
     accountTransport: NativeHTTPTransport = URLSessionNativeHTTPTransport(),
     hostedDefaults: NativeHostedDefaults = .fromEnvironment(),
     beforeDiskIngestionReplace: (() -> Void)? = nil,
+    beforeSharedProjectionReplace: (() -> Void)? = nil,
     signInPrompt: @escaping @MainActor (URL, NativeSignInPromptReason) -> Void = MarkLabAppModel.defaultSignInPrompt,
     opensSelectedFilesInNewDocumentWindow: Bool = false,
     localAutosaveEnabled: Bool? = nil,
@@ -409,6 +244,7 @@ final class MarkLabAppModel: ObservableObject {
     self.hostedDefaults = hostedDefaults
     self.activeAccount = storedAccount
     self.beforeDiskIngestionReplace = beforeDiskIngestionReplace
+    self.beforeSharedProjectionReplace = beforeSharedProjectionReplace
     self.signInPrompt = signInPrompt
     self.settingsDefaults = settingsDefaults
     self.opensSelectedFilesInNewDocumentWindow = opensSelectedFilesInNewDocumentWindow
@@ -1741,7 +1577,22 @@ final class MarkLabAppModel: ObservableObject {
       ) ? .conflictOpened : .applied
     }
     currentDocument.replaceText(markdown)
-    try currentDocument.save()
+    let saved = try currentDocument.saveIfCurrentMarkdownMatches(
+      diskMarkdown,
+      beforeReplace: beforeSharedProjectionReplace
+    )
+    guard saved else {
+      let latestDiskMarkdown = (try? LocalMarkdownDocument.open(fileURL: currentDocument.fileURL, shared: true).markdownForSave())
+        ?? diskMarkdown
+      return setConflict(
+        MarkLabConflict(
+          localMarkdown: latestDiskMarkdown,
+          sharedMarkdown: markdown,
+          baselineMarkdown: lastProjectedMarkdown ?? diskMarkdown
+        ),
+        status: "Conflict: local file changed outside MarkLab while collaboration changed."
+      ) ? .conflictOpened : .applied
+    }
     document = currentDocument
     text = markdown
     try updateProjectionBaseline(currentDocument.markdownForSave(), fileURL: currentDocument.fileURL)
@@ -1784,6 +1635,13 @@ final class MarkLabAppModel: ObservableObject {
     } catch {
       statusText = "Unable to ingest local disk change."
     }
+  }
+
+  @discardableResult
+  func pollExternalFileChangesFromTimer() -> Bool {
+    guard fileWatcher == nil else { return false }
+    ingestExternalFileChanges()
+    return true
   }
 
   func keepSharedConflictVersion() {
@@ -2077,7 +1935,7 @@ final class MarkLabAppModel: ObservableObject {
     hostedShareController != nil
   }
 
-  fileprivate static func makeHostedShareController(from config: NativeCLIHostedConfig?) -> NativeHostedShareController? {
+  static func makeHostedShareController(from config: NativeCLIHostedConfig?) -> NativeHostedShareController? {
     if let config {
       guard
         let apiURL = URL(string: config.apiBaseURL),
@@ -2136,93 +1994,6 @@ final class MarkLabAppModel: ObservableObject {
         workspaceId: workspaceId
       )
     )
-  }
-}
-
-enum MarkLabNativeShareAutomationError: Error {
-  case conflictOpen
-  case missingHostedShareController
-  case missingFile
-  case missingSharedBinding
-}
-
-final class NativeCLIShareAppService: NativeCLIShareService {
-  private let fixedModel: MarkLabAppModel?
-  private let backgroundHost: MarkLabBackgroundSharedDocumentHost
-  private let makeHostedShareController: @MainActor (NativeCLIHostedConfig?) -> NativeHostedShareController?
-  private let makeModel: @MainActor (NativeHostedShareController?, String?) -> MarkLabAppModel
-  private var inFlightFileKeys: Set<String> = []
-
-  init(model: MarkLabAppModel, backgroundHost: MarkLabBackgroundSharedDocumentHost = .shared) {
-    fixedModel = model
-    self.backgroundHost = backgroundHost
-    makeHostedShareController = { _ in nil }
-    makeModel = { _, _ in model }
-  }
-
-  init(
-    backgroundHost: MarkLabBackgroundSharedDocumentHost = .shared,
-    makeHostedShareController: @escaping @MainActor (NativeCLIHostedConfig?) -> NativeHostedShareController? = MarkLabAppModel.makeHostedShareController(from:),
-    makeModel: @escaping @MainActor (NativeHostedShareController?, String?) -> MarkLabAppModel
-  ) {
-    fixedModel = nil
-    self.backgroundHost = backgroundHost
-    self.makeHostedShareController = makeHostedShareController
-    self.makeModel = makeModel
-  }
-
-  func createShareLink(for request: NativeCLIShareServiceRequest) async throws -> NativeCLIShareServiceResult {
-    let key = canonicalKey(request.fileURL)
-    while inFlightFileKeys.contains(key) {
-      try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-    inFlightFileKeys.insert(key)
-    defer { inFlightFileKeys.remove(key) }
-    let hostedShareController = makeHostedShareController(request.hostedConfig)
-    let nativeBearerToken = nativeBearerToken(from: request.hostedConfig, hostedShareController: hostedShareController)
-    let retainedModel = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL)
-    let model: MarkLabAppModel
-    if let fixedModel {
-      model = fixedModel
-    } else if request.hostedConfig != nil {
-      model = makeModel(hostedShareController, nativeBearerToken)
-    } else if retainedModel?.hasHostedShareController == true || hostedShareController == nil {
-      model = retainedModel ?? makeModel(nil, nil)
-    } else {
-      model = makeModel(hostedShareController, nativeBearerToken)
-    }
-    let result = try await model.createShareLinkForCLI(fileURL: request.fileURL, role: request.role)
-    backgroundHost.retain(model, fileURL: request.fileURL)
-    return result
-  }
-
-  func joinSharedDocument(for request: NativeCLIJoinServiceRequest) async throws -> NativeCLIJoinServiceResult {
-    let key = canonicalKey(request.fileURL)
-    while inFlightFileKeys.contains(key) {
-      try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-    inFlightFileKeys.insert(key)
-    defer { inFlightFileKeys.remove(key) }
-    let model = fixedModel ?? backgroundHost.retainedModel(fileURL: request.fileURL) ?? makeModel(nil, nil)
-    let link = try NativeSharedDocumentLink.parse(request.link)
-    try model.joinSharedDocument(link: link, localFileURL: request.fileURL)
-    backgroundHost.retain(model, fileURL: request.fileURL)
-    return NativeCLIJoinServiceResult(docId: link.docId, branchId: link.branchId, opened: false)
-  }
-
-  private func nativeBearerToken(
-    from config: NativeCLIHostedConfig?,
-    hostedShareController: NativeHostedShareController?
-  ) -> String? {
-    guard hostedShareController != nil else { return nil }
-    if let token = config?.bearerToken, !token.isEmpty {
-      return token
-    }
-    return ProcessInfo.processInfo.environment["MARKLAB_USER_TOKEN"]
-  }
-
-  private func canonicalKey(_ fileURL: URL) -> String {
-    fileURL.standardizedFileURL.path
   }
 }
 

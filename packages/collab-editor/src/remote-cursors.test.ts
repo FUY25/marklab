@@ -48,12 +48,6 @@ function createView(doc: string, extensions: Extension[] = []): EditorView {
   return view;
 }
 
-function nextOverlayRender(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve(), 0);
-  });
-}
-
 describe('remote cursor rendering', () => {
   it('sanitizes client-supplied awareness colors before using them as CSS', () => {
     expect(safeAwarenessColor('#2563eb', '#000000')).toBe('#2563eb');
@@ -69,6 +63,7 @@ describe('remote cursor rendering', () => {
 
     expect(summarizeRemoteCursors(states, 1)).toEqual([{
       clientId: 2,
+      userId: 'session_remote',
       name: 'Remote',
       color: '#dc2626',
       colorLight: '#fee2e2',
@@ -77,28 +72,40 @@ describe('remote cursor rendering', () => {
     }]);
   });
 
-  it('collapses duplicate same-name collaborator summaries to the freshest session', () => {
+  it('keeps same-name collaborator summaries separate when their awareness identities differ', () => {
     const states = new Map([
       [1, { user: { ...remoteUser, name: 'Local' } }],
-      [2, { user: { ...remoteUser, color: '#dc2626', colorLight: '#fee2e2' } }],
-      [3, { user: { ...remoteUser, color: '#0891b2', colorLight: '#cffafe' } }],
+      [2, { user: { ...remoteUser, id: 'session_guest_1', name: 'Guest', color: '#dc2626', colorLight: '#fee2e2' } }],
+      [3, { user: { ...remoteUser, id: 'session_guest_2', name: 'Guest', color: '#0891b2', colorLight: '#cffafe' } }],
     ]);
     const meta = new Map<number, AwarenessClientMeta>([
       [2, { clock: 8, lastUpdated: 1000 }],
       [3, { clock: 1, lastUpdated: 2000 }],
     ]);
 
-    expect(summarizeRemoteCursors(states, 1, { meta })).toEqual([{
-      clientId: 3,
-      name: 'Remote',
-      color: '#0891b2',
-      colorLight: '#cffafe',
-      kind: 'human',
-      clientKind: 'browser',
-    }]);
+    expect(summarizeRemoteCursors(states, 1, { meta })).toEqual([
+      {
+        clientId: 2,
+        userId: 'session_guest_1',
+        name: 'Guest',
+        color: '#dc2626',
+        colorLight: '#fee2e2',
+        kind: 'human',
+        clientKind: 'browser',
+      },
+      {
+        clientId: 3,
+        userId: 'session_guest_2',
+        name: 'Guest',
+        color: '#0891b2',
+        colorLight: '#cffafe',
+        kind: 'human',
+        clientKind: 'browser',
+      },
+    ]);
   });
 
-  it('collapses duplicate same-name collaborators across client kinds', () => {
+  it('collapses duplicate collaborator summaries only when their awareness identity matches', () => {
     const currentUser: MarkLabAwarenessUser = { ...remoteUser, clientKind: 'browser', color: '#0891b2', colorLight: '#cffafe' };
     const states = new Map<number, MarkLabAwarenessState>([
       [2, { user: remoteUserWithoutClientKind() }],
@@ -111,6 +118,7 @@ describe('remote cursor rendering', () => {
 
     expect(summarizeRemoteCursors(states, 1, { meta })).toEqual([{
       clientId: 3,
+      userId: 'session_remote',
       name: 'Remote',
       color: '#0891b2',
       colorLight: '#cffafe',
@@ -135,12 +143,14 @@ describe('remote cursor rendering', () => {
 
     expect(summaries).toEqual([{
       clientId: 2,
+      userId: 'remote',
       name: 'Guest',
       color: '#2563eb',
       colorLight: '#dbeafe',
       kind: 'human',
     }, {
       clientId: 3,
+      userId: 'session_remote',
       name: longName.slice(0, 80),
       color: '#dc2626',
       colorLight: '#fee2e2',
@@ -158,6 +168,7 @@ describe('remote cursor rendering', () => {
 
     expect(resolveRemoteCursorSelections(ytext, new Map([[42, remoteState]]), doc.clientID)).toEqual([{
       clientId: 42,
+      userId: 'session_remote',
       name: 'Remote',
       color: '#dc2626',
       colorLight: '#fee2e2',
@@ -187,6 +198,7 @@ describe('remote cursor rendering', () => {
       { meta },
     )).toEqual([{
       clientId: 2,
+      userId: 'session_remote',
       name: 'Remote',
       color: '#dc2626',
       colorLight: '#fee2e2',
@@ -195,6 +207,44 @@ describe('remote cursor rendering', () => {
       anchor: 5,
       head: 5,
     }]);
+  });
+
+  it('keeps same-name remote cursors separate when their awareness identities differ', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'Hello world');
+
+    expect(resolveRemoteCursorSelections(
+      ytext,
+      new Map([
+        [2, createCursorAwareness(ytext, { anchor: 2, head: 2 }, { ...remoteUser, id: 'guest_one', name: 'Guest' })],
+        [3, createCursorAwareness(ytext, { anchor: 9, head: 9 }, { ...remoteUser, id: 'guest_two', name: 'Guest' })],
+      ]),
+      1,
+    )).toEqual([
+      {
+        clientId: 2,
+        userId: 'guest_one',
+        name: 'Guest',
+        color: '#dc2626',
+        colorLight: '#fee2e2',
+        kind: 'human',
+        clientKind: 'browser',
+        anchor: 2,
+        head: 2,
+      },
+      {
+        clientId: 3,
+        userId: 'guest_two',
+        name: 'Guest',
+        color: '#dc2626',
+        colorLight: '#fee2e2',
+        kind: 'human',
+        clientKind: 'browser',
+        anchor: 9,
+        head: 9,
+      },
+    ]);
   });
 
   it('keeps the freshest cursor when duplicate same-name sessions use different client kinds', () => {
@@ -218,6 +268,7 @@ describe('remote cursor rendering', () => {
       { meta },
     )).toEqual([{
       clientId: 3,
+      userId: 'session_remote',
       name: 'Remote',
       color: '#dc2626',
       colorLight: '#fee2e2',
@@ -343,87 +394,6 @@ describe('remote cursor rendering', () => {
       expect(secondCaret).not.toBeNull();
       expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
       expect(secondCaret).toBe(firstCaret);
-    } finally {
-      localAwareness.destroy();
-      remoteAwareness.destroy();
-      localDoc.destroy();
-      remoteDoc.destroy();
-    }
-  });
-
-  it('can render persistent remote cursor labels in an overlay layer', async () => {
-    const localDoc = new Y.Doc();
-    const ytext = localDoc.getText('contents');
-    ytext.insert(0, 'Hello world');
-    const localAwareness = new Awareness(localDoc);
-    const remoteDoc = new Y.Doc();
-    const remoteAwareness = new Awareness(remoteDoc);
-    try {
-      const view = createView(ytext.toString(), [
-        createRemoteCursorExtension({
-          awareness: localAwareness,
-          ytext,
-          localClientId: localDoc.clientID,
-          labelMode: 'always',
-          labelRenderer: 'overlay',
-        }),
-      ]);
-      vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue({
-        x: 0,
-        y: 0,
-        left: 0,
-        top: 0,
-        right: 500,
-        bottom: 500,
-        width: 500,
-        height: 500,
-        toJSON: () => ({}),
-      });
-      vi.spyOn(view, 'coordsAtPos').mockReturnValue({
-        left: 120,
-        right: 122,
-        top: 80,
-        bottom: 99,
-      });
-
-      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 5, head: 5 }, remoteUser));
-      applyAwarenessUpdate(
-        localAwareness,
-        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
-        'test',
-      );
-
-      expect(view.coordsAtPos).not.toHaveBeenCalled();
-      expect(view.dom.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(0);
-      expect(view.dom.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
-      await nextOverlayRender();
-
-      const markers = view.dom.querySelectorAll('.cm-marklab-remote-cursor-overlay');
-      expect(markers).toHaveLength(1);
-      expect((markers[0] as HTMLElement | undefined)?.style.left).toBe('120px');
-      const labels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
-      expect(labels).toHaveLength(1);
-      expect(labels[0]?.textContent).toBe('Remote');
-      expect(view.dom.querySelectorAll('.cm-marklab-remote-cursor-caret-overlay')).toHaveLength(1);
-
-      vi.mocked(view.coordsAtPos).mockReturnValue({
-        left: 180,
-        right: 182,
-        top: 120,
-        bottom: 139,
-      });
-      remoteAwareness.setLocalState(createCursorAwareness(ytext, { anchor: 11, head: 11 }, remoteUser));
-      applyAwarenessUpdate(
-        localAwareness,
-        encodeAwarenessUpdate(remoteAwareness, [remoteDoc.clientID]),
-        'test',
-      );
-
-      await nextOverlayRender();
-      const movedLabels = view.dom.querySelectorAll('.cm-marklab-remote-cursor-label-overlay');
-      expect(movedLabels).toHaveLength(1);
-      const movedMarkers = view.dom.querySelectorAll('.cm-marklab-remote-cursor-overlay');
-      expect((movedMarkers[0] as HTMLElement | undefined)?.style.left).toBe('180px');
     } finally {
       localAwareness.destroy();
       remoteAwareness.destroy();

@@ -18,6 +18,7 @@ import {
   findActiveProviderTokenSession,
   lockProviderDocSeedScope,
   markCollabSessionFailed,
+  markProviderDocContentsEnsured,
   markProviderDocSeeded,
   markProviderTokenIssuanceStatus,
   markProviderTokenIssuanceIssuedIfSessionActive,
@@ -25,6 +26,7 @@ import {
   markProviderTokenRefreshIssued,
   providerTokenIssuanceCanIssue,
   providerTokenIssuanceDenyReason,
+  providerDocNeedsContentsEnsure,
   readProviderDocSeedStateForUpdate,
   recordCollabSession,
   recordProviderTokenIssuanceWithPolicy,
@@ -343,6 +345,7 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
   displayName: string;
   seedYjsState?: Uint8Array;
   ensureProviderContentsState?: boolean;
+  needsProviderContentsEnsure?: boolean;
   isGuestSession: boolean;
   enforceGuestQuota?: boolean;
   recheckBeforeMarkIssued?: () => Promise<void>;
@@ -381,6 +384,13 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
         sessionId: input.sessionId,
       }));
     }
+    const ensureProviderContentsState = input.ensureProviderContentsState
+      ? (input.needsProviderContentsEnsure ?? await providerDocNeedsContentsEnsure(pool, {
+        docId: input.docId,
+        branchId: input.branchId,
+        providerDocId: input.providerDocId,
+      }))
+      : false;
     const providerToken = await issueProviderTokenWithSeedLock(pool, {
       providerTokenService,
       docId: input.docId,
@@ -405,9 +415,16 @@ async function issueAuditedProviderToken(pool: DbPool, options: HttpAppOptions, 
           isGuest: input.isGuestSession,
         },
         ...(input.seedYjsState ? { seedYjsState: input.seedYjsState } : {}),
-        ...(input.ensureProviderContentsState ? { ensureProviderContentsState: true } : {}),
+        ...(ensureProviderContentsState ? { ensureProviderContentsState: true } : {}),
       },
     });
+    if (ensureProviderContentsState) {
+      await markProviderDocContentsEnsured(pool, {
+        docId: input.docId,
+        branchId: input.branchId,
+        providerDocId: input.providerDocId,
+      });
+    }
     const markedIssued = await markProviderTokenIssuanceIssuedIfSessionActive(pool, {
       issuanceId: issuance.issuanceId,
       docId: input.docId,
@@ -538,7 +555,10 @@ export function createCollabSessionRoutes(pool: DbPool, options: HttpAppOptions 
           ...(recheckBeforeMarkIssued ? { recheckBeforeMarkIssued } : {}),
           ...(providerDoc.needsSeed
             ? { seedYjsState: providerDoc.initialYjsState }
-            : { ensureProviderContentsState: true }),
+            : {
+              ensureProviderContentsState: true,
+              needsProviderContentsEnsure: providerDoc.needsContentsEnsure,
+            }),
         });
         providerToken = issued.providerToken;
       } catch (error) {

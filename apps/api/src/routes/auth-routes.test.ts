@@ -52,6 +52,7 @@ interface OidcStateRecord {
 }
 
 function createAuthPool(input: { expired?: boolean } = {}) {
+  const calls: Array<{ sql: string; params?: readonly unknown[] }> = [];
   const users: UserRecord[] = [];
   const sessions: SessionRecord[] = [];
   const oidcStates: OidcStateRecord[] = [];
@@ -59,6 +60,7 @@ function createAuthPool(input: { expired?: boolean } = {}) {
   let nextSessionId = 1;
 
   const query: DbPool['query'] = async <Row = unknown>(sql: string, params?: readonly unknown[]): Promise<DbQueryResult<Row>> => {
+    calls.push(params === undefined ? { sql } : { sql, params });
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 0 };
 
     if (sql.includes('insert into users')) {
@@ -154,6 +156,18 @@ function createAuthPool(input: { expired?: boolean } = {}) {
       return { rows: [], rowCount: session ? 1 : 0 };
     }
 
+    if (sql.includes('select distinct s.doc_id') && sql.includes('from collab_sessions s')) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (sql.includes('update collab_sessions')) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (sql.includes('update provider_token_issuances')) {
+      return { rows: [], rowCount: 0 };
+    }
+
     throw new Error(`unexpected_query:${sql}`);
   };
 
@@ -167,7 +181,7 @@ function createAuthPool(input: { expired?: boolean } = {}) {
     },
   };
 
-  return { pool, users, sessions, oidcStates };
+  return { pool, calls, users, sessions, oidcStates };
 }
 
 function setCookies(response: request.Response): string[] {
@@ -455,6 +469,35 @@ describe('auth routes', () => {
           displayName: 'Alice',
         },
       });
+  });
+
+  it('closes direct-user edit runtime access on logout', async () => {
+    process.env.MARKLAB_ENABLE_DEV_AUTH = 'true';
+    const { pool, calls, sessions } = createAuthPool();
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter());
+
+    const login = await request(app)
+      .post('/api/auth/dev-login')
+      .send({ email: 'alice@example.com', name: 'Alice' })
+      .expect(201);
+
+    await request(app)
+      .post('/api/auth/logout')
+      .set({ Authorization: `Bearer ${login.body.token}` })
+      .expect(204);
+
+    expect(sessions[0]?.revoked_at).toBe('2026-05-11T00:00:00.000Z');
+    expect(calls.some((call) =>
+      call.sql.includes('update collab_sessions')
+      && call.params?.[0] === 'user_1'
+      && call.params?.[1] === null,
+    )).toBe(true);
+    expect(calls.some((call) =>
+      call.sql.includes('update provider_token_issuances')
+      && call.params?.[0] === 'user_1'
+      && call.params?.[1] === null
+      && call.params?.[2] === 'user_logged_out',
+    )).toBe(true);
   });
 
   it('does not fall back to a cookie when an explicit user bearer token is stale', async () => {

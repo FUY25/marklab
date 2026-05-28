@@ -142,7 +142,7 @@ export function createYSweetSnapshotService(input: {
         yjsState: serialized.yjsState,
       };
     },
-    async applyMarkdownSnapshot({ docId, branchId, markdown }) {
+    async applyMarkdownSnapshot({ docId, branchId, markdown, expectedCurrentHash }) {
       const providerDocId = await readProviderDocId(docId, branchId);
       if (!providerDocId) throw new Error('collab_snapshot_unavailable');
       if (!manager.getDocAsUpdate) throw new Error('collab_snapshot_unavailable');
@@ -152,6 +152,10 @@ export function createYSweetSnapshotService(input: {
         yjsState = await manager.getDocAsUpdate(providerDocId);
       } catch {
         throw new Error('collab_snapshot_unavailable');
+      }
+      if (expectedCurrentHash) {
+        const current = await runtime.serializeYjsState(yjsState);
+        if (current.hash !== expectedCurrentHash) throw new Error('live_provider_snapshot_changed');
       }
       const update = encodeProviderContentsReplacementYjsUpdate(yjsState, markdown);
       if (update) await manager.updateDoc(providerDocId, update);

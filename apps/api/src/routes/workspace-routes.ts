@@ -1,6 +1,10 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { DbPool } from '../db/client';
+import {
+  closeDirectUserRuntimeAccess,
+  type RuntimeAccessConnectionClosers,
+} from '../services/runtime-access-revocation-service';
 import { authenticateRequestUser } from '../services/user-service';
 import {
   createWorkspace,
@@ -46,7 +50,7 @@ async function requireUser(pool: DbPool, req: Request) {
   return user;
 }
 
-export function createWorkspaceRoutes(pool: DbPool) {
+export function createWorkspaceRoutes(pool: DbPool, options: RuntimeAccessConnectionClosers = {}) {
   const router = Router();
 
   router.get('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
@@ -133,6 +137,13 @@ export function createWorkspaceRoutes(pool: DbPool) {
         targetUserId,
         role: body.role,
       });
+      if (body.role === 'Reader') {
+        await closeDirectUserRuntimeAccess(pool, options, {
+          userId: targetUserId,
+          workspaceId,
+          providerError: 'workspace_member_role_revoked',
+        });
+      }
       res.json({ member });
     } catch (error) {
       next(error);
@@ -145,6 +156,11 @@ export function createWorkspaceRoutes(pool: DbPool) {
       const workspaceId = requiredParam(req, 'workspaceId');
       const targetUserId = requiredParam(req, 'userId');
       await removeWorkspaceMember(pool, { workspaceId, actorUserId: user.userId, targetUserId });
+      await closeDirectUserRuntimeAccess(pool, options, {
+        userId: targetUserId,
+        workspaceId,
+        providerError: 'workspace_member_removed',
+      });
       res.status(204).end();
     } catch (error) {
       next(error);

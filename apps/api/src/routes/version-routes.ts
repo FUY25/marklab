@@ -269,6 +269,7 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
             docId,
             branchId,
             markdown: source.markdown,
+            expectedCurrentHash: liveSnapshot.hash,
           });
           providerRollbackApplied = true;
           applied = await restoreVersionToBranchState({
@@ -312,7 +313,11 @@ export function createVersionRoutes(pool: DbPool, liveWriter: LiveMarkdownWriter
           markdown: applied.canonicalMarkdown,
         });
       }
-      await options.applyCollabDocumentState?.(toRoomName(docId, branchId), applied.yjsState);
+      await options.applyCollabDocumentState?.(
+        toRoomName(docId, branchId),
+        applied.yjsState,
+        liveSnapshot ? { expectedCurrentHash: liveSnapshot.hash } : undefined,
+      );
       res.json({ versionId: applied.versionId, versionNumber: applied.versionNumber, hash: applied.hash });
     } catch (error) {
       next(error);

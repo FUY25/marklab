@@ -227,6 +227,9 @@ alter table document_branch_states
 alter table document_branch_states
   add column if not exists provider_doc_seeded_at timestamptz;
 
+alter table document_branch_states
+  add column if not exists provider_doc_contents_ensured_at timestamptz;
+
 alter table documents
   add column if not exists workspace_id uuid;
 
@@ -260,6 +263,11 @@ $$;
 create unique index if not exists document_branch_states_provider_doc_id_idx
   on document_branch_states (provider_doc_id)
   where provider_doc_id is not null;
+
+create index if not exists document_branch_states_provider_autosave_idx
+  on document_branch_states (updated_at, branch_id)
+  where provider_doc_id is not null
+    and provider_doc_seeded_at is not null;
 
 create table if not exists collab_sessions (
   id text primary key,
@@ -299,6 +307,20 @@ create index if not exists collab_sessions_doc_seen_idx
 create index if not exists collab_sessions_refresh_token_hash_idx
   on collab_sessions (refresh_token_hash)
   where refresh_token_hash is not null;
+
+create index if not exists collab_sessions_active_guest_doc_idx
+  on collab_sessions (doc_id, branch_id, last_seen_at desc)
+  where mode = 'edit'
+    and status = 'active'
+    and is_guest = true;
+
+create index if not exists collab_sessions_active_direct_user_idx
+  on collab_sessions (actor_id, doc_id, branch_id)
+  where actor_type = 'user'
+    and actor_grant_id is null
+    and mode = 'edit'
+    and role = 'edit'
+    and status = 'active';
 
 create table if not exists provider_token_issuances (
   id uuid primary key default gen_random_uuid(),
@@ -429,6 +451,17 @@ $$;
 
 create index if not exists provider_token_issuances_branch_issued_idx
   on provider_token_issuances (branch_id, issued_at desc);
+
+create index if not exists provider_token_issuances_full_session_idx
+  on provider_token_issuances (doc_id, branch_id, session_id, issued_at desc, id desc)
+  where "authorization" = 'full'
+    and status in ('pending', 'issued', 'revoked');
+
+create index if not exists provider_token_issuances_full_grant_idx
+  on provider_token_issuances (actor_grant_id, doc_id, branch_id)
+  where actor_grant_id is not null
+    and "authorization" = 'full'
+    and status in ('pending', 'issued');
 
 create table if not exists provider_token_refreshes (
   id uuid primary key default gen_random_uuid(),

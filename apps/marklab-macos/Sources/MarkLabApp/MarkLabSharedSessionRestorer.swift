@@ -10,10 +10,11 @@ enum MarkLabSharedSessionRestorer {
     fileManager: FileManager = .default
   ) {
     guard let bindings = try? bindingStore.loadAllBindings() else { return }
+    let baselines = (try? baselineStore.loadAllBaselines()) ?? [:]
     for binding in bindings where binding.syncEnabled {
       let fileURL = URL(fileURLWithPath: binding.filePath)
       guard fileManager.fileExists(atPath: fileURL.path) else { continue }
-      let baseline = try? baselineStore.loadBaseline(fileURL: fileURL)
+      let baseline = baselines[fileURL.path] ?? (try? baselineStore.loadBaseline(fileURL: fileURL))
       sessionManager.upsertSession(
         fileURL: fileURL,
         docId: binding.docId,

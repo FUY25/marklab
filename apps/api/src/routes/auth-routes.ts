@@ -5,6 +5,10 @@ import { OIDC_LOGIN_STATE_TTL_SECONDS } from '../config/provider-token-policy';
 import type { DbPool } from '../db/client';
 import { hashToken } from '../services/access-control';
 import {
+  closeDirectUserRuntimeAccess,
+  type RuntimeAccessConnectionClosers,
+} from '../services/runtime-access-revocation-service';
+import {
   USER_SESSION_COOKIE,
   authenticateRequestUser,
   createUserSession,
@@ -37,6 +41,8 @@ export interface AuthRouteOptions {
   cookieSecure?: boolean;
   oidcConfig?: OidcAuthConfig;
   oidcExchange?: OidcExchange;
+  closeCollabDocumentConnections?: RuntimeAccessConnectionClosers['closeCollabDocumentConnections'];
+  closeProviderDocConnections?: RuntimeAccessConnectionClosers['closeProviderDocConnections'];
 }
 
 const OIDC_STATE_COOKIE = 'marklab_oidc_state';
@@ -193,7 +199,15 @@ export function createAuthRoutes(pool: DbPool, options: AuthRouteOptions = {}) {
 
   router.post('/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await revokeUserSession(pool, userSessionToken(req));
+      const token = userSessionToken(req);
+      const user = await authenticateRequestUser(pool, req);
+      await revokeUserSession(pool, token);
+      if (user) {
+        await closeDirectUserRuntimeAccess(pool, options, {
+          userId: user.userId,
+          providerError: 'user_logged_out',
+        });
+      }
       res.setHeader('set-cookie', [clearSessionCookie(options), clearLegacyRootSessionCookie(options)]);
       res.status(204).end();
     } catch (error) {

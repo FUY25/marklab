@@ -9,6 +9,7 @@ export interface ProviderDocIdentity {
   providerDocId: string;
   created: boolean;
   needsSeed: boolean;
+  needsContentsEnsure: boolean;
   initialYjsState: Uint8Array;
 }
 
@@ -19,9 +20,10 @@ export async function ensureProviderDocId(pool: DbExecutor, input: {
   const existing = await pool.query<{
     provider_doc_id: string | null;
     provider_doc_seeded_at: Date | string | null;
+    provider_doc_contents_ensured_at: Date | string | null;
     yjs_state: Buffer | Uint8Array;
   }>(
-    `select s.provider_doc_id, s.provider_doc_seeded_at, s.yjs_state
+    `select s.provider_doc_id, s.provider_doc_seeded_at, s.provider_doc_contents_ensured_at, s.yjs_state
        from document_branch_states s
        join document_branches b
          on b.id = s.branch_id
@@ -38,6 +40,7 @@ export async function ensureProviderDocId(pool: DbExecutor, input: {
       providerDocId: existingRow.provider_doc_id,
       created: false,
       needsSeed: !existingRow.provider_doc_seeded_at,
+      needsContentsEnsure: !existingRow.provider_doc_contents_ensured_at,
       initialYjsState: new Uint8Array(existingRow.yjs_state),
     };
   }
@@ -46,6 +49,7 @@ export async function ensureProviderDocId(pool: DbExecutor, input: {
   const updated = await pool.query<{
     provider_doc_id: string;
     provider_doc_seeded_at: Date | string | null;
+    provider_doc_contents_ensured_at: Date | string | null;
     yjs_state: Buffer | Uint8Array;
   }>(
     `update document_branch_states s
@@ -60,7 +64,7 @@ export async function ensureProviderDocId(pool: DbExecutor, input: {
         and b.id = s.branch_id
         and b.doc_id = $2
         and b.is_archived = false
-      returning s.provider_doc_id, s.provider_doc_seeded_at, s.yjs_state`,
+      returning s.provider_doc_id, s.provider_doc_seeded_at, s.provider_doc_contents_ensured_at, s.yjs_state`,
     [input.branchId, input.docId, generated],
   );
 
@@ -70,6 +74,7 @@ export async function ensureProviderDocId(pool: DbExecutor, input: {
     providerDocId: row.provider_doc_id,
     created: row.provider_doc_id === generated,
     needsSeed: !row.provider_doc_seeded_at,
+    needsContentsEnsure: !row.provider_doc_contents_ensured_at,
     initialYjsState: new Uint8Array(row.yjs_state),
   };
 }
@@ -83,6 +88,7 @@ export async function markProviderDocSeeded(pool: DbExecutor, input: {
   const updated = await pool.query(
     `update document_branch_states s
         set provider_doc_seeded_at = now(),
+            provider_doc_contents_ensured_at = now(),
             updated_at = now()
        from document_branches b
       where s.branch_id = $1
@@ -92,6 +98,46 @@ export async function markProviderDocSeeded(pool: DbExecutor, input: {
         and s.provider_doc_id = $3
         and s.yjs_state = $4`,
     [input.branchId, input.docId, input.providerDocId, Buffer.from(input.seededYjsState)],
+  );
+  if ((updated.rowCount ?? 0) === 0) throw new Error('provider_doc_seed_stale');
+}
+
+export async function providerDocNeedsContentsEnsure(pool: DbExecutor, input: {
+  docId: string;
+  branchId: string;
+  providerDocId: string;
+}): Promise<boolean> {
+  const checked = await pool.query<{ provider_doc_contents_ensured_at: Date | string | null }>(
+    `select s.provider_doc_contents_ensured_at
+       from document_branch_states s
+       join document_branches b
+         on b.id = s.branch_id
+        and b.doc_id = $2
+        and b.is_archived = false
+      where s.branch_id = $1
+        and s.provider_doc_id = $3`,
+    [input.branchId, input.docId, input.providerDocId],
+  );
+  const row = checked.rows[0];
+  if (!row) throw new Error('provider_doc_seed_stale');
+  return !row.provider_doc_contents_ensured_at;
+}
+
+export async function markProviderDocContentsEnsured(pool: DbExecutor, input: {
+  docId: string;
+  branchId: string;
+  providerDocId: string;
+}): Promise<void> {
+  const updated = await pool.query(
+    `update document_branch_states s
+        set provider_doc_contents_ensured_at = now()
+       from document_branches b
+      where s.branch_id = $1
+        and b.id = s.branch_id
+        and b.doc_id = $2
+        and b.is_archived = false
+        and s.provider_doc_id = $3`,
+    [input.branchId, input.docId, input.providerDocId],
   );
   if ((updated.rowCount ?? 0) === 0) throw new Error('provider_doc_seed_stale');
 }

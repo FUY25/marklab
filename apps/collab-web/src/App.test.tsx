@@ -330,7 +330,6 @@ describe('App routing', () => {
       });
       expect(document.querySelector('.cm-marklab-remote-caret-label')).toBeNull();
       expect(document.querySelector('.cm-marklab-remote-caret-label-visible')).toBeNull();
-      expect(document.querySelector('.cm-marklab-remote-cursor-overlay')).toBeNull();
     } finally {
       remoteAwareness.destroy();
       remoteDoc.destroy();

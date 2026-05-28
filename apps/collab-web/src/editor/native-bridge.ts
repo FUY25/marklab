@@ -51,6 +51,49 @@ export function postNativeMarkdownSnapshot(markdown: string): boolean {
   return true;
 }
 
+export interface NativeMarkdownSnapshotScheduler {
+  schedule(): void;
+  flush(): void;
+  cancel(): void;
+}
+
+export function createNativeMarkdownSnapshotScheduler({
+  readMarkdown,
+  postSnapshot = postNativeMarkdownSnapshot,
+  requestFrame = (callback) => window.requestAnimationFrame(callback),
+  cancelFrame = (handle) => window.cancelAnimationFrame(handle),
+}: {
+  readMarkdown: () => string;
+  postSnapshot?: (markdown: string) => boolean;
+  requestFrame?: (callback: FrameRequestCallback) => number;
+  cancelFrame?: (handle: number) => void;
+}): NativeMarkdownSnapshotScheduler {
+  let scheduledFrame: number | null = null;
+
+  const flush = () => {
+    scheduledFrame = null;
+    postSnapshot(readMarkdown());
+  };
+
+  return {
+    schedule() {
+      if (scheduledFrame !== null) return;
+      scheduledFrame = requestFrame(flush);
+    },
+    flush() {
+      if (scheduledFrame !== null) {
+        cancelFrame(scheduledFrame);
+      }
+      flush();
+    },
+    cancel() {
+      if (scheduledFrame === null) return;
+      cancelFrame(scheduledFrame);
+      scheduledFrame = null;
+    },
+  };
+}
+
 export function postNativeSelectionStatus(status: string): boolean {
   const handler = window.webkit?.messageHandlers?.marklabNative;
   if (!handler) return false;

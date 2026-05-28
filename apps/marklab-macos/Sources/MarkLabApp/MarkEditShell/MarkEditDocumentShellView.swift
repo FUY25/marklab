@@ -214,7 +214,7 @@ struct MarkEditDocumentShellView: View {
         .inspectorColumnWidth(min: 340, ideal: 380, max: 520)
     }
     .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
-      model.ingestExternalFileChanges()
+      model.pollExternalFileChangesFromTimer()
     }
     .onDisappear {
       _ = try? model.flushLocalAutosave()

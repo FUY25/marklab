@@ -9,33 +9,9 @@ import {
   persistedEditSessionStorageKey,
   persistEditSession,
 } from './edit-session-storage';
-import type { ActiveEditSession } from '@marklab/collab-editor';
+import { activeEditSessionWireFixture } from '@marklab/collab-editor';
 
 const storageInput = { docId: 'doc_1', branchId: 'branch_1', token: 'share_token' };
-
-function activeSession(): ActiveEditSession {
-  return {
-    docId: 'doc_1',
-    branchId: 'branch_1',
-    sessionId: 'session_1',
-    refreshToken: 'refresh_secret',
-    providerToken: {
-      providerDocId: 'provider_doc_1',
-      sessionId: 'session_1',
-      authorization: 'full',
-      validForSeconds: 600,
-      issuedAt: '2026-05-11T00:00:00.000Z',
-      expiresAt: '2026-05-11T00:10:00.000Z',
-      clientToken: {
-        docId: 'provider_doc_1',
-        url: 'wss://provider.example/d/provider_doc_1/ws/provider_doc_1',
-        baseUrl: 'https://provider.example/d/provider_doc_1',
-        token: 'raw_ysweet_client_token',
-        authorization: 'full',
-      },
-    },
-  };
-}
 
 describe('edit session storage', () => {
   afterEach(() => {
@@ -44,7 +20,7 @@ describe('edit session storage', () => {
   });
 
   it('persists refresh metadata without the raw Y-Sweet client token', () => {
-    persistEditSession(storageInput, activeSession());
+    persistEditSession(storageInput, activeEditSessionWireFixture());
 
     const raw = localStorage.getItem(persistedEditSessionStorageKey(storageInput));
     expect(raw).toBeTruthy();
@@ -70,11 +46,11 @@ describe('edit session storage', () => {
       return Reflect.apply(originalSetItem, this, [key, value]);
     });
 
-    expect(() => persistEditSession(storageInput, activeSession())).not.toThrow();
+    expect(() => persistEditSession(storageInput, activeEditSessionWireFixture())).not.toThrow();
   });
 
   it('can read a stored session when storage is readable but no longer writable', () => {
-    persistEditSession(storageInput, activeSession());
+    persistEditSession(storageInput, activeEditSessionWireFixture());
     const originalSetItem = Storage.prototype.setItem;
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(this: Storage, key, value) {
       if (String(key).includes('storage-probe')) throw new DOMException('quota', 'QuotaExceededError');
@@ -97,12 +73,12 @@ describe('edit session storage', () => {
 
     expect(() => loadPersistedEditSession(storageInput)).not.toThrow();
     expect(loadPersistedEditSession(storageInput)).toBeNull();
-    expect(() => persistEditSession(storageInput, activeSession())).not.toThrow();
+    expect(() => persistEditSession(storageInput, activeEditSessionWireFixture())).not.toThrow();
     expect(() => clearPersistedEditSession(storageInput)).not.toThrow();
   });
 
   it('clears terminal edit sessions together with their IndexedDB provider cache', () => {
-    persistEditSession(storageInput, activeSession());
+    persistEditSession(storageInput, activeEditSessionWireFixture());
     const deletedIndexedDbNames: string[] = [];
 
     clearPersistedEditSessionAndCache(storageInput, {

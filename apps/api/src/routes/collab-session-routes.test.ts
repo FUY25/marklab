@@ -49,6 +49,7 @@ function createPool(input: {
   missingBranchState?: boolean;
   initialProviderDocId?: string | null;
   initialProviderDocSeededAt?: string | null;
+  providerDocContentsEnsuredAt?: string | null;
   providerDocSeededBeforeTokenIssue?: boolean;
   failSeedMarkOnce?: boolean;
 	  documentAccessGrantTokenHash?: string;
@@ -64,6 +65,7 @@ function createPool(input: {
 	  collabSessionTouches: readonly (readonly unknown[])[];
   collabSessionFailures: readonly (readonly unknown[])[];
 	  providerDocSeedMarks: readonly (readonly unknown[])[];
+	  providerDocContentsEnsureMarks: readonly (readonly unknown[])[];
 	  providerDocSeedReads: readonly (readonly unknown[])[];
 	  providerDocSeedLocks: readonly (readonly unknown[])[];
 	  issuances: readonly (readonly unknown[])[];
@@ -77,12 +79,16 @@ function createPool(input: {
   let providerDocSeededAt = providerDocId
     ? Object.hasOwn(input, 'initialProviderDocSeededAt') ? input.initialProviderDocSeededAt ?? null : '2026-05-11T00:00:00.000Z'
     : null;
+  let providerDocContentsEnsuredAt = providerDocId
+    ? Object.hasOwn(input, 'providerDocContentsEnsuredAt') ? input.providerDocContentsEnsuredAt ?? null : null
+    : null;
   let seedMarkFailuresRemaining = input.failSeedMarkOnce ? 1 : 0;
 	  const collabSessions: (readonly unknown[])[] = [];
 	  const documentAccessSessions: (readonly unknown[])[] = [];
 	  const collabSessionTouches: (readonly unknown[])[] = [];
   const collabSessionFailures: (readonly unknown[])[] = [];
 	  const providerDocSeedMarks: (readonly unknown[])[] = [];
+	  const providerDocContentsEnsureMarks: (readonly unknown[])[] = [];
 	  const providerDocSeedReads: (readonly unknown[])[] = [];
 	  const providerDocSeedLocks: (readonly unknown[])[] = [];
 	  const issuances: (readonly unknown[])[] = [];
@@ -116,13 +122,34 @@ function createPool(input: {
         throw new Error('seed_mark_failed');
       }
       providerDocSeededAt = '2026-05-11T00:00:00.000Z';
+      providerDocContentsEnsuredAt = '2026-05-11T00:00:00.000Z';
       providerDocSeedMarks.push(params ?? []);
+      return { rows: [], rowCount: 1 };
+    }
+    if (/select s\.provider_doc_contents_ensured_at/u.test(sql)) {
+      return {
+        rows: [{ provider_doc_contents_ensured_at: providerDocContentsEnsuredAt } as Row],
+        rowCount: 1,
+      };
+    }
+    if (/update document_branch_states[\s\S]+provider_doc_contents_ensured_at = now/u.test(sql)) {
+      providerDocContentsEnsuredAt = '2026-05-11T00:00:00.000Z';
+      providerDocContentsEnsureMarks.push(params ?? []);
       return { rows: [], rowCount: 1 };
     }
     if (/update document_branch_states/u.test(sql)) {
       providerDocId = String(params?.[2]);
       providerDocSeededAt = null;
-      return { rows: [{ provider_doc_id: providerDocId, provider_doc_seeded_at: providerDocSeededAt, yjs_state: Buffer.from([1, 2, 3]) } as Row], rowCount: 1 };
+      providerDocContentsEnsuredAt = null;
+      return {
+        rows: [{
+          provider_doc_id: providerDocId,
+          provider_doc_seeded_at: providerDocSeededAt,
+          provider_doc_contents_ensured_at: providerDocContentsEnsuredAt,
+          yjs_state: Buffer.from([1, 2, 3]),
+        } as Row],
+        rowCount: 1,
+      };
     }
 	    if (/insert into provider_token_issuances/u.test(sql)) {
 	      if (input.failAuditInsert) throw new Error('audit_insert_failed');
@@ -286,6 +313,7 @@ function createPool(input: {
           provider_doc_seeded_at: input.providerDocSeededBeforeTokenIssue
             ? '2026-05-11T00:00:00.000Z'
             : providerDocSeededAt,
+          provider_doc_contents_ensured_at: providerDocContentsEnsuredAt,
           yjs_state: Buffer.from([1, 2, 3]),
         } as Row],
         rowCount: 1,
@@ -296,6 +324,7 @@ function createPool(input: {
         rows: [{
           provider_doc_id: providerDocId,
           provider_doc_seeded_at: providerDocSeededAt,
+          provider_doc_contents_ensured_at: providerDocContentsEnsuredAt,
           yjs_state: Buffer.from([1, 2, 3]),
         } as Row],
         rowCount: 1,
@@ -324,6 +353,7 @@ function createPool(input: {
 	    collabSessionTouches,
     collabSessionFailures,
 	    providerDocSeedMarks,
+	    providerDocContentsEnsureMarks,
 	    providerDocSeedReads,
 	    providerDocSeedLocks,
 	    issuances,
@@ -1427,6 +1457,22 @@ describe('collab session routes', () => {
     expect(pool.collabSessionTouches[0]).toEqual(['session_server', 'doc_1', 'branch_1', 'guest', PROVIDER_TOKEN_TTL_SECONDS]);
     expect(pool.refreshAttempts[0]).toEqual(['session_server']);
     expect(pool.refreshIssued[0]).toEqual(['refresh_1', response.body.providerToken.expiresAt, 'issuance_1']);
+  });
+
+  it('skips provider contents normalization on refresh after the branch has an ensured marker', async () => {
+    const auth = createAuth();
+    const providerTokenService = createProviderTokenService();
+    const pool = createPool({ providerDocContentsEnsuredAt: '2026-05-11T00:00:00.000Z' });
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), { auth, providerTokenService });
+
+    await request(app)
+      .post('/api/docs/doc_1/branches/branch_1/collab/session/session_server/provider-token/refresh')
+      .send({ refreshToken: serverSessionRefreshToken, clientKind: 'guest' })
+      .expect(200);
+
+    expect(providerTokenService.issued).toHaveLength(1);
+    expect(providerTokenService.issued[0]).not.toMatchObject({ ensureProviderContentsState: true });
+    expect(pool.providerDocContentsEnsureMarks).toEqual([]);
   });
 
   it('refreshes an existing guest edit session even when the guest quota is full', async () => {

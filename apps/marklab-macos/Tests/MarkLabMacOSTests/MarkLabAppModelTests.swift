@@ -237,7 +237,7 @@ struct MarkLabAppModelTests {
     try Data("Active\n".utf8).write(to: activeFileURL)
     try Data("Stopped\n".utf8).write(to: stoppedFileURL)
     let bindingStore = InMemoryNativeSharedDocumentBindingStore()
-    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let baselineStore = CountingNativeProjectionBaselineStore()
     let sessionManager = NativeSharedDocumentSessionManager()
     let activeLink = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_active&branchId=branch_main&token=ml_access_active&mode=edit")
     let stoppedLink = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_stopped&branchId=branch_main&token=ml_access_stopped&mode=edit")
@@ -289,6 +289,8 @@ struct MarkLabAppModelTests {
     #expect(sessionManager.sessions.first?.status == .synced)
     #expect(sessionManager.sessions.first?.hasOpenWindow == false)
     #expect(sessionManager.sessions.first?.lastSyncAt != nil)
+    #expect(baselineStore.loadAllCalls == 1)
+    #expect(baselineStore.loadBaselineCalls == 0)
   }
 
   @MainActor
@@ -1034,6 +1036,72 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("shared projection does not overwrite disk writes that land during commit")
+  func sharedProjectionDoesNotOverwriteDiskRace() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "projection-race.md")
+    try Data("Base\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_projection_race","branchId":"branch_main","versionId":"ver_001","hash":"sha256:one"}"#, statusCode: 201)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: NativeSharedDocumentSessionManager(),
+      nativeBearerToken: "ml_user_session",
+      beforeSharedProjectionReplace: {
+        try? Data("External race\n".utf8).write(to: fileURL)
+      }
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+
+    let result = try model.projectSharedMarkdownImmediately("Remote\n")
+
+    #expect(result == .conflictOpened)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == "External race\n")
+    #expect(model.conflict?.localMarkdown == "External race\n")
+    #expect(model.conflict?.sharedMarkdown == "Remote\n")
+    #expect(model.statusText == "Conflict: local file changed outside MarkLab while collaboration changed.")
+  }
+
+  @MainActor
+  @Test("timer polling skips shared file ingestion while the file watcher is active")
+  func timerPollingSkipsWhenFileWatcherIsActive() throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "watcher.md")
+    try Data("Base\n".utf8).write(to: fileURL)
+    let binding = try NativeSharedDocumentLink.parse("https://app.example.test/collab?docId=doc_watch&branchId=branch_main&mode=edit")
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: fileURL,
+        link: binding,
+        appEditorURL: binding.appEditorURL(localDocId: NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)),
+        baselineMarkdown: "Base\n"
+      ),
+      fileURL: fileURL
+    )
+    let model = MarkLabAppModel(
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore
+    )
+
+    model.loadFile(fileURL)
+
+    #expect(model.pollExternalFileChangesFromTimer() == false)
+  }
+
+  @MainActor
   @Test("delete cloud copy aborts when pending shared projection opens a conflict")
   func deleteCloudCopyAbortsWhenProjectionOpensConflict() async throws {
     let directory = try TemporaryDirectory()
@@ -1689,5 +1757,29 @@ struct MarkLabAppModelTests {
     #expect(model.conflict?.localMarkdown == "External race\n")
     #expect(model.pendingDiskIngestion == nil)
     #expect(model.statusText == "Local file changed again. Review the updated conflict before resolving.")
+  }
+}
+
+private final class CountingNativeProjectionBaselineStore: NativeProjectionBaselineStore {
+  private var baselines: [String: NativeProjectionBaselineRecord] = [:]
+  private(set) var loadBaselineCalls = 0
+  private(set) var loadAllCalls = 0
+
+  func loadBaseline(fileURL: URL) throws -> NativeProjectionBaselineRecord? {
+    loadBaselineCalls += 1
+    return baselines[fileURL.path]
+  }
+
+  func loadAllBaselines() throws -> [String: NativeProjectionBaselineRecord] {
+    loadAllCalls += 1
+    return baselines
+  }
+
+  func saveBaseline(_ baseline: NativeProjectionBaselineRecord, fileURL: URL) throws {
+    baselines[fileURL.path] = baseline
+  }
+
+  func clearBaseline(fileURL: URL) throws {
+    baselines.removeValue(forKey: fileURL.path)
   }
 }
