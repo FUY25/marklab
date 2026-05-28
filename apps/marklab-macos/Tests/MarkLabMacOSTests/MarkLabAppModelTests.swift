@@ -338,6 +338,54 @@ struct MarkLabAppModelTests {
   }
 
   @MainActor
+  @Test("document windows reuse retained shared models instead of reloading the file")
+  func documentWindowOpeningReusesRetainedSharedModel() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "retained-window.md")
+    try Data("# Retained window\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_retained","branchId":"branch_main","versionId":"version_1","hash":"sha256:retained"}"#, statusCode: 201)
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let backgroundHost = MarkLabBackgroundSharedDocumentHost(createHiddenWindow: false)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      sessionManager: sessionManager,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    #expect(model.retainSharedDocumentForBackgroundIfNeeded(backgroundHost: backgroundHost))
+
+    var madeReplacementModel = false
+    let result = MarkEditDocumentWindowCoordinator.documentWindowModel(
+      fileURL: fileURL,
+      backgroundHost: backgroundHost
+    ) {
+      madeReplacementModel = true
+      return MarkLabAppModel()
+    }
+
+    guard case let .opened(openedModel) = result else {
+      Issue.record("Expected retained model to reopen")
+      return
+    }
+    #expect(openedModel === model)
+    #expect(!madeReplacementModel)
+    #expect(backgroundHost.retainedModel(fileURL: fileURL) == nil)
+    #expect(sessionManager.sessions.first?.hasOpenWindow == true)
+  }
+
+  @MainActor
   @Test("CLI share service retains a background shared-document model after creating a link")
   func cliShareServiceRetainsBackgroundModel() async throws {
     let directory = try TemporaryDirectory()
@@ -638,6 +686,46 @@ struct MarkLabAppModelTests {
 
     #expect(reopened.embeddedCollabURL == binding.appEditorURL)
     #expect(reopened.statusText == "Joined shared document doc_host.")
+  }
+
+  @MainActor
+  @Test("start sharing defers access-link history fetch until the sharing panel needs it")
+  func startSharingDefersAccessLinkHistoryFetch() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "lazy-links.md")
+    try Data("# Lazy links\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_lazy","branchId":"branch_main","versionId":"version_1","hash":"sha256:lazy"}"#, statusCode: 201)
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: InMemoryNativeSharedDocumentBindingStore(),
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    await model.startSharingAndConnect()
+    await Task.yield()
+
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
+      "POST /api/docs/import",
+    ])
+
+    transport.enqueue(json: #"{"grants":[{"grantId":"grant_lazy","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]}]}"#)
+    model.refreshManagedAccessLinksIfNeeded()
+    try await waitForRecordedRequests(transport, count: 2)
+
+    #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" }.suffix(1) == [
+      "GET /api/docs/doc_lazy/branches/branch_main/access-grants",
+    ])
+    #expect(model.managedAccessLinks.map(\.grantId) == ["grant_lazy"])
   }
 
   @MainActor
@@ -1133,7 +1221,6 @@ struct MarkLabAppModelTests {
     )
     let transport = RecordingHTTPTransport()
     transport.enqueue(json: #"{"grants":[{"grantId":"grant_old","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]},{"grantId":"grant_new","branchId":"branch_main","branchName":"main","role":"view","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:01:00.000Z","sessions":[]}]}"#)
-    transport.enqueue(json: #"{"grants":[{"grantId":"grant_old","branchId":"branch_main","branchName":"main","role":"edit","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:00:00.000Z","sessions":[]},{"grantId":"grant_new","branchId":"branch_main","branchName":"main","role":"view","expiresAt":null,"revokedAt":null,"createdAt":"2026-05-15T12:01:00.000Z","sessions":[]}]}"#)
     transport.enqueue(data: Data(), statusCode: 204)
     transport.enqueue(data: Data(), statusCode: 204)
     let model = MarkLabAppModel(
@@ -1271,6 +1358,14 @@ struct MarkLabAppModelTests {
     #expect(model.statusText == "Resumed sharing resume.md. Waiting to sync local file.")
     #expect(transport.requests.filter { $0.method == "POST" && $0.percentEncodedPath == "/api/docs/import" }.count == 1)
 
+    model.ingestExternalFileChanges()
+    #expect(model.pendingDiskIngestion == pending)
+
+    model.receiveSharedMarkdownSnapshot("Shared before stop\n")
+    #expect(model.conflict == nil)
+    #expect(model.text == "Local after stop\n")
+    #expect(try model.flushPendingSharedProjection() == .noPending)
+
     model.handleDiskIngestionBridgeResult(DiskIngestionBridgeResult(
       revision: pending.revision,
       ok: false,
@@ -1284,6 +1379,52 @@ struct MarkLabAppModelTests {
     #expect(model.pendingDiskIngestion == nil)
     #expect(sessionManager.sessions.first?.status == .synced)
     #expect(model.statusText == "Shared editor already matches local file.")
+  }
+
+  @MainActor
+  @Test("restarting sharing without local changes does not queue disk ingestion")
+  func restartSharingWithoutLocalChangesDoesNotQueueDiskIngestion() async throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "unchanged.md")
+    try Data("Shared before stop\n".utf8).write(to: fileURL)
+    let transport = RecordingHTTPTransport()
+    transport.enqueue(json: #"{"docId":"doc_unchanged","branchId":"branch_main","versionId":"version_1","hash":"sha256:unchanged"}"#, statusCode: 201)
+    transport.enqueue(json: #"{"grants":[]}"#)
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let baselineStore = InMemoryNativeProjectionBaselineStore()
+    let sessionManager = NativeSharedDocumentSessionManager()
+    let model = MarkLabAppModel(
+      hostedShareController: NativeHostedShareController(client: NativeControlPlaneShareClient(
+        apiBaseURL: URL(string: "https://api.example.test")!,
+        webBaseURL: URL(string: "https://app.example.test")!,
+        bearerToken: "ml_user_session",
+        workspaceId: "workspace_1",
+        transport: transport
+      )),
+      baselineStore: baselineStore,
+      conflictStore: NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory)),
+      sharedDocumentBindingStore: bindingStore,
+      sessionManager: sessionManager,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+    try await model.startSharingAndConnectThrowing()
+    await model.stopSharingAndReturnToLocalEditing()
+    model.loadFile(fileURL)
+
+    let resumed = try await model.startSharingAndConnectThrowing()
+
+    #expect(resumed.docId == "doc_unchanged")
+    #expect(model.pendingDiskIngestion == nil)
+    #expect(model.conflict == nil)
+    #expect(model.retainedCloudCopyAvailable == false)
+    #expect(try bindingStore.loadBinding(fileURL: fileURL)?.syncEnabled == true)
+    #expect(sessionManager.sessions.first?.status == .synced)
+    #expect(model.statusText == "Resumed sharing unchanged.md.")
+
+    model.receiveSharedMarkdownSnapshot("Shared before stop\n")
+    #expect(model.conflict == nil)
   }
 
   @MainActor
@@ -1326,6 +1467,50 @@ struct MarkLabAppModelTests {
     #expect(transport.requests.map { "\($0.method) \($0.percentEncodedPath)" } == [
       "GET /api/docs/doc_retained/branches/branch_main/versions",
     ])
+  }
+
+  @MainActor
+  @Test("reopening a shared file clears no-op persisted conflicts")
+  func reopeningSharedFileClearsNoopPersistedConflict() throws {
+    let directory = try TemporaryDirectory()
+    let fileURL = directory.url.appending(path: "noop-conflict.md")
+    try Data("Same content\n".utf8).write(to: fileURL)
+    let localDocId = NativeLocalDocumentIdentity.localDocId(fileURL: fileURL)
+    let bindingStore = InMemoryNativeSharedDocumentBindingStore()
+    let conflictStore = NativeConflictStore(directoryURL: directory.url.appending(path: "conflicts", directoryHint: .isDirectory))
+    let appEditorURL = try #require(URL(string: "https://app.example.test/collab?docId=doc_same&branchId=branch_main&mode=edit&clientKind=app&nativeShell=markedit&localDocId=\(localDocId)"))
+    try bindingStore.saveBinding(
+      NativeSharedDocumentBinding(
+        fileURL: fileURL,
+        document: NativeHostedDocument(docId: "doc_same", branchId: "branch_main", versionId: "version_1", hash: "sha256:same"),
+        appEditorURL: appEditorURL,
+        baselineMarkdown: "Same content\n"
+      ),
+      fileURL: fileURL
+    )
+    try conflictStore.save(
+      MarkLabConflict(
+        localMarkdown: "Same content\n",
+        sharedMarkdown: "Same content\n",
+        baselineMarkdown: "Same content\n",
+        sharedEditorURL: appEditorURL
+      ),
+      fileURL: fileURL
+    )
+    let model = MarkLabAppModel(
+      hostedShareController: nil,
+      baselineStore: InMemoryNativeProjectionBaselineStore(),
+      conflictStore: conflictStore,
+      sharedDocumentBindingStore: bindingStore,
+      nativeBearerToken: "ml_user_session"
+    )
+
+    model.loadFile(fileURL)
+
+    #expect(model.conflict == nil)
+    #expect(try conflictStore.load(fileURL: fileURL) == nil)
+    #expect(model.embeddedCollabURL == appEditorURL)
+    #expect(model.statusText == "Joined shared document doc_same. Waiting for shared content.")
   }
 
   @MainActor

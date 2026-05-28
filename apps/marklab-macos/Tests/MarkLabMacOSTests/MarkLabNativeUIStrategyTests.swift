@@ -229,12 +229,14 @@ struct MarkLabNativeUIStrategyTests {
     let command = MarkEditLocalEditorCommand(sequence: 1, action: .bold)
     let commandJavaScript = HostedCollabWebView.editorCommandJavaScriptForTesting(command)
     let readOnlyJavaScript = HostedCollabWebView.nativeEditableJavaScriptForTesting(false)
+    let request = HostedCollabWebView.navigationRequestForTesting(URL(string: "https://app.example.test/collab?docId=doc_1")!)
 
     #expect(commandJavaScript.contains("typeof window.__marklabRunEditorCommand === 'function'"))
     #expect(commandJavaScript.contains(#""bold""#))
     #expect(commandJavaScript.contains("=== true"))
     #expect(readOnlyJavaScript.contains("typeof window.__marklabSetNativeEditable === 'function'"))
     #expect(readOnlyJavaScript.contains("__marklabSetNativeEditable(false) === true"))
+    #expect(request.cachePolicy == .useProtocolCachePolicy)
   }
 
   @Test("native conflict review uses the main editor surface instead of the collaboration inspector")

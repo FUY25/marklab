@@ -528,6 +528,11 @@ final class MarkLabAppModel: ObservableObject {
     return true
   }
 
+  func attachSharedWindowIfNeeded() {
+    guard let fileURL = document?.fileURL, embeddedCollabURL != nil else { return }
+    sessionManager.attachWindow(fileURL: fileURL)
+  }
+
   var canResolveConflictThroughSharedEditor: Bool {
     guard let conflict else { return false }
     return embeddedCollabURL != nil || conflict.sharedEditorURL != nil
@@ -609,10 +614,7 @@ final class MarkLabAppModel: ObservableObject {
       if let sharedBinding {
         hostedShareController?.restoreSharedDocument(from: sharedBinding, suggestedFilename: url.lastPathComponent)
       }
-      latestLink = nil
-      latestGrantId = nil
-      managedAccessLinks = []
-      activeCollaborators = []
+      clearAccessAndPresenceState()
       clearVersionHistoryState()
       retainedCloudCopyAvailable = sharedBinding?.syncEnabled == false
       embeddedCollabURL = nil
@@ -620,7 +622,15 @@ final class MarkLabAppModel: ObservableObject {
       pendingSharedMarkdown = nil
       let storedBaseline = try? baselineStore.loadBaseline(fileURL: url)
       lastProjectedMarkdown = storedBaseline?.lastProjectedMarkdown ?? opened.markdownForSave()
-      if let persistedConflict = try? conflictStore.load(fileURL: url) {
+      let persistedConflict = try? conflictStore.load(fileURL: url)
+      let activePersistedConflict: MarkLabConflict?
+      if let persistedConflict, Self.markdownMatches(persistedConflict.localMarkdown, persistedConflict.sharedMarkdown) {
+        conflictStore.clear(fileURL: url)
+        activePersistedConflict = nil
+      } else {
+        activePersistedConflict = persistedConflict
+      }
+      if let persistedConflict = activePersistedConflict {
         let bindingURL = activeSharedBinding.flatMap { markEditNativeShellURLForCurrentAccount($0.appEditorURL) }
         let normalizedConflict = persistedConflict.withSharedEditorURL(
           markEditNativeShellURLForCurrentAccount(persistedConflict.sharedEditorURL) ?? bindingURL
@@ -641,9 +651,6 @@ final class MarkLabAppModel: ObservableObject {
         statusText = storedBaseline == nil
           ? "Joined shared document \(sharedBinding.docId). Waiting for shared content."
           : "Joined shared document \(sharedBinding.docId)."
-        Task {
-          await refreshManagedAccessLinksFromServer()
-        }
       } else if sharedBinding != nil {
         clearConflictState()
         retainedCloudCopyAvailable = true
@@ -655,7 +662,7 @@ final class MarkLabAppModel: ObservableObject {
         statusText = "Editing \(url.lastPathComponent)."
       }
       if embeddedCollabURL != nil {
-        sessionManager.attachWindow(fileURL: url)
+        attachSharedWindowIfNeeded()
       }
       startFileWatcher(for: url)
     } catch {
@@ -1083,7 +1090,6 @@ final class MarkLabAppModel: ObservableObject {
     }
     do {
       _ = try await startSharingAndConnectThrowing()
-      await refreshManagedAccessLinksFromServer()
     } catch {
       statusText = "Unable to start sharing."
     }
@@ -1115,10 +1121,7 @@ final class MarkLabAppModel: ObservableObject {
     )
     do {
       let shared = try await hostedShareController.startSharing(fileURL: fileURL)
-      latestLink = nil
-      latestGrantId = nil
-      managedAccessLinks = []
-      activeCollaborators = []
+      clearAccessAndPresenceState()
       clearVersionHistoryState()
       let rawAppEditorURL = try hostedShareController.appEditorURL()
       let appEditorURL = markEditNativeShellURLForCurrentAccount(rawAppEditorURL) ?? rawAppEditorURL
@@ -1160,6 +1163,7 @@ final class MarkLabAppModel: ObservableObject {
       ?? lastProjectedMarkdown
       ?? LocalMarkdownDocument.normalizeForSharedSave(text)
     let localMarkdown = try LocalMarkdownDocument.open(fileURL: fileURL, shared: true).markdownForSave()
+    let localChangedSinceStop = !Self.markdownMatches(localMarkdown, baselineMarkdown)
     hostedShareController.restoreSharedDocument(from: binding, suggestedFilename: fileURL.lastPathComponent)
     let rawAppEditorURL = try hostedShareController.appEditorURL()
     let appEditorURL = markEditNativeShellURLForCurrentAccount(rawAppEditorURL) ?? rawAppEditorURL
@@ -1170,28 +1174,32 @@ final class MarkLabAppModel: ObservableObject {
       hash: binding.baselineHash
     )
     try sharedDocumentBindingStore.saveBinding(binding.withSyncEnabled(true, appEditorURL: appEditorURL), fileURL: fileURL)
-    latestLink = nil
-    latestGrantId = nil
-    managedAccessLinks = []
-    activeCollaborators = []
+    clearAccessAndPresenceState()
     clearVersionHistoryState()
     retainedCloudCopyAvailable = false
     embeddedCollabURL = appEditorURL
-    diskIngestionRevision += 1
-    pendingDiskIngestion = PendingDiskIngestion(
-      revision: diskIngestionRevision,
-      markdown: localMarkdown,
-      baselineMarkdown: baselineMarkdown,
-      conflictOnFailure: nil
-    )
+    lastProjectedMarkdown = baselineMarkdown
+    if localChangedSinceStop {
+      diskIngestionRevision += 1
+      pendingDiskIngestion = PendingDiskIngestion(
+        revision: diskIngestionRevision,
+        markdown: localMarkdown,
+        baselineMarkdown: baselineMarkdown,
+        conflictOnFailure: nil
+      )
+    } else {
+      pendingDiskIngestion = nil
+    }
     registerSharedSession(
       fileURL: fileURL,
       docId: binding.docId,
       branchId: binding.branchId,
-      status: .syncing,
-      lastSyncAt: nil
+      status: localChangedSinceStop ? .syncing : .synced,
+      lastSyncAt: localChangedSinceStop ? nil : lastSyncDate(fileURL: fileURL)
     )
-    statusText = "Resumed sharing \(fileURL.lastPathComponent). Waiting to sync local file."
+    statusText = localChangedSinceStop
+      ? "Resumed sharing \(fileURL.lastPathComponent). Waiting to sync local file."
+      : "Resumed sharing \(fileURL.lastPathComponent)."
     return resumed
   }
 
@@ -1285,10 +1293,7 @@ final class MarkLabAppModel: ObservableObject {
     pendingDiskIngestion = nil
     embeddedCollabURL = nil
     retainedCloudCopyAvailable = true
-    latestLink = nil
-    latestGrantId = nil
-    managedAccessLinks = []
-    activeCollaborators = []
+    clearAccessAndPresenceState()
     clearVersionHistoryState()
     lastProjectedMarkdown = nil
 
@@ -1348,10 +1353,7 @@ final class MarkLabAppModel: ObservableObject {
     pendingDiskIngestion = nil
     embeddedCollabURL = nil
     retainedCloudCopyAvailable = false
-    latestLink = nil
-    latestGrantId = nil
-    managedAccessLinks = []
-    activeCollaborators = []
+    clearAccessAndPresenceState()
     clearVersionHistoryState()
     deleteCloudCopyConfirmation = ""
     lastProjectedMarkdown = nil
@@ -1435,6 +1437,20 @@ final class MarkLabAppModel: ObservableObject {
 
   private func removeManagedAccessLink(grantId: String) {
     managedAccessLinks.removeAll { $0.grantId == grantId }
+  }
+
+  private func clearAccessAndPresenceState() {
+    latestLink = nil
+    latestGrantId = nil
+    managedAccessLinks = []
+    activeCollaborators = []
+  }
+
+  func refreshManagedAccessLinksIfNeeded() {
+    guard hasSharedDocument, managedAccessLinks.isEmpty else { return }
+    Task {
+      await refreshManagedAccessLinksFromServer()
+    }
   }
 
   func refreshManagedAccessLinksFromServer() async {
@@ -1676,6 +1692,10 @@ final class MarkLabAppModel: ObservableObject {
       }
       return
     }
+    // Let the disk-ingestion bridge decide whether the provider changed while local markdown is being pushed.
+    if pendingDiskIngestion != nil {
+      return
+    }
     pendingSharedMarkdown = markdown
     text = markdown
     projectionTask?.cancel()
@@ -1711,15 +1731,14 @@ final class MarkLabAppModel: ObservableObject {
     if let lastProjectedMarkdown,
        diskMarkdown != lastProjectedMarkdown,
        diskMarkdown != markdown {
-      setConflict(
+      return setConflict(
         MarkLabConflict(
           localMarkdown: diskMarkdown,
           sharedMarkdown: markdown,
           baselineMarkdown: lastProjectedMarkdown
         ),
         status: "Conflict: local file changed outside MarkLab while collaboration changed."
-      )
-      return .conflictOpened
+      ) ? .conflictOpened : .applied
     }
     currentDocument.replaceText(markdown)
     try currentDocument.save()
@@ -1732,6 +1751,9 @@ final class MarkLabAppModel: ObservableObject {
 
   func ingestExternalFileChanges() {
     guard embeddedCollabURL != nil, let currentDocument = document, conflict == nil else { return }
+    guard pendingDiskIngestion == nil else {
+      return
+    }
     do {
       let diskDocument = try LocalMarkdownDocument.open(fileURL: currentDocument.fileURL, shared: true)
       let diskMarkdown = diskDocument.markdownForSave()
@@ -1939,7 +1961,19 @@ final class MarkLabAppModel: ObservableObject {
     }
   }
 
-  private func setConflict(_ nextConflict: MarkLabConflict, status: String) {
+  @discardableResult
+  private func setConflict(_ nextConflict: MarkLabConflict, status: String) -> Bool {
+    if Self.markdownMatches(nextConflict.localMarkdown, nextConflict.sharedMarkdown) {
+      clearConflictState()
+      text = nextConflict.sharedMarkdown
+      if let fileURL = document?.fileURL {
+        try? updateProjectionBaseline(nextConflict.sharedMarkdown, fileURL: fileURL)
+      } else {
+        lastProjectedMarkdown = nextConflict.sharedMarkdown
+      }
+      statusText = "Shared editor already matches local file."
+      return false
+    }
     let persistedConflict = nextConflict.withSharedEditorURL(storableConflictSharedEditorURL(embeddedCollabURL))
     conflict = persistedConflict
     resolvedConflictMarkdown = ""
@@ -1949,6 +1983,11 @@ final class MarkLabAppModel: ObservableObject {
       sessionManager.markStatus(fileURL: fileURL, .conflict)
     }
     statusText = status
+    return true
+  }
+
+  private static func markdownMatches(_ left: String, _ right: String) -> Bool {
+    LocalMarkdownDocument.normalizeForSharedSave(left) == LocalMarkdownDocument.normalizeForSharedSave(right)
   }
 
   private func storableConflictSharedEditorURL(_ url: URL?) -> URL? {
@@ -2260,7 +2299,7 @@ struct HostedCollabWebView: NSViewRepresentable {
     context.coordinator.expectedURL = url
     context.coordinator.expectedOrigin = NativeHostedWebViewOrigin(url: url)
     if !HostedCollabWebView.sameNavigationURL(webView.url, url) {
-      webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+      webView.load(HostedCollabWebView.navigationRequest(url))
     }
     if let diskIngestion,
        context.coordinator.lastAppliedDiskIngestionRevision != diskIngestion.revision {
@@ -2336,6 +2375,14 @@ struct HostedCollabWebView: NSViewRepresentable {
 
   static func authFetchUserScriptForTesting(_ bearerToken: String) -> String {
     authFetchUserScript(bearerToken)
+  }
+
+  static func navigationRequestForTesting(_ url: URL) -> URLRequest {
+    navigationRequest(url)
+  }
+
+  fileprivate static func navigationRequest(_ url: URL) -> URLRequest {
+    URLRequest(url: url, cachePolicy: .useProtocolCachePolicy)
   }
 
   fileprivate static func editorCommandJavaScript(_ command: MarkEditLocalEditorCommand) -> String {

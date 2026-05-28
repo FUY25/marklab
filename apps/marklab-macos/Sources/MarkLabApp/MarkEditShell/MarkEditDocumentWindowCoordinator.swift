@@ -14,13 +14,13 @@ final class MarkEditDocumentWindowCoordinator {
 
   @discardableResult
   func openDocumentWindow(fileURL: URL) -> MarkEditDocumentWindowOpenResult {
-    let model = MarkLabAppModel(
-      accountStore: NativeAccountStore.defaultStore(),
-      opensSelectedFilesInNewDocumentWindow: false
-    )
-    model.loadFile(fileURL)
-    guard model.filePath != nil else { return .failed(statusText: model.statusText) }
-    MarkLabBackgroundSharedDocumentHost.shared.release(fileURL: fileURL)
+    let model: MarkLabAppModel
+    switch Self.documentWindowModel(fileURL: fileURL, backgroundHost: .shared) {
+    case let .opened(openedModel):
+      model = openedModel
+    case let .failed(statusText):
+      return .failed(statusText: statusText)
+    }
     let controller = MarkEditDocumentWindowController(model: model) { [weak self] controller in
       self?.controllers[ObjectIdentifier(controller)] = nil
     }
@@ -29,10 +29,36 @@ final class MarkEditDocumentWindowCoordinator {
     NSApp.activate(ignoringOtherApps: true)
     return .opened
   }
+
+  static func documentWindowModel(
+    fileURL: URL,
+    backgroundHost: MarkLabBackgroundSharedDocumentHost = .shared,
+    makeModel: () -> MarkLabAppModel = {
+      MarkLabAppModel(
+        accountStore: NativeAccountStore.defaultStore(),
+        opensSelectedFilesInNewDocumentWindow: false
+      )
+    }
+  ) -> MarkEditDocumentWindowModelResult {
+    if let retainedModel = backgroundHost.retainedModel(fileURL: fileURL) {
+      backgroundHost.release(fileURL: fileURL)
+      retainedModel.attachSharedWindowIfNeeded()
+      return .opened(retainedModel)
+    }
+    let model = makeModel()
+    model.loadFile(fileURL)
+    guard model.filePath != nil else { return .failed(statusText: model.statusText) }
+    return .opened(model)
+  }
 }
 
 enum MarkEditDocumentWindowOpenResult: Equatable {
   case opened
+  case failed(statusText: String)
+}
+
+enum MarkEditDocumentWindowModelResult {
+  case opened(MarkLabAppModel)
   case failed(statusText: String)
 }
 

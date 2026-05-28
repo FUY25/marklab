@@ -552,6 +552,9 @@ struct MarkEditDocumentShellView: View {
         }
       }
     }
+    .onAppear {
+      model.refreshManagedAccessLinksIfNeeded()
+    }
   }
 
   private var versionsInspectorContent: some View {
