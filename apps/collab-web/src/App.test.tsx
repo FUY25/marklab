@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ySweetClient from '@y-sweet/client';
-import { createCursorAwareness, type MarkLabAwarenessUser } from '@marklab/collab-editor';
+import { createCursorAwareness, remoteCursorLabelVisibleMs, type MarkLabAwarenessUser } from '@marklab/collab-editor';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { App, collabClientKindFromParam, collabNativeShellFromParam } from './App';
@@ -290,7 +290,7 @@ describe('App routing', () => {
     });
   });
 
-  it('renders native remote cursors through inline CodeMirror widgets', async () => {
+  it('renders native remote cursors through inline CodeMirror widgets with transient labels', async () => {
     window.__marklabNativeApp = true;
     window.history.pushState({}, '', '/?mode=edit&docId=doc_1&branchId=branch_1&clientKind=app&nativeShell=markedit');
     vi.stubGlobal('fetch', vi.fn(async () => nativeHostedEditSessionResponse()));
@@ -328,6 +328,14 @@ describe('App routing', () => {
       expect(document.querySelector('.cm-marklab-remote-caret-label')?.textContent).toBe('Guest');
       expect(document.querySelector('.cm-marklab-remote-caret-label-visible')).toBeTruthy();
       expect(document.querySelector('.cm-marklab-remote-cursor-overlay')).toBeNull();
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, remoteCursorLabelVisibleMs + 20);
+      });
+
+      expect(document.querySelectorAll('.cm-marklab-remote-caret')).toHaveLength(1);
+      expect(document.querySelector('.cm-marklab-remote-caret-label')).not.toBeNull();
+      expect(document.querySelector('.cm-marklab-remote-caret-label-visible')).toBeNull();
     } finally {
       remoteAwareness.destroy();
       remoteDoc.destroy();
