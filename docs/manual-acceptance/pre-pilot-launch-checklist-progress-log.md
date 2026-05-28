@@ -50,7 +50,7 @@ Do not launch paid or broader public distribution until Gate 10.5 proves the app
 | 9 | Small external pilot | Not started | TBD | |
 | 9.5 | Post-pilot active-code simplification | Deferred | TBD | Wait for real pilot findings. |
 | 10 | Brand, website, and video | Not started | TBD | |
-| 10.5 | Signed distribution and update pipeline | Deferred | TBD | Not required for the small controlled pilot. Required before broader beta/public or paid launch; covers Developer ID signing/notarization, release artifacts, manual update instructions, and later auto-update/appcast. |
+| 10.5 | Signed distribution and update pipeline | In progress | TBD | Sparkle/appcast plumbing is implemented, but the gate is not passed. Evidence is recorded in [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md). Remaining blockers: real EdDSA key/feed host, signed appcast smoke, old-to-new update preservation test, Developer ID signing/notarization or explicitly bounded beta workaround, and rollback test. |
 | 11 | Paid billing and pricing launch | Deferred | TBD | Not required for small free pilot. Must wait for Gate 4 unit economics and Gate 10.5 distribution/update readiness. |
 
 ## Gate 0 - Release Candidate Freeze
@@ -739,11 +739,11 @@ Checklist:
 
 - [ ] Decide update channel:
   - [ ] manual versioned zip replacement for alpha;
-  - [ ] Sparkle appcast or equivalent in-app updater;
+  - [x] Sparkle appcast or equivalent in-app updater;
   - [ ] Homebrew cask as an optional install channel.
 - [ ] Implement Developer ID signing.
 - [ ] Implement notarization.
-- [ ] Produce versioned release artifacts with checksum and release notes.
+- [x] Produce versioned release artifacts with checksum and release notes.
 - [ ] Verify old app to new app update preserves:
   - [ ] local files;
   - [ ] stored owner account;
@@ -760,6 +760,7 @@ Progress log:
 | Date | Update | Evidence | Next |
 | --- | --- | --- | --- |
 | 2026-05-23 | Gate added by product decision. App update pipeline is not part of Gate 6 and is not required before the controlled small pilot manual test. Gate 5 remains clean install only and explicitly does not claim paid/public distribution or auto-update semantics. | User decision; [`gate5-controlled-pilot-install.md`](./gate5-controlled-pilot-install.md) limitations. | Keep small pilot on manual replace-app updates; revisit after Gate 9 evidence before broader beta/public or paid launch. |
+| 2026-05-28 | Gate 10.5 started early because pilot update delivery became product support risk. Sparkle 2.9.2 was added to the native app, the packaged app now embeds `Sparkle.framework`, `Check for Updates...` appears only when `SUFeedURL` and `SUPublicEDKey` are configured, and `package:update` can create versioned zip/release-notes/manifest artifacts and call Sparkle `generate_appcast` when an EdDSA private key is available. | [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md); `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`; `package:app`; `verify:package`; dry-run `package-update.mjs --skip-build --skip-appcast` with dummy public key; dry-run packaged-app verification returned `sparkleLinked: true` and `sparkleUpdatesConfigured: true`. | Generate real Sparkle EdDSA keypair, choose update host/appcast URL, run signed appcast generation, and perform old-to-new update preservation smoke. |
 
 Exit criteria:
 
@@ -858,6 +859,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-Start Gate 9 small external pilot planning.
+Continue Gate 10.5 update-pipeline hardening, then run the targeted shared-file startup performance pass.
 
-Next acceptance row: pick the first 3-10 pilot users, confirm install/login/support readiness for each, define the small-pilot success metric, and collect first pilot bugs plus usage/cost data.
+Next acceptance row: generate the real Sparkle EdDSA keypair, choose the update host/appcast URL, run signed appcast generation without `--skip-appcast`, and install/update from an older Sparkle-enabled app to a newer build while checking account/workspace/shared-binding preservation.

@@ -101,6 +101,36 @@ struct MarkLabNativeUIStrategyTests {
     #expect(model.shouldOpenSelectedFileInNewDocumentWindow)
   }
 
+  @Test("empty editor state exposes a clickable Markdown opener")
+  @MainActor
+  func emptyStateExposesClickableMarkdownOpener() {
+    #expect(MarkEditDocumentShellView.openMarkdownButtonTitle == "Open a Markdown file")
+    #expect(MarkLabAppModel.markdownOpenFileExtensionsForTesting == ["md", "markdown", "mdown"])
+  }
+
+  @Test("Sparkle updater only starts with HTTPS feed URL and EdDSA public key")
+  func sparkleUpdaterRequiresFeedAndPublicKey() {
+    #expect(MarkLabSparkleUpdater.checkForUpdatesTitle == "Check for Updates...")
+    #expect(
+      MarkLabSparkleUpdater.isConfigured(
+        feedURL: "https://updates.example.com/appcast.xml",
+        publicEDKey: "base64-public-key"
+      )
+    )
+    #expect(
+      !MarkLabSparkleUpdater.isConfigured(
+        feedURL: "http://updates.example.com/appcast.xml",
+        publicEDKey: "base64-public-key"
+      )
+    )
+    #expect(
+      !MarkLabSparkleUpdater.isConfigured(
+        feedURL: "https://updates.example.com/appcast.xml",
+        publicEDKey: ""
+      )
+    )
+  }
+
   @Test("loaded document models open additional files in separate document windows")
   @MainActor
   func loadedDocumentModelsKeepOpenAsNewDocumentWindow() throws {

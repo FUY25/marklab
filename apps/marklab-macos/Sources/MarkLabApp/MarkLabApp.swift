@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 import MarkLabMacOS
 
@@ -8,6 +9,7 @@ import MarkLabMacOS
 struct MarkLabApp: App {
   @NSApplicationDelegateAdaptor(MarkLabAppDelegate.self) private var appDelegate
   private let launchFileURL = MarkLabLaunchFile.url(from: CommandLine.arguments)
+  private let updaterController = MarkLabSparkleUpdater.makeControllerIfConfigured()
 
   var body: some Scene {
     WindowGroup("MarkLab") {
@@ -25,6 +27,7 @@ struct MarkLabApp: App {
     )
     .commands {
       MarkLabFileCommands()
+      MarkLabUpdateCommands(updater: updaterController?.updater)
     }
 
     Settings {
@@ -341,6 +344,12 @@ final class MarkLabAppModel: ObservableObject {
   @Published var isLoadingVersions = false
   @Published var restoreVersionConfirmation = ""
   @Published var deleteCloudCopyConfirmation = ""
+
+  static let markdownOpenFileExtensionsForTesting = ["md", "markdown", "mdown"]
+  private static let markdownOpenContentTypes: [UTType] = {
+    let markdownTypes = markdownOpenFileExtensionsForTesting.compactMap { UTType(filenameExtension: $0) }
+    return markdownTypes.isEmpty ? [.plainText] : markdownTypes
+  }()
   @Published var retainedCloudCopyAvailable = false
   @Published private(set) var activeAccount: NativeStoredAccount?
 
@@ -568,7 +577,7 @@ final class MarkLabAppModel: ObservableObject {
 
   func openFile() {
     let panel = NSOpenPanel()
-    panel.allowedContentTypes = [.plainText]
+    panel.allowedContentTypes = Self.markdownOpenContentTypes
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }

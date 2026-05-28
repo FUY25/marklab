@@ -9,6 +9,7 @@ const executable = resolve(appPath, 'Contents/MacOS/MarkLabApp');
 const infoPlist = resolve(appPath, 'Contents/Info.plist');
 const resourceBundle = resolve(appPath, 'Contents/Resources/MarkLabMacOS_MarkLabApp.bundle');
 const appIcon = resolve(appPath, 'Contents/Resources/MarkLab.icns');
+const sparkleFramework = resolve(appPath, 'Contents/Frameworks/Sparkle.framework');
 
 function fail(message) {
   console.error(message);
@@ -68,6 +69,7 @@ if (!existsSync(appPath)) fail(`missing app bundle: ${appPath}`);
 if (!existsSync(executable)) fail(`missing executable: ${executable}`);
 if (!existsSync(infoPlist)) fail(`missing Info.plist: ${infoPlist}`);
 if (!existsSync(appIcon)) fail(`missing app icon: ${appIcon}`);
+if (!existsSync(sparkleFramework)) fail(`missing Sparkle framework: ${sparkleFramework}`);
 if (!existsSync(resolve(resourceBundle, 'index.html'))) fail('missing bundled editor index.html');
 if (!existsSync(resolve(resourceBundle, 'local-editor.js'))) fail('missing bundled editor local-editor.js');
 
@@ -76,6 +78,15 @@ if (plistValue('CFBundleExecutable') !== 'MarkLabApp') fail('unexpected CFBundle
 if (plistValue('CFBundleIconFile') !== 'MarkLab') fail('unexpected CFBundleIconFile');
 const scheme = plistValue('CFBundleURLTypes:0:CFBundleURLSchemes:0');
 if (scheme !== 'marklab') fail('marklab:// URL scheme is not registered');
+const sparkleFeedURL = plistValue('SUFeedURL');
+const sparklePublicEDKey = plistValue('SUPublicEDKey');
+if (Boolean(sparkleFeedURL) !== Boolean(sparklePublicEDKey)) fail('Sparkle feed URL and public EdDSA key must be present together');
+if (sparkleFeedURL && !sparkleFeedURL.startsWith('https://')) fail('Sparkle feed URL must use HTTPS');
+
+const linkedLibraries = execFileSync('otool', ['-L', executable], { encoding: 'utf8' });
+if (!linkedLibraries.includes('@rpath/Sparkle.framework/Versions/B/Sparkle')) {
+  fail('MarkLabApp is not linked against Sparkle.framework');
+}
 
 const codeSign = spawnSync('codesign', ['--verify', '--deep', '--strict', appPath], {
   encoding: 'utf8',
@@ -117,6 +128,10 @@ console.log(JSON.stringify({
   urlScheme: scheme,
   executable,
   icon: appIcon,
+  sparkleFramework,
+  sparkleLinked: true,
+  sparkleUpdatesConfigured: Boolean(sparkleFeedURL),
+  sparkleFeedURL,
   codeSignaturePresent: true,
   iconAlphaVerified: true,
   signingMode: signingModeFor(signature),

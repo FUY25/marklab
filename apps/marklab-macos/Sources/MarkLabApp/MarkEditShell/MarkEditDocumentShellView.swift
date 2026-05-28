@@ -51,6 +51,7 @@ enum MarkEditSharingVersionsInspectorMode: String, CaseIterable, Identifiable {
 // Copyright (c) 2023 MarkEdit.app.
 
 struct MarkEditDocumentShellView: View {
+  static let openMarkdownButtonTitle = "Open a Markdown file"
   static let sharingAndVersionsLabel = "Sharing & Versions"
   static let showSharingAndVersionsLabel = "Show Sharing & Versions"
   static let cloudCopySectionTitle = "Cloud Copy"
@@ -238,10 +239,17 @@ struct MarkEditDocumentShellView: View {
       }
 
       if model.filePath == nil && model.conflict == nil {
-        Text("Open a Markdown file")
-          .foregroundStyle(.secondary)
-          .padding(12)
-          .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        Button {
+          model.openFile()
+        } label: {
+          Label(Self.openMarkdownButtonTitle, systemImage: "doc.text")
+            .foregroundStyle(.secondary)
+            .padding(12)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help(Self.openMarkdownButtonTitle)
+        .accessibilityLabel(Self.openMarkdownButtonTitle)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
