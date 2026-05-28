@@ -2,7 +2,21 @@
 
 Date: 2026-05-28
 
-Status: in progress. Sparkle/appcast plumbing is implemented, but Gate 10.5 is not passed.
+Status: paused after plumbing. Sparkle/appcast code support is implemented, but update signing and live appcast publishing are intentionally not active yet.
+
+Product decision:
+
+- Use the bounded-beta path for now: ad-hoc signed app builds plus a scoped Gatekeeper workaround remain acceptable for named pilot users.
+- Do not generate or commit a Sparkle private signing key yet.
+- Do not put any Sparkle private key in the repo. The public EdDSA key can be recorded once generated because it is embedded in the app for verification, but the private key is release authority and must live in a controlled keychain, CI secret, or secret manager.
+- A GitHub Pages update host can be connected first as a public-but-unlisted feed location, but the app must not advertise auto-update as working until the real signed appcast smoke passes.
+
+Candidate update host:
+
+- Feed URL: `https://fuy25.github.io/marklab-updates/appcast.xml`
+- Download URL prefix: `https://fuy25.github.io/marklab-updates`
+
+This host is suitable for bounded beta if the update artifacts being public-but-unlisted is acceptable. It is not a private distribution channel.
 
 ## Implemented
 
@@ -84,8 +98,12 @@ npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:update -- \
 
 ## Remaining To Close Gate 10.5
 
-- Generate the real Sparkle EdDSA keypair and keep the private key out of the repo.
-- Pick the update host and stable appcast URL.
+- Create/connect the GitHub Pages update host, or choose another stable HTTPS host.
+- Decide the shared release-key custody model before generating a real Sparkle EdDSA keypair:
+  - a release manager's macOS Keychain;
+  - a CI secret scoped to update publishing;
+  - or a team secret manager.
+- Generate the real Sparkle EdDSA keypair only after custody is decided, and keep the private key out of the repo.
 - Run `package:update` without `--skip-appcast` and verify signed `appcast.xml`.
 - Install an older Sparkle-enabled app and verify `Check for Updates...` updates it to a newer build while preserving:
   - local files;
@@ -96,3 +114,12 @@ npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:update -- \
   - browser links and cloud copies.
 - Decide whether the private/beta channel accepts ad-hoc signing plus bounded Gatekeeper workaround, or complete Developer ID signing and notarization.
 - Test rollback/downgrade instructions.
+
+## Current Operator Guidance
+
+Until the missing items above are complete:
+
+- Build ordinary pilot apps without `MARKLAB_SPARKLE_FEED_URL` and `MARKLAB_SPARKLE_PUBLIC_ED_KEY` so `Check for Updates...` is not shown.
+- Use bounded manual app replacement for named pilot users.
+- Do not promise automatic updates in user-facing docs.
+- Keep Gate 10.5 open.

@@ -50,7 +50,7 @@ Do not launch paid or broader public distribution until Gate 10.5 proves the app
 | 9 | Small external pilot | Not started | TBD | |
 | 9.5 | Post-pilot active-code simplification | Deferred | TBD | Wait for real pilot findings. |
 | 10 | Brand, website, and video | Not started | TBD | |
-| 10.5 | Signed distribution and update pipeline | In progress | TBD | Sparkle/appcast plumbing is implemented, but the gate is not passed. Evidence is recorded in [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md). Remaining blockers: real EdDSA key/feed host, signed appcast smoke, old-to-new update preservation test, Developer ID signing/notarization or explicitly bounded beta workaround, and rollback test. |
+| 10.5 | Signed distribution and update pipeline | In progress | TBD | Sparkle/appcast plumbing is implemented, but update signing/publishing is paused by product decision. Evidence is recorded in [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md). Remaining blockers: connected update host, shared private-key custody decision, real EdDSA key, signed appcast smoke, old-to-new update preservation test, bounded-beta workaround or Developer ID/notarization decision, and rollback test. |
 | 11 | Paid billing and pricing launch | Deferred | TBD | Not required for small free pilot. Must wait for Gate 4 unit economics and Gate 10.5 distribution/update readiness. |
 
 ## Gate 0 - Release Candidate Freeze
@@ -761,6 +761,7 @@ Progress log:
 | --- | --- | --- | --- |
 | 2026-05-23 | Gate added by product decision. App update pipeline is not part of Gate 6 and is not required before the controlled small pilot manual test. Gate 5 remains clean install only and explicitly does not claim paid/public distribution or auto-update semantics. | User decision; [`gate5-controlled-pilot-install.md`](./gate5-controlled-pilot-install.md) limitations. | Keep small pilot on manual replace-app updates; revisit after Gate 9 evidence before broader beta/public or paid launch. |
 | 2026-05-28 | Gate 10.5 started early because pilot update delivery became product support risk. Sparkle 2.9.2 was added to the native app, the packaged app now embeds `Sparkle.framework`, `Check for Updates...` appears only when `SUFeedURL` and `SUPublicEDKey` are configured, and `package:update` can create versioned zip/release-notes/manifest artifacts and call Sparkle `generate_appcast` when an EdDSA private key is available. | [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md); `swift test --package-path apps/marklab-macos --filter MarkLabNativeUIStrategyTests`; `package:app`; `verify:package`; dry-run `package-update.mjs --skip-build --skip-appcast` with dummy public key; dry-run packaged-app verification returned `sparkleLinked: true` and `sparkleUpdatesConfigured: true`. | Generate real Sparkle EdDSA keypair, choose update host/appcast URL, run signed appcast generation, and perform old-to-new update preservation smoke. |
+| 2026-05-28 | Update signing/publishing paused. The Sparkle private key should not be generated or committed until release-key custody is decided for collaborators. Candidate bounded-beta host is GitHub Pages at `https://fuy25.github.io/marklab-updates/appcast.xml`, but auto-update is not advertised and ordinary pilot builds should omit Sparkle feed/key env so the menu item stays hidden. | Product decision; [`gate10-5-sparkle-update-pipeline.md`](./gate10-5-sparkle-update-pipeline.md). | Connect the GitHub Pages update host if desired, then defer key generation/appcast signing until release-key custody is agreed. Continue with targeted shared-file startup performance pass. |
 
 Exit criteria:
 
@@ -859,6 +860,6 @@ Use this table for cross-gate updates.
 
 ## Next Action
 
-Continue Gate 10.5 update-pipeline hardening, then run the targeted shared-file startup performance pass.
+Run the targeted shared-file startup performance pass.
 
-Next acceptance row: generate the real Sparkle EdDSA keypair, choose the update host/appcast URL, run signed appcast generation without `--skip-appcast`, and install/update from an older Sparkle-enabled app to a newer build while checking account/workspace/shared-binding preservation.
+Next acceptance row: measure Start Sharing and already-shared file reopen latency, identify the blocking steps, and make targeted hot-path improvements before any broader active-code simplification.
