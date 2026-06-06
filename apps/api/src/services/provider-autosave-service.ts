@@ -31,6 +31,11 @@ export interface ProviderAutosaveJob {
   stop(): void;
 }
 
+interface ProviderAutosaveJobInput extends ProviderAutosaveRunInput {
+  intervalMs?: number;
+  shouldRun?: () => boolean;
+}
+
 export async function listProviderBackedBranches(
   pool: DbPool,
   options: { limit?: number; updatedBefore?: Date } = {},
@@ -101,13 +106,14 @@ export async function autosaveProviderBackedBranches(
   return result;
 }
 
-export function startProviderAutosaveCheckpointJob(input: ProviderAutosaveRunInput & { intervalMs?: number }): ProviderAutosaveJob {
+export function startProviderAutosaveCheckpointJob(input: ProviderAutosaveJobInput): ProviderAutosaveJob {
   let running = false;
   let stopped = false;
   const intervalMs = input.intervalMs ?? PROVIDER_AUTOSAVE_CHECKPOINT_INTERVAL_MS;
 
   const runNow = async (): Promise<ProviderAutosaveRunResult | null> => {
     if (running || stopped) return null;
+    if (input.shouldRun && !input.shouldRun()) return null;
     running = true;
     try {
       return await autosaveProviderBackedBranches(input);

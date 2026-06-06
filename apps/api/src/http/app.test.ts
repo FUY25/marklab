@@ -138,6 +138,51 @@ describe('http app hosted web serving', () => {
 });
 
 describe('http app readiness', () => {
+  it('keeps liveness checks off the database path', async () => {
+    let databaseQueries = 0;
+    const pool: DbPool = {
+      async query() {
+        databaseQueries += 1;
+        throw new Error('database_should_not_be_checked');
+      },
+      connect: async () => {
+        databaseQueries += 1;
+        throw new Error('database_should_not_be_checked');
+      },
+    };
+    const app = createHttpApp(pool, createUnavailableLiveMarkdownWriter(), {
+      health: {
+        databaseRequired: true,
+        providerRequired: true,
+        providerHealth: async () => ({
+          mode: 'process',
+          ready: true,
+          storeReady: true,
+          serverUrl: 'http://127.0.0.1:8080',
+          error: null,
+        }),
+      },
+    });
+
+    await request(app)
+      .get('/livez')
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          ok: true,
+          process: { ready: true },
+          provider: {
+            required: true,
+            ready: true,
+            storeReady: true,
+          },
+        });
+        expect(body.database).toBeUndefined();
+        expect(body.schema).toBeUndefined();
+      });
+    expect(databaseQueries).toBe(0);
+  });
+
   it('returns 503 when a required provider is down', async () => {
     const app = createHttpApp(createLocalOnlyPool(), createUnavailableLiveMarkdownWriter(), {
       health: {

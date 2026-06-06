@@ -60,7 +60,7 @@ npx -y pnpm@10.0.0 --filter @marklab/marklab-macos package:app
 npx -y pnpm@10.0.0 --filter @marklab/marklab-macos verify:package
 ```
 
-Apply the checked-in schema to Neon before deploying an image that depends on new readiness columns. Fly health checks call `/healthz`; if the schema is behind, the rollout can remain unhealthy or time out before the post-deploy migration step is reached.
+Apply the checked-in schema to Neon before deploying an image that depends on new readiness columns. Fly machine health checks call `/livez` and intentionally avoid Neon; `/healthz` remains the release gate for database and schema readiness.
 
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
@@ -97,10 +97,11 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
 
 If `/healthz` reports missing schema columns and local Neon credentials are unavailable, use the Fly-machine fallback from `Build, Migrate, And Deploy`, then re-check health before continuing.
 
-The launch gate is not just "SQL ran"; `/healthz` must show database, schema, provider, and provider store ready.
+The launch gate is not just "SQL ran"; `/healthz` must show database, schema, provider, and provider store ready. `/livez` should also pass, but it does not validate database or schema readiness.
 
 ```sh
 curl -fsS https://marklab-relay-alpha.fly.dev/healthz | jq .
+curl -fsS https://marklab-relay-alpha.fly.dev/livez | jq .
 ```
 
 Required health:

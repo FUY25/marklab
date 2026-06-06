@@ -91,7 +91,7 @@ Execution plan:
 Current implementation:
 
 - Local-only native autosave waits 2 seconds after edits and only applies when the file is not sharing.
-- Shared documents use server/provider autosave. The API job wakes every 60 seconds, considers provider-backed branches after a branch quiet window, and reads the live Y-Sweet provider state.
+- Shared documents use server/provider autosave. The API job wakes every 60 seconds only while there are active or recently closed provider connections, considers provider-backed branches after a branch quiet window, and reads the live Y-Sweet provider state.
 - The first dirty provider observation is recorded without immediately creating a version. While active editing continues, autosave creates a checkpoint every 10 minutes. After the last edit, if the same provider hash stays stable for 2 minutes, autosave creates a final checkpoint even inside the 10-minute cadence window.
 - If the current hash matches the branch head hash, no duplicate version is created.
 - Manual `Save Checkpoint`, shared-mode `Cmd+S`, import/create, and rollback versions are separate product checkpoints and are not pruned as autosave noise.

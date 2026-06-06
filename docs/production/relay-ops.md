@@ -53,7 +53,7 @@ These are secrets. Do not expose them to CLI users, browser clients, or logs.
 3. Mount a Fly volume at `/data/ysweet`.
 4. Configure the runtime env above.
 5. Deploy the API image.
-6. Verify `/healthz`.
+6. Verify `/livez`, then `/healthz`.
 7. Run a disposable workspace/document/access-grant smoke.
 8. Run native app and browser acceptance against the deployed URL.
 
@@ -61,7 +61,7 @@ The detailed alpha launch checklist, rollback procedure, and smoke result log li
 
 ## Health Semantics
 
-`/healthz` is the release gate.
+`/livez` is the frequent process/provider liveness check and does not touch Neon. `/healthz` is the release gate.
 
 Required signals:
 

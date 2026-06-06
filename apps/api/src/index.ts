@@ -30,6 +30,7 @@ import { startDataLifecycleCleanupJob } from './services/lifecycle-cleanup-servi
 const env = loadApiEnv();
 const port = env.port;
 const host = process.env.MARKLAB_HOST ?? process.env.HOST;
+const providerAutosaveIdleGraceMs = 4 * 60 * 1000;
 
 async function main() {
   const pool = createPool(env.databaseUrl);
@@ -51,10 +52,50 @@ async function main() {
       : undefined;
   const collab = createCollabServer(pool);
   const liveWriter = createPostgresLiveMarkdownWriter(pool);
+  const providerDocSockets = new Map<string, Set<Duplex>>();
+  let providerDocAutosaveActiveUntilMs = 0;
+
+  function noteProviderDocActivity(): void {
+    providerDocAutosaveActiveUntilMs = Date.now() + providerAutosaveIdleGraceMs;
+  }
+
+  function hasRecentProviderDocActivity(): boolean {
+    return providerDocSockets.size > 0 || Date.now() < providerDocAutosaveActiveUntilMs;
+  }
+
+  function trackProviderDocSocket(providerDocId: string, socket: Duplex): void {
+    noteProviderDocActivity();
+    let sockets = providerDocSockets.get(providerDocId);
+    if (!sockets) {
+      sockets = new Set();
+      providerDocSockets.set(providerDocId, sockets);
+    }
+    sockets.add(socket);
+    socket.on('close', () => {
+      sockets?.delete(socket);
+      if (sockets?.size === 0) providerDocSockets.delete(providerDocId);
+      noteProviderDocActivity();
+    });
+  }
+
+  function closeProviderDocConnections(providerDocIds: readonly string[]): void {
+    let closed = false;
+    for (const providerDocId of providerDocIds) {
+      const sockets = providerDocSockets.get(providerDocId);
+      if (!sockets) continue;
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      providerDocSockets.delete(providerDocId);
+      closed = true;
+    }
+    if (closed) noteProviderDocActivity();
+  }
+
   const providerAutosaveJob = collabSnapshotService
     ? startProviderAutosaveCheckpointJob({
         pool,
         collabSnapshotService,
+        shouldRun: hasRecentProviderDocActivity,
         onError(error, branch) {
           console.warn('provider autosave checkpoint failed', branch, error);
         },
@@ -68,30 +109,6 @@ async function main() {
       console.warn('data lifecycle cleanup failed', error);
     },
   });
-  const providerDocSockets = new Map<string, Set<Duplex>>();
-
-  function trackProviderDocSocket(providerDocId: string, socket: Duplex): void {
-    let sockets = providerDocSockets.get(providerDocId);
-    if (!sockets) {
-      sockets = new Set();
-      providerDocSockets.set(providerDocId, sockets);
-    }
-    sockets.add(socket);
-    socket.on('close', () => {
-      sockets?.delete(socket);
-      if (sockets?.size === 0) providerDocSockets.delete(providerDocId);
-    });
-  }
-
-  function closeProviderDocConnections(providerDocIds: readonly string[]): void {
-    for (const providerDocId of providerDocIds) {
-      const sockets = providerDocSockets.get(providerDocId);
-      if (!sockets) continue;
-      for (const socket of sockets) socket.destroy();
-      sockets.clear();
-      providerDocSockets.delete(providerDocId);
-    }
-  }
 
   const app = createHttpApp(pool, liveWriter, {
     flushCollabDocument: collab.flushDocument,
@@ -109,6 +126,7 @@ async function main() {
                 return;
               }
               const providerDocId = extractYSweetProviderDocId(req.originalUrl ?? req.url);
+              if (providerDocId) noteProviderDocActivity();
               if (providerDocId && await isProviderDocDeleted(pool, providerDocId)) {
                 res.status(410).json({ error: 'cloud_copy_deleted' });
                 return;

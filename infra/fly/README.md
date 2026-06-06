@@ -125,7 +125,7 @@ Provider env defaults that are not secrets live in `fly.toml`: `MARKLAB_YSWEET_P
 
 ## 6. Deploy
 
-Apply the checked-in schema to Neon before the health-gated deploy. `/healthz` includes schema readiness, so deploying first can leave the Fly rollout unhealthy until the schema catches up.
+Apply the checked-in schema to Neon before deploy. `/healthz` includes schema readiness and remains the release gate; Fly's machine liveness check uses `/livez` so routine platform probes do not wake Neon.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/src/db/schema.sql
@@ -140,6 +140,7 @@ Then inspect:
 ```bash
 fly status
 fly logs
+curl https://<fly-app>.fly.dev/livez
 curl https://<fly-app>.fly.dev/healthz
 ```
 
@@ -153,7 +154,7 @@ curl https://marklab-relay-alpha.fly.dev/healthz
 
 The local production-smoke compose file applies `apps/api/src/db/schema.sql` before API health checks. Fly production must do the same before rollout. Until the API exposes a source-integrated migration command, the operator applies the checked-in schema to Neon directly.
 
-`/healthz` reports process liveness separately from database readiness, schema readiness, and provider readiness. A release-ready response has `ok`, `database.ready`, `schema.ready`, `provider.ready`, and `provider.storeReady`.
+`/livez` reports process/provider liveness without touching Neon and is safe for Fly's frequent machine checks. `/healthz` reports database readiness, schema readiness, and provider readiness. A release-ready `/healthz` response has `ok`, `database.ready`, `schema.ready`, `provider.ready`, and `provider.storeReady`.
 
 ## 8. Release Gate
 
@@ -161,6 +162,7 @@ Before an alpha user tries hosted collaboration:
 
 ```bash
 curl https://<fly-app>.fly.dev/healthz
+curl https://<fly-app>.fly.dev/livez
 fly status
 fly logs
 npx -y pnpm@10.0.0 --filter @marklab/api exec tsx src/provider/ysweet-provider-smoke.ts

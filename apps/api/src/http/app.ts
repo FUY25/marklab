@@ -78,6 +78,15 @@ export interface StaticWebOptions {
   distDir: string;
 }
 
+interface HttpProviderHealthState {
+  required: boolean;
+  ready: boolean;
+  storeReady: boolean | null;
+  mode: string | null;
+  serverUrl: string | null;
+  error: string | null;
+}
+
 export interface CollabMarkdownSnapshot {
   docId: string;
   branchId: string;
@@ -174,9 +183,7 @@ function createCorsMiddleware(input: { allowedOrigins?: readonly string[]; enfor
   };
 }
 
-async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
-  const database = { required: Boolean(input.databaseRequired), ready: false, error: null as string | null };
-  const schema = { required: Boolean(input.databaseRequired), ready: false, missing: [] as string[], error: null as string | null };
+async function readProviderHealth(input: HttpHealthOptions = {}) {
   const provider = {
     required: Boolean(input.providerRequired),
     ready: !input.providerRequired,
@@ -184,7 +191,7 @@ async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
     mode: null as string | null,
     serverUrl: null as string | null,
     error: null as string | null,
-  };
+  } satisfies HttpProviderHealthState;
 
   if (input.providerHealth) {
     try {
@@ -203,6 +210,24 @@ async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
     provider.error = 'provider_health_not_configured';
   }
   const providerReadyForGate = !provider.required || provider.ready;
+
+  return { provider, providerReadyForGate };
+}
+
+async function readLiveness(input: HttpHealthOptions = {}) {
+  const { provider, providerReadyForGate } = await readProviderHealth(input);
+
+  return {
+    ok: providerReadyForGate,
+    process: { ready: true },
+    provider,
+  };
+}
+
+async function readHealth(pool: DbPool, input: HttpHealthOptions = {}) {
+  const database = { required: Boolean(input.databaseRequired), ready: false, error: null as string | null };
+  const schema = { required: Boolean(input.databaseRequired), ready: false, missing: [] as string[], error: null as string | null };
+  const { provider, providerReadyForGate } = await readProviderHealth(input);
 
   if (!input.databaseRequired) {
     return {
@@ -624,6 +649,15 @@ export function createHttpApp(pool: DbPool, liveWriter: LiveMarkdownWriter, opti
   }));
   app.use(express.json({ limit: '2mb' }));
   if (options.providerHttpProxy) app.use(options.providerHttpProxy);
+
+  app.get('/livez', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const liveness = await readLiveness(options.health);
+      res.status(liveness.ok ? 200 : 503).json(liveness);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.get('/healthz', async (_req: Request, res: Response, next: NextFunction) => {
     try {

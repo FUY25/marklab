@@ -149,6 +149,40 @@ describe('autosaveProviderBackedBranches', () => {
 });
 
 describe('startProviderAutosaveCheckpointJob', () => {
+  it('skips scheduled database work while the provider has no active editing activity', async () => {
+    let queries = 0;
+    const pool: DbPool = {
+      async query() {
+        queries += 1;
+        throw new Error('database_should_not_be_checked');
+      },
+      connect: async () => {
+        queries += 1;
+        throw new Error('database_should_not_be_checked');
+      },
+    };
+    const collabSnapshotService: CollabSnapshotService = {
+      async readCurrentMarkdownSnapshot() {
+        throw new Error('should_not_reach_snapshot');
+      },
+    };
+
+    const job = startProviderAutosaveCheckpointJob({
+      pool,
+      collabSnapshotService,
+      intervalMs: 20,
+      shouldRun: () => false,
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    } finally {
+      job.stop();
+    }
+
+    expect(queries).toBe(0);
+  });
+
   it('reports scheduled run-level failures instead of creating unhandled interval rejections', async () => {
     const errors: unknown[] = [];
     const pool: DbPool = {
