@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -65,6 +65,55 @@ function verifyIconAlpha(iconPath) {
   }
 }
 
+function runLaunchSmokeCheck(timeoutMs = 2000) {
+  return new Promise((fulfill) => {
+    let child;
+    let timeout;
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fulfill(result);
+    };
+
+    try {
+      child = spawn(executable, [], { stdio: 'ignore' });
+    } catch (error) {
+      finish({
+        passed: false,
+        detail: `failed to launch packaged app: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+
+    child.once('error', (error) => {
+      finish({
+        passed: false,
+        detail: `failed to launch packaged app: ${error.message}`,
+      });
+    });
+
+    child.once('exit', (code, signal) => {
+      finish({
+        passed: false,
+        detail: `packaged app exited during startup smoke window (code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
+      });
+    });
+
+    timeout = setTimeout(() => {
+      if (settled) return;
+      child.kill('SIGTERM');
+      child.unref();
+      finish({
+        passed: true,
+        detail: `packaged app stayed alive for ${timeoutMs}ms`,
+      });
+    }, timeoutMs);
+  });
+}
+
 if (!existsSync(appPath)) fail(`missing app bundle: ${appPath}`);
 if (!existsSync(executable)) fail(`missing executable: ${executable}`);
 if (!existsSync(infoPlist)) fail(`missing Info.plist: ${infoPlist}`);
@@ -121,8 +170,10 @@ const iconType = execFileSync('file', [appIcon], { encoding: 'utf8' }).trim();
 if (!iconType.includes('Mac OS X icon')) fail(`unexpected app icon type: ${iconType}`);
 verifyIconAlpha(appIcon);
 
+const launchSmoke = await runLaunchSmokeCheck();
+
 console.log(JSON.stringify({
-  ok: true,
+  ok: launchSmoke.passed,
   app: appPath,
   bundleIdentifier: plistValue('CFBundleIdentifier'),
   urlScheme: scheme,
@@ -134,6 +185,8 @@ console.log(JSON.stringify({
   sparkleFeedURL,
   codeSignaturePresent: true,
   iconAlphaVerified: true,
+  launchSmokePassed: launchSmoke.passed,
+  launchSmokeDetail: launchSmoke.detail,
   signingMode: signingModeFor(signature),
   signature,
   teamIdentifier,
@@ -144,3 +197,7 @@ console.log(JSON.stringify({
   notarizationStatus: staplerStatus,
   distributionReady,
 }));
+
+if (!launchSmoke.passed) {
+  process.exitCode = 1;
+}

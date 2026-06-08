@@ -361,14 +361,27 @@ private enum MarkEditLocalEditorResources {
 
   static func rootURL() throws -> URL {
     let fileManager = FileManager.default
-    let candidates = [
-      Bundle.main.resourceURL?.appending(path: resourceBundleName, directoryHint: .isDirectory),
-      Bundle.main.bundleURL.appending(path: resourceBundleName, directoryHint: .isDirectory),
-      Bundle.module.resourceURL,
-    ].compactMap { $0 }
-    if let resourceURL = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) {
-      return resourceURL
+    // Check packaged-app paths first to avoid triggering Bundle.module eagerly.
+    // In a packaged .app, Bundle.module calls fatalError when the SwiftPM build
+    // path is absent; Bundle.main.resourceURL points to Contents/Resources/.
+    if let url = Bundle.main.resourceURL?
+      .appending(path: resourceBundleName, directoryHint: .isDirectory),
+      fileManager.fileExists(atPath: url.path) {
+      return url
     }
+
+    let bundleURL = Bundle.main.bundleURL
+      .appending(path: resourceBundleName, directoryHint: .isDirectory)
+    if fileManager.fileExists(atPath: bundleURL.path) {
+      return bundleURL
+    }
+
+    // Development / swift-test fallback. Only safe in SwiftPM build environments
+    // where the bundle exists at the generated path next to the executable.
+    if let url = Bundle.module.resourceURL, fileManager.fileExists(atPath: url.path) {
+      return url
+    }
+
     throw MarkEditLocalEditorResourceError.missingRoot
   }
 
